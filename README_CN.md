@@ -1,6 +1,6 @@
 # ShiziOS
 
-ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构，使用 bootboot 引导程序，部分兼容 POSIX 标准，支持多核，正在积极开发中。
+ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构，使用 bootboot 引导程序，支持多核，正在积极开发中。
 
 ## 如何使用
 
@@ -12,11 +12,13 @@ ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构�
 - qemu
 - x86_64-elf-gcc
 - nasm
+- cmake
+- make
 
 在项目根目录下执行以下命令：
-- `make`：编译项目。
-- `make img`：创建磁盘镜像。
-- `make run`：在 QEMU 中运行系统。
+1. `mkdir build && cd build`
+2. `cmake ..`
+3. `make`
 
 ## 项目目录说明
 - `include`：系统头文件
@@ -30,12 +32,12 @@ ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构�
 ## 系统说明
 本内核内存管理中的伙伴系统算法与传统的 Linux 伙伴系统有所不同。
 
-## 其他
-[![gitee]](你的Gitee镜像仓库链接) [![github]](你的GitHub主仓库链接)
-
+## 项目主页
 **主要开发平台：GitHub。**
 
-所有 Issues 和 Pull Requests **请提交到 GitHub**。
+GitHub 仓库：[https://github.com/shizi297/ShiziOS/](https://github.com/shizi297/ShiziOS/)
+
+所有 Issues 和 Pull Requests 请提交到 GitHub。
 
 ## 许可证
 本项目采用 Apache License, Version 2.0 开源协议，详情请见 `LICENSE` 文件。
