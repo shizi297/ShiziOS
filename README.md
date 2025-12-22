@@ -1,6 +1,6 @@
 # ShiziOS
 
-ShiziOS is a lightweight operating system kernel. Currently, it supports only the x86_64 architecture, uses the bootboot bootloader, is partially POSIX-compliant, supports multicore, and is under active development.
+ShiziOS is a lightweight operating system kernel. Currently, it supports only the x86_64 architecture, uses the bootboot bootloader, supports multicore, and is under active development.
 
 ## How to Use
 
@@ -12,11 +12,13 @@ You need to install the following components:
 - qemu
 - x86_64-elf-gcc
 - nasm
+- cmake
+- make
 
 Execute the following commands in the project root directory:
-- `make`: Build the project.
-- `make img`: Create a disk image.
-- `make run`: Run the system in QEMU.
+1. `mkdir build && cd build`
+2. `cmake ..`
+3. `make`
 
 ## Project Directory Structure
 - `include`: System header files
@@ -30,12 +32,12 @@ Execute the following commands in the project root directory:
 ## System Notes
 The buddy system algorithm in this kernel's memory management differs from the traditional Linux buddy system.
 
-## Other
-[![gitee]](your-gitee-mirror-repository-link) [![github]](your-github-main-repository-link)
-
+## Project Home
 **Primary Development Platform: GitHub.**
 
-All Issues and Pull Requests **should be submitted to GitHub**.
+GitHub Repository: [https://github.com/shizi297/ShiziOS/](https://github.com/shizi297/ShiziOS/)
+
+All Issues and Pull Requests should be submitted to GitHub.
 
 ## License
 This project is licensed under the Apache License, Version 2.0. For details, see the `LICENSE` file.
