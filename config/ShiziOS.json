@@ -1,0 +1,17 @@
+{
+    "diskguid": "3542cf8e-06e3-5c70-bdbc-9b65a8b7da50",
+    "disksize": 64,
+    "config": "initrd_root/sys/config",
+    "initrd": { 
+        "type": "tar", 
+        "gzip": true, 
+        "directory": [ "initrd_root", "" ] 
+    },
+    "partitions": [
+        { 
+            "type": "fat32", 
+            "size": 33,
+            "name": "ShiZiOS"
+        }
+    ]
+}
