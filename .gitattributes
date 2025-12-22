@@ -1,0 +1,2 @@
+disk/** filter=lfs diff=lfs merge=lfs -text
+disk/shizios.img filter=lfs diff=lfs merge=lfs -text
