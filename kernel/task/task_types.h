@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
+#ifndef TASK_TYPES_H
+#define TASK_TYPES_H
+
 #include <stdint.h>
 
 typedef struct vm_area {
@@ -9,3 +12,5 @@ typedef struct vm_area {
     struct vm_area* next; 
     uint64_t pfn[];         // 起始物理页号
 } vm_area_t;
+
+#endif //TASK_TYPES_H

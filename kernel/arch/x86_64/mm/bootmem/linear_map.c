@@ -2,7 +2,7 @@
  
 #include <bootboot.h>
 #include <serial.h>
-#include "linear_map.h"
+#include <mm/bootmem/linear_map.h>
 
 static temp_linear_map_t temp_map = {0};
 static uint64_t memory_base = 0;

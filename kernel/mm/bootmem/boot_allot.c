@@ -2,8 +2,8 @@
  
 #include <bootboot.h>
 #include <serial.h>
-#include "boot_allot.h"
-#include "linear_map.h"
+#include <mm/bootmem/boot_allot.h>
+#include <mm/bootmem/linear_map.h>
 
 static uint8_t* bitmap = NULL;
 static uint64_t bitmap_phys = 0;

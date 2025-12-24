@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "bootmem.h"  
+#include <mm/bootmem/bootmem.h>
 
 /* 线性映射区域 */
 #define LINEAR_MAP_START    0xffff808000000000ULL  
