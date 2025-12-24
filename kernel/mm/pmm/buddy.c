@@ -389,6 +389,7 @@ static free_list_t* merge_buddy_block(uint64_t pfn1, uint64_t pfn2) {
         uint64_t current_pfn = merged_pfn + i;
         mem_block->blocks[current_pfn].is_head = (i == 0) ? 1 : 0;
         mem_block->blocks[current_pfn].order = new_order;
+        mem_block->blocks[current_pfn].is_free = 1;
     }
 
     result = merged_node;

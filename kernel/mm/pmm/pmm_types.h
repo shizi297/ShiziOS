@@ -10,11 +10,16 @@
 
 #include "pmm.h"
 
+
 typedef struct free_list_node {
     struct free_list_node *prev;  
     struct free_list_node *next;  
 } free_list_t;
 
+/*
+ * 空闲链表的头节点
+ * 指向第一个链表节点
+ */
 typedef struct {
     free_list_t *head;                     
 } free_area_t;
