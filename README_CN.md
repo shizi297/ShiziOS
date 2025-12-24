@@ -19,6 +19,10 @@ ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构�
 1. `mkdir build && cd build`
 2. `cmake ..`
 3. `make`
+4. `make img`
+
+运行QEMU：
+`make run`
 
 ## 项目目录说明
 - `include`：系统头文件
@@ -28,9 +32,6 @@ ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构�
 - `kernel/mm`：内存管理
 - `kernel/net`：网络
 - `kernel/fs`：文件系统
-
-## 系统说明
-本内核内存管理中的伙伴系统算法与传统的 Linux 伙伴系统有所不同。
 
 ## 项目主页
 **主要开发平台：GitHub。**
