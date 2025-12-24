@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "linear_map.h"
+#include <mm/bootmem/linear_map.h>
 
 //早期位图大小
 #define BOOT_ALLOC_BITMAP_SIZE  (32 * 1024)  

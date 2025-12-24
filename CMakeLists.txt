@@ -19,6 +19,7 @@ include_directories(
     config
     kernel/arch/x86_64/drivers
     kernel/drivers
+    kernel/arch/x86_64/mm     
 )
 
 # 编译kernel目录下的文件
@@ -32,9 +33,10 @@ if(KERNEL_ASM_SOURCES)
 endif()
 
 # 添加模块子目录
-add_subdirectory(kernel/arch/x86_64)  # x86_64架构模块
-add_subdirectory(kernel/drivers)      #通用驱动模块
-add_subdirectory(kernel/mm)           # 内存管理模块
+add_subdirectory(kernel/arch/x86_64)      # x86_64架构模块
+add_subdirectory(kernel/arch/x86_64/mm)   #x86_64架构特定内存管理
+add_subdirectory(kernel/drivers)          # 通用驱动模块
+add_subdirectory(kernel/mm)               # 通用内存管理模块
 
 # 链接生成内核
 set(EMPTY_SOURCE ${CMAKE_BINARY_DIR}/empty.c)
@@ -47,6 +49,7 @@ target_link_libraries(kernel.elf
     "-Wl,--start-group"
     kernel_main
     x86_64_arch
+    x86_64_mm       
     kernel_drivers  
     kernel_mm
     "-Wl,--end-group"

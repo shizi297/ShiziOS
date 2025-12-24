@@ -19,10 +19,6 @@ Execute the following commands in the project root directory:
 1. `mkdir build && cd build`
 2. `cmake ..`
 3. `make`
-4. `make img`
-
-Run QEMU：
-`make run`
 
 ## Project Directory Structure
 - `include`: System header files
@@ -32,6 +28,9 @@ Run QEMU：
 - `kernel/mm`: Memory management
 - `kernel/net`: Networking
 - `kernel/fs`: File system
+
+## System Notes
+The buddy system algorithm in this kernel's memory management differs from the traditional Linux buddy system.
 
 ## Project Home
 **Primary Development Platform: GitHub.**
