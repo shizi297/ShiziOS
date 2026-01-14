@@ -231,7 +231,7 @@ static void zone_init(void){
 /**
  * 添加新内存块到空闲链表
  * 
- * @param free_lisr 要添加的伙伴块的虚拟地址
+ * @param free_list 要添加的伙伴块的虚拟地址
  * @param zone_count 伙伴块属于的zone区域
  * @param order_count 伙伴块属于的order区域
  * 
@@ -821,6 +821,91 @@ void pmm_free_pages(uint64_t pfn) {
     spin_unlock(&mem_block->lock);
 
     return;
+}
+
+/*
+ * 增加内存块引用计数
+ * @param pfn 要增加引用计数的页帧号
+ */
+void pmm_add_ref_count(uint64_t pfn) {
+    spin_lock(&mem_block->lock);
+    
+    mem_block_t* block = &mem_block->blocks[pfn];
+    uint8_t order = block->order;
+    uint64_t block_size = 1 << order;
+    
+    // 增加所有页的引用计数
+    for (uint64_t i = 0; i < block_size; i++) {
+        mem_block_t* current = &mem_block->blocks[pfn + i];
+        current->ref_count++;
+    }
+    
+    spin_unlock(&mem_block->lock);
+}
+
+/*
+ * 增加内存块映射计数
+ * @param pfn 要增加映射计数的页帧号
+ */
+void pmm_add_map_count(uint64_t pfn) {
+    spin_lock(&mem_block->lock);
+    
+    mem_block_t* block = &mem_block->blocks[pfn];
+    uint8_t order = block->order;
+    uint64_t block_size = 1 << order;
+    
+    // 增加所有页的映射计数
+    for (uint64_t i = 0; i < block_size; i++) {
+        mem_block_t* current = &mem_block->blocks[pfn + i];
+        current->map_count++;
+    }
+    
+    spin_unlock(&mem_block->lock);
+}
+
+/*
+ * 减少内存块映射计数
+ *
+ * @param pfn 要减少映射计数的页帧号
+ */
+void pmm_sub_map_count(uint64_t pfn) {
+    spin_lock(&mem_block->lock);
+    
+    mem_block_t* block = &mem_block->blocks[pfn];
+    uint8_t order = block->order;
+    uint64_t block_size = 1 << order;
+    
+    // 减少所有页的映射计数
+    for (uint64_t i = 0; i < block_size; i++) {
+        mem_block_t* current = &mem_block->blocks[pfn + i];
+        
+        if (current->map_count > 0) {
+            current->map_count--;
+        }
+    }
+    
+    spin_unlock(&mem_block->lock);
+}
+
+/*
+ * 清零内存块映射计数
+ * 
+ * @param pfn 要清零映射计数的页帧号
+ */
+void pmm_zero_map_count(uint64_t pfn) {
+    spin_lock(&mem_block->lock);
+    
+    mem_block_t* block = &mem_block->blocks[pfn];
+    uint8_t order = block->order;
+    uint64_t block_size = 1 << order;
+    
+    // 清零所有页的映射计数
+    for (uint64_t i = 0; i < block_size; i++) {
+        mem_block_t* current = &mem_block->blocks[pfn + i];
+        current->map_count = 0;
+    }
+    
+    spin_unlock(&mem_block->lock);
 }
 
 void pmm_init(void) {

@@ -29,9 +29,6 @@ Execute the following commands in the project root directory:
 - `kernel/net`: Networking
 - `kernel/fs`: File system
 
-## System Notes
-The buddy system algorithm in this kernel's memory management differs from the traditional Linux buddy system.
-
 ## Project Home
 **Primary Development Platform: GitHub.**
 

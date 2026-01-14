@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <mm/pmm/buddy.h>
 #include <mm/pmm/pmm.h>
+#include <mm/bootmem/linear_map.h>
+#include <mm/vmm/vmm_map.h>
 
 // 计算要分配的内存大小属于哪个order
 static inline uint8_t size_to_order(uint64_t size) {
@@ -37,10 +39,10 @@ static inline uint8_t size_to_order(uint64_t size) {
  * @param size 要分配的内存大小(字节)
  * @param zone 内存区域
  * 
- * @return 成功：pfn
- * @return 失败：0
+ * @return 成功：虚拟地址
+ * @return 失败：NULL
  */
-uint64_t _kheap_alloc(uint64_t size, uint8_t zone) {
+void* _kheap_alloc(uint64_t size, uint8_t zone) {
     // 确保传入的size是有效的
     if (size == 0) return 0; 
 
@@ -66,15 +68,170 @@ uint64_t _kheap_alloc(uint64_t size, uint8_t zone) {
             break;
         } 
     }
-    
-    return pfn;
+
+    if (pfn == 0) return 0;
+
+    // 将pfn转换为虚拟地址并返回指针
+    return (void *)PHYS_TO_LINEAR(pfn << PAGE_SHIFT);
 }
 
 /**
  * 释放内核堆内存
  * 
- * @param pfn 被释放的伙伴块的页帧号
+ * @param vaddr 被释放的伙伴块的虚拟地址
  */
-void kheap_free(uint64_t pfn) {
+void kheap_free(void *vaddr) {
+    if (vaddr == NULL) return;
+
+    // 将虚拟地址转换为物理页帧号
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
     pmm_free_pages(pfn);
+}
+
+/**
+ * 增加内核堆内存引用计数
+ * 
+ * @param vaddr 要增加引用计数的虚拟地址
+ */
+void kheap_add_ref_count(void *vaddr) {
+    if (vaddr == NULL) return;
+
+    // 将虚拟地址转换为物理页帧号
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
+    pmm_add_ref_count(pfn);
+}
+
+/**
+ * 增加内核堆内存映射引用计数
+ * 
+ * @param vaddr 要增加映射引用计数的虚拟地址
+ */
+void kheap_add_map_count(void *vaddr) {
+    if (vaddr == NULL) return;
+
+    // 将虚拟地址转换为物理页帧号
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
+    pmm_add_map_count(pfn);
+}
+
+/**
+ * 减少内核堆内存映射映射计数
+ * 
+ * @param vaddr 要减少映射引用计数的虚拟地址
+ */
+void kheap_sub_map_count(void *vaddr) {
+    if (vaddr == NULL) return;
+
+    // 将虚拟地址转换为物理页帧号
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
+    pmm_sub_map_count(pfn);
+}
+
+/**
+ * 清零内核堆的映射计数
+ * 
+ * @param vaddr 要清零映射计数的虚拟地址
+ */
+void kheap_zero_map_count(void *vaddr) {
+    if (vaddr == NULL) return;
+
+    // 将虚拟地址转换为物理页帧号
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
+    pmm_zero_map_count(pfn);
+}
+
+/**
+ * 虚拟堆分配
+ * 
+ * @param as 进程地址空间描述符
+ * @param addr 期望的虚拟地址(如果为NULL则由系统自动分配)
+ * @param size 要分配的内存大小(字节)
+ * @param prot 内存属性
+ * @param flags 分配标志
+ * @param fd 文件描述符(如果映射文件则需要传入)
+ * @param offset 文件偏移(如果映射文件则需要传入)
+ * @param alloc 是否分配物理内存
+ * 
+ * @return 成功：虚拟地址
+ * @return 失败：NULL
+ * 
+ * 如果addr不对齐则会自动对齐PAGE_SIZE
+ * 
+ * 目前fd和offset没有用
+ * 所以直接传0即可
+ * flags目前也没有用
+ * 也可以直接传0
+ */
+void *vheap_alloc(as_t *as, void *addr, size_t size, vm_prot_t prot, uint8_t flags, int fd , uint64_t offset, bool alloc) {
+    void *result_addr = 0;
+    void *aligened_addr = 0;
+    
+    if (as == NULL || size == 0) return NULL;
+
+    if (fd != 0 || offset != 0) {
+        // 目前不支持文件映射
+        return NULL;
+    }
+
+    if (flags != 0) {
+        // 目前不支持特殊分配标志
+        return NULL;
+    }
+    if (addr != NULL) {
+        // 如果传入了地址，则使用该地址并对齐
+        aligened_addr = (void *)((uintptr_t)addr & ~(PAGE_SIZE - 1));
+    }
+
+    size_t aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+ 
+    vmm_result_t map_result = vmm_map_anon(
+        as,
+        (uintptr_t)aligened_addr,
+        aligned_size / PAGE_SIZE,
+        prot,
+        0,
+        NULL,
+        alloc,
+        (uintptr_t *)&result_addr
+    );
+
+    return result_addr;
+}
+
+/**
+ * 释放虚拟堆内存
+ * 
+ * @param as 进程地址空间描述符
+ * @param addr 被释放的虚拟地址
+ * @param size 被释放的内存大小(字节)
+ * 
+ * size传0表示释放整个映射区域
+ * 目前size没有用
+ * 所以直接传0即可
+ */
+void vheap_free(as_t *as, void *addr, size_t size) {
+    if (as == NULL || addr == NULL) return;
+
+    // 释放内存
+    vmm_unmap(as, (uintptr_t)addr);
+}
+
+/**
+ * 释放进程所有虚拟堆内存
+ * 
+ * @param as 进程地址空间描述符
+ */
+void vheap_free_all(as_t *as) {
+    if (as == NULL) return;
+    vmm_destroy_as(as);
 }

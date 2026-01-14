@@ -1,2 +1,8 @@
 ShiziOS
 Copyright 2025 ShiziOS Project
+
+Third-party components:
+
+Libtree (kernel/include/libtree.h, kernel/lib/rbtree.c)
+Licensed under the GNU Lesser General Public License v3
+See LICENSES/LIBTREE_LICENSE for details.
