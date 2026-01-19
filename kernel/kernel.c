@@ -4,9 +4,8 @@
 #include <serial.h>  
 #include "mm/init.h"
 
+__attribute__((noreturn))
 void kernel_main(void) {
-    init_serial();  
-    
     serial_puts("[KERNEL]ShiziOS KERNEL v");
     serial_puts(KERNEL_VERSION);
     serial_puts("\n");

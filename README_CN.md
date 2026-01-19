@@ -1,6 +1,6 @@
 # ShiziOS
 
-ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构，使用 bootboot 引导程序，支持多核，正在积极开发中。
+ShiziOS 是一个轻量级的操作系统。目前仅支持 x86_64 架构，使用 bootboot 引导程序，支持多核，正在积极开发中。
 
 ## 如何使用
 
@@ -9,9 +9,7 @@ ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构�
 
 ### 从源码构建
 你需要安装以下组件：
-- qemu
 - x86_64-elf-gcc
-- nasm
 - cmake
 - make
 
@@ -19,6 +17,7 @@ ShiziOS 是一个轻量级的操作系统内核。目前仅支持 x86_64 架构�
 1. `mkdir build && cd build`
 2. `cmake ..`
 3. `make`
+4. `make img`
 
 ## 项目目录说明
 - `include`：系统头文件

@@ -1,6 +1,6 @@
 # ShiziOS
 
-ShiziOS is a lightweight operating system kernel. Currently, it supports only the x86_64 architecture, uses the bootboot bootloader, supports multicore, and is under active development.
+ShiziOS is a lightweight operating system. Currently, it supports only the x86_64 architecture, uses the bootboot bootloader, supports multicore, and is under active development.
 
 ## How to Use
 
@@ -9,9 +9,7 @@ This project provides a precompiled version. The `disk` folder contains an image
 
 ### Build from Source
 You need to install the following components:
-- qemu
 - x86_64-elf-gcc
-- nasm
 - cmake
 - make
 
@@ -19,6 +17,7 @@ Execute the following commands in the project root directory:
 1. `mkdir build && cd build`
 2. `cmake ..`
 3. `make`
+4. `make img`
 
 ## Project Directory Structure
 - `include`: System header files

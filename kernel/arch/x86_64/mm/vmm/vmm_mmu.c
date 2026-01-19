@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <mm/heap.h>
+#include <heap.h>
 #include <shizi/uint4_512t.h>
 #include <stddef.h>
 #include <mm/vmm/vmm_as.h>

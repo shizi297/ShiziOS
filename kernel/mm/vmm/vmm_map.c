@@ -3,7 +3,7 @@
 #include "vmm_as.h"
 #include "vmm_map.h"
 #include "vmm_types.h"
-#include <mm/heap.h>
+#include <heap.h>
 #include <mm/bootmem/linear_map.h>
 #include <mm/vmm/vmm_mmu.h>
 #include <stdint.h>

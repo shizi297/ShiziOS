@@ -6,3 +6,7 @@ Third-party components:
 Libtree (kernel/include/libtree.h, kernel/lib/rbtree.c)
 Licensed under the GNU Lesser General Public License v3
 See LICENSES/LIBTREE_LICENSE for details.
+
+BOOTBOOT (kernel/include/bootboot.h)
+Licensed under the MIT License
+See LICENSES/BOOTBOOT_LICENSE for details.

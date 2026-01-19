@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "vmm_as.h"
-#include <mm/heap.h>
+#include <heap.h>
 #include <mm/bootmem/linear_map.h>
 
 /*
