@@ -31,6 +31,7 @@
 #define GDT_NULL_SELECTOR (GDT_NULL_INDEX << 3)
 #define GDT_KERNEL_CODE_SELECTOR (GDT_KERNEL_CODE_INDEX << 3)
 #define GDT_KERNEL_DATA_SELECTOR (GDT_KERNEL_DATA_INDEX << 3)
+
 // 用户选择子需要 RPL = 3
 #define GDT_USER_CODE_SELECTOR ((GDT_USER_CODE_INDEX << 3) | 3)
 #define GDT_USER_DATA_SELECTOR ((GDT_USER_DATA_INDEX << 3) | 3)
@@ -65,9 +66,14 @@
 #define GDT_SET_HIGH_TSS(base) ((uint64_t)(base) >> 32)
 
 /*
- * IDT 配置
- * 256 个中断向量，其中 0-31 为处理器异常
+ * IDT 条目结构体
+ * 64位门描述符为16字节，由两个uint64_t组成
  */
+struct idt_gate {
+    uint64_t low;
+    uint64_t high;
+} __attribute__((packed, aligned(16)));
+
 #define IDT_ENTRY_COUNT 256
 
 // 门描述符类型：中断门 (0xE) 自动清除 IF，陷阱门 (0xF) 不改变 IF
@@ -83,16 +89,19 @@
  * IDT 门描述符构建宏
  * 64 位门描述符为 16 字节，由两个 uint64_t 组成
  * ist: 0-7，选择 TSS 中的 IST 栈指针，0 表示使用当前栈
+ * 返回 struct idt_gate 结构体
  */
 #define IDT_MAKE_GATE(offset, selector, ist, type, dpl) \
-    (uint64_t)((((uint64_t)(offset) & 0xFFFF) << 0) | \
+    (struct idt_gate) { \
+        .low = (((uint64_t)(offset) & 0xFFFF) << 0) | \
                (((uint64_t)(selector) & 0xFFFF) << 16) | \
                (((uint64_t)(ist) & 0x7) << 32) | \
                (((uint64_t)(type) & 0xF) << 40) | \
                (((uint64_t)(dpl) & 0x3) << 45) | \
-               (((uint64_t)IDT_PRESENT) << 47) | \
-               (((uint64_t)((offset) >> 16) & 0xFFFF) << 48)), \
-    (uint64_t)((uint64_t)((offset) >> 32) & 0xFFFFFFFF)
+               ((uint64_t)IDT_PRESENT << 47) | \
+               (((uint64_t)((offset) >> 16) & 0xFFFF) << 48), \
+        .high = (uint64_t)((offset) >> 32) \
+    }
 
 /*
  * TSS 结构
@@ -114,7 +123,7 @@ struct tss {
     uint64_t ist7;
     uint64_t reserved2;
     uint16_t reserved3;
-    uint16_t io_map_base;  // I/O 权限位图基址，设为 sizeof(tss) 禁用
+    uint16_t io_map_base;  // I/O 权限位图基址，设为禁用
 };
 
 // 模型特定寄存器 (MSR) 地址
@@ -140,5 +149,17 @@ struct tss {
  */
 #define STAR_KERNEL_CS GDT_KERNEL_CODE_SELECTOR
 #define STAR_USER_CS (GDT_USER_CODE_SELECTOR & ~3)
+
+// 获取gdt模版的虚拟地址
+uint64_t *get_gdt_temp(void);
+
+// 获取tss模版的虚拟地址
+struct idt_gate* get_idt_temp(void);
+
+// 获取idt模版的虚拟地址
+struct tss* get_tss_temp(void);
+
+// 初始化所有模版
+void processor_init(void);
 
 #endif // PROCESSOR_H
