@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-#include "mm/init.h"
+#include <mm/init.h>
+#include <smp.h>
 #include <processor.h>
 #include <kernel.h>
 #include <serial.h>  
 
+extern uint8_t cpu_ready_flag;
+
 __attribute__((noreturn))
-void kernel_main(void) {
+void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     serial_puts("[KERNEL]ShiziOS KERNEL v");
     serial_puts(KERNEL_VERSION);
     serial_puts("\n");
@@ -14,11 +17,18 @@ void kernel_main(void) {
     memory_init();
 
     processor_init();
-    uint64_t *gdt_temp_addr = get_gdt_temp();
+    gdte *gdt_temp_addr = get_gdt_temp();
     struct idt_gate* idt_temp_addr = get_idt_temp();
     struct tss* tss_temp_addr = get_tss_temp(); 
-  
+
+    smp_data_init(gdt_temp_addr, idt_temp_addr, tss_temp_addr);
+
+    // 设置标志位让ap启动
+    cpu_ready_flag = 1;
+
+    smp_init(logical_id, apic_id);
+
     while (1) {
-        __asm__ __volatile__("hlt");
+        __asm__ volatile ("hlt");
     }
 }

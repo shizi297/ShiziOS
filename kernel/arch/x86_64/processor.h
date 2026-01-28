@@ -18,6 +18,8 @@
  */
 #define GDT_ENTRY_COUNT 7
 
+typedef uint64_t gdte;
+
 // GDT 条目索引
 #define GDT_NULL_INDEX 0
 #define GDT_KERNEL_CODE_INDEX 1
@@ -48,13 +50,13 @@
 #define GDT_KERNEL_CODE_DESC 0x00209A0000000000
 #define GDT_KERNEL_DATA_DESC 0x0000920000000000
 #define GDT_USER_CODE_DESC 0x0020FA0000000000
-#define GDT_USER_DATA_DESC 0x0000F2000000000000
+#define GDT_USER_DATA_DESC 0x0000F20000000000
 #define GDT_NULL_DESC 0x0000000000000000
 
 /*
- * TSS 描述符构建宏
+ * GDT TSS 段构建
  * TSS 描述符类型: 0x89 = P=1, DPL=00, Type=1001 (64 位 TSS 可用)
- * limit 必须至少为 0x67 (TSS 最小尺寸)
+ * limit 必须至少为 0x67 (TSS 段最小尺寸)
  */
 #define GDT_SET_LOW_TSS(base, limit) \
     ((((uint64_t)(base) & 0xFFFFFF) << 16) | \
@@ -124,7 +126,7 @@ struct tss {
     uint64_t reserved2;
     uint16_t reserved3;
     uint16_t io_map_base;  // I/O 权限位图基址，设为禁用
-};
+}__attribute__((packed));
 
 // 模型特定寄存器 (MSR) 地址
 #define MSR_EFER 0xC0000080            // 扩展功能使能寄存器
@@ -150,13 +152,25 @@ struct tss {
 #define STAR_KERNEL_CS GDT_KERNEL_CODE_SELECTOR
 #define STAR_USER_CS (GDT_USER_CODE_SELECTOR & ~3)
 
+// 设置gs寄存器
+static inline void set_gs_base(uint64_t base) {
+    uint32_t low = base & 0xFFFFFFFF;
+    uint32_t high = base >> 32;
+    __asm__ volatile(
+        "wrmsr\n"
+        : 
+        : "c" (MSR_GS_BASE), "a" (low), "d" (high)
+        : "memory"
+    );
+}
+
 // 获取gdt模版的虚拟地址
 uint64_t *get_gdt_temp(void);
 
-// 获取tss模版的虚拟地址
+// 获取idt模版的虚拟地址
 struct idt_gate* get_idt_temp(void);
 
-// 获取idt模版的虚拟地址
+// 获取tss模版的虚拟地址
 struct tss* get_tss_temp(void);
 
 // 初始化所有模版

@@ -7,6 +7,9 @@
 #define ARCH_ARM      1
 #define ARCH_RISCV    2
 
+// 所有线程的内核栈大小
+#define KERNEL_START_SIZE 16384 // 16kb
+
 #define ARCH          ARCH_X86_64
 
 #endif // CONFIG_H 

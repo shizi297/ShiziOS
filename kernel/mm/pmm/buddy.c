@@ -682,6 +682,12 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
         }
     }
 
+    // 清零内存块
+    uint64_t *alloc_mem_block_ptr = (uint64_t *)PHYS_TO_LINEAR(pfn << PAGE_SHIFT);
+    for (uint64_t i = 0;i < (PAGE_SIZE * (1 << order));i += sizeof(uint64_t)) {
+        alloc_mem_block_ptr[i >> 3] = 0;
+    }
+
     spin_unlock(&zones[zone].lock);
     spin_unlock(&mem_block->lock);
 

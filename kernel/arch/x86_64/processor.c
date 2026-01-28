@@ -5,7 +5,7 @@
 
 extern uint64_t irq_entry_table[256];
 
-static uint64_t gdt_temp[GDT_ENTRY_COUNT];
+static gdte gdt_temp[GDT_ENTRY_COUNT];
 static struct idt_gate idt_temp[IDT_ENTRY_COUNT];
 static struct tss tss_temp = {0};
 
