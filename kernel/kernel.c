@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #include <mm/init.h>
 #include <smp.h>
@@ -27,8 +30,4 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     cpu_ready_flag = 1;
 
     smp_init(logical_id, apic_id);
-
-    while (1) {
-        __asm__ volatile ("hlt");
-    }
 }

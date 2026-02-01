@@ -1,6 +1,9 @@
 ShiziOS
 Copyright 2025 ShiziOS Project
 
+Primary Maintainer:
+- shizi (GitHub: https://github.com/shizi297)
+
 Third-party components:
 
 Libtree (kernel/include/libtree.h, kernel/lib/rbtree.c)

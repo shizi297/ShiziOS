@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #ifndef _SPINLOCK_H
 #define _SPINLOCK_H

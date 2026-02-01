@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #ifndef VMM_MMU_H
 #define VMM_MMU_H

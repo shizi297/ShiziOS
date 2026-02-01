@@ -1,9 +1,13 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #ifndef PROCESSOR_H
 #define PROCESSOR_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * GDT 条目数量
@@ -152,6 +156,108 @@ struct tss {
 #define STAR_KERNEL_CS GDT_KERNEL_CODE_SELECTOR
 #define STAR_USER_CS (GDT_USER_CODE_SELECTOR & ~3)
 
+// CR4寄存器位掩码定义
+#define CR4_VME          0x00000001  // 虚拟8086模式扩展
+#define CR4_PVI          0x00000002  // 保护模式虚拟中断
+#define CR4_TSD          0x00000004  // 时间戳禁用
+#define CR4_DE           0x00000008  // 调试扩展
+#define CR4_PSE          0x00000010  // 页大小扩展（4MB页）
+#define CR4_PAE          0x00000020  // 物理地址扩展
+#define CR4_MCE          0x00000040  // 机器检查异常使能
+#define CR4_PGE          0x00000080  // 页全局使能
+#define CR4_PCE          0x00000100  // 性能监控计数器使能
+#define CR4_OSFXSR       0x00000200  // 支持FXSAVE/FXRSTOR
+#define CR4_OSXMMEXCPT   0x00000400  // 支持SIMD浮点异常
+#define CR4_UMIP         0x00000800  // 用户模式指令阻止
+#define CR4_LA57         0x00001000  // 5级分页使能
+#define CR4_VMXE         0x00002000  // VMX使能
+#define CR4_SMXE         0x00004000  // SMX使能
+#define CR4_FSGSBASE     0x00008000  // FS/GS基址快速访问指令使能
+#define CR4_PCIDE        0x00010000  // 进程上下文标识符使能
+#define CR4_OSXSAVE      0x00020000  // 操作系统支持XSAVE/XRSTOR
+#define CR4_SMEP         0x00040000  // 内核模式执行保护
+#define CR4_SMAP         0x00080000  // 内核模式访问保护
+#define CR4_PKE          0x00100000  // 页密钥使能
+#define CR4_CET          0x00200000  // 控制流强制技术使能
+#define CR4_PKS          0x00400000  // 页密钥存储使能
+#define CR4_UINTR        0x00800000  // 用户中断使能
+
+// CR4配置
+#define CR4_CONFIG (CR4_MCE | CR4_PAE | CR4_PSE | CR4_PGE | CR4_OSFXSR | \
+                   CR4_OSXMMEXCPT | CR4_OSXSAVE | CR4_FSGSBASE | \
+                   CR4_SMEP | CR4_SMAP)
+
+// 存储中断/异常/系统调用/信号处理时的信息
+struct pt_regs {
+    /*
+     * 中断或异常时
+     * cpu会自动压入这些
+     */
+    uint64_t ss;    // 栈段选择子
+    uint64_t rsp;   // 异常发生时的栈指针 
+    uint64_t rflags;    // 处理器状态标志 
+    uint64_t cs;    // 代码段选择子，区分用户态和内核态 
+    uint64_t rip;   // 异常发生时的指令地址 
+    
+    /*
+     * 保存这些通用寄存器
+     * 因为有的用户程序会使用他们
+     */
+    uint64_t r15;
+    uint64_t r14;
+    uint64_t r13;
+    uint64_t r12;
+    uint64_t rbp;
+    uint64_t rbx;
+    
+    /*
+     * 存储系统调用号/异常错误码
+     * 系统调用：保存原始的系统调用号
+     * 异常：保存错误码（如果有）
+     */
+    uint64_t orig_ax;
+    
+    /*
+     * 调用者保存寄存器
+     * 包括系统调用参数寄存器
+     * 
+     * rcx和r11在系统调用时有特殊用途
+     * syscall指令将rip保存到rcx
+     * syscall指令将rflags保存到r11
+     * 因此它们在系统调用时同时作为：
+     * 通用寄存器和保存关键控制寄存器值
+     */
+    uint64_t r11;   // 系统调用时保存用户rflags，也作为通用寄存器r11
+    uint64_t r10;   // 系统调用第4个参数 
+    uint64_t r9;    // 系统调用第6个参数 
+    uint64_t r8;    // 系统调用第5个参数 
+    uint64_t rax;   // 系统调用号/返回值 
+    uint64_t rcx;   // 系统调用时保存用户rip，也作为通用寄存器rcx 
+    uint64_t rdx;   // 系统调用第3个参数 
+    uint64_t rsi;   // 系统调用第2个参数 
+    uint64_t rdi;   // 系统调用第1个参数 
+    
+    /*
+     * 线程本地存储（TLS）指针
+     * x86-64使用MSR_FS_BASE寄存器保存用户态TLS基址
+     */
+    uint64_t fs_base;
+} __attribute__((packed, aligned(8)));
+
+// 任务切换时保存的信息
+struct thread_struct {
+    uint64_t rsp;   // 内核栈指针
+    uint64_t rip;   // 返回地址/指令指针
+    uint64_t cr3;   // 页表基址
+
+    uint64_t fs_base;   // 用户态tls
+};
+
+// CPU暂停,用于优化等待循环，防止过度占用执行资源
+static inline void cpu_pause(void) {
+    __asm__ volatile("pause");
+}
+
 // 设置gs寄存器
 static inline void set_gs_base(uint64_t base) {
     uint32_t low = base & 0xFFFFFFFF;
@@ -162,6 +268,48 @@ static inline void set_gs_base(uint64_t base) {
         : "c" (MSR_GS_BASE), "a" (low), "d" (high)
         : "memory"
     );
+}
+
+// 用来表示是否设置CR4_FSGSBASE
+typedef enum {
+    NO_FAGSBASE = 0,
+    FSGSBASE = 1,
+} fsgsbase_set;
+
+/*
+ * 写入CR4(使用CR4_CONFIG)
+ *
+ * @param fsgsbase 是否设置fsgsbase位
+ */ 
+static inline void set_cr4(fsgsbase_set fsgsbase) {
+    uint64_t current_cr4;
+    uint64_t new_cr4;
+    uint64_t config;
+    
+    // 读取当前CR4值
+    __asm__ volatile("mov %%cr4, %0" : "=r"(current_cr4));
+    
+    // 根据参数调整配置
+    if (fsgsbase == NO_FAGSBASE) {
+        config = (uint64_t)CR4_CONFIG & ~CR4_FSGSBASE;
+    } else {
+        config = (uint64_t)CR4_CONFIG;
+    }
+    
+    // 只设置CR4_CONFIG中定义的位，其他位保持不变
+    new_cr4 = current_cr4 | config;
+    
+    // 写回CR4
+    __asm__ volatile("mov %0, %%cr4" : : "r"(new_cr4));
+}
+
+// 获取当前CPU的APIC ID
+static inline uint32_t get_apic_id(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(1));
+    return ebx >> 24;
 }
 
 // 获取gdt模版的虚拟地址

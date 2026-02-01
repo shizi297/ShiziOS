@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #ifndef TASK_TYPES_H
 #define TASK_TYPES_H
@@ -12,7 +15,7 @@ typedef struct fair_rq_struct fair_rq_struct;
 typedef struct rt_rq_struct rt_rq_struct;
 
 typedef struct _per_cpu {
-    void *timestamp;    // 时间戳获取(后面改成函数指针)
+    uint64_t (*timestamp)(void);    // 时间戳获取
     task_struct *current;
 
     uint16_t apic_id;

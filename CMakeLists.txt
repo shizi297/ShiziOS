@@ -74,9 +74,9 @@ add_custom_target(run
         -bios /usr/share/ovmf/OVMF.fd 
         -drive file=${CMAKE_SOURCE_DIR}/disk/shizios.img,format=raw,if=virtio 
         -m 2G 
-        -cpu qemu64 
         -smp 2 
-        -device virtio-gpu-pci,xres=1920,yres=1080 
+        -cpu max
+        -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 
         -serial stdio
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

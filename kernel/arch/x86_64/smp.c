@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #include "smp.h"
 #include <processor.h>
@@ -147,6 +150,8 @@ void smp_data_init(
     uint16_t logicalid_to_apicid_struct_size = sizeof(uint16_t) + (sizeof(uint16_t) * max_cpu_count);
     logicalid_to_apicid_struct_ptr = kheap_alloc(logicalid_to_apicid_struct_size);
 
+    logicalid_to_apicid_struct_ptr->count = max_cpu_count;
+
     SMP_PRINT("smp data init succeed\n");
 }
 
@@ -159,11 +164,6 @@ void smp_data_init(
 __attribute__((noreturn))
 void smp_init(uint32_t logical_id, uint32_t apic_id) {
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
-
-    // 获取cpu最大逻辑核心数
-    uint16_t max_cpu_count = bootboot->numcores;
-
-    logicalid_to_apicid_struct_ptr->count = max_cpu_count;
 
     logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id] = apic_id;
 
@@ -204,6 +204,9 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
 
     // 设置当前cpu的栈
     uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
+
+    // 设置fsgsbase位
+    set_cr4(FSGSBASE);
 
     __asm__ volatile(
         "movq %0, %%rsp\n"

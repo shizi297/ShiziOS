@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
+ */
 
 #ifndef SIGNAL_H
 #define SIGNAL_H
@@ -52,7 +55,7 @@
 
 typedef struct {
     unsigned long __bits[_SIGSET_NUM_WORDS];
-} sigset_t;
+} signal_t;
 
 // 算出信号属于数组的那个元素
 #define _SIGSET_WORD(sig)  (((sig) - 1) / (8 * sizeof(unsigned long)))
