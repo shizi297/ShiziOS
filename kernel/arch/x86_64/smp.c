@@ -3,7 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#include "smp.h"
+#include <smp.h>
 #include <processor.h>
 #include <bootboot.h>
 #include <heap.h>
@@ -155,6 +155,19 @@ void smp_data_init(
     SMP_PRINT("smp data init succeed\n");
 }
 
+/**
+ * 获取cpu核心的逻辑id
+ *
+ * @param apic_id 对应cpu核心的apic_id
+ */
+uint32_t get_logical_id(uint32_t apic_id) {
+    uint16_t count = logicalid_to_apicid_struct_ptr->count;
+    for (int i = 0;i < count;i++) {
+        uint16_t current_apic_id = logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[i];
+        if (current_apic_id == apic_id) return current_apic_id;
+    }
+} 
+
 /*
  * 初始化所有核心
  *
@@ -195,8 +208,7 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     uint16_t tss_selector = (GDT_TSS_LOW_INDEX * 8);
     __asm__ volatile("ltr %w0" : : "r"(tss_selector));
 
-    // 设置per_cpu的apicid和逻辑cpuid
-    per_cpu_ptr[logical_id].apic_id = apic_id;
+    // 设置per_cpu的逻辑cpuid
     per_cpu_ptr[logical_id].logical_id = logical_id;
 
     // 设置当前cpu的gs到per_cpu
@@ -204,9 +216,6 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
 
     // 设置当前cpu的栈
     uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
-
-    // 设置fsgsbase位
-    set_cr4(FSGSBASE);
 
     __asm__ volatile(
         "movq %0, %%rsp\n"

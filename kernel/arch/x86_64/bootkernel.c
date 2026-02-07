@@ -74,11 +74,16 @@ void _start(uint64_t logical_id_raw) {
     }
 
     /*
+     * 检测硬件是否支持运行该系统
+     * 如果支持
      * 设置cr4让系统能够使用一些东西
-     * 传入NO_FAGSBASE不设置FSGSBASE位
-     * 因为在这里设置会导致硬件错误
+     * 不支持panic
      */
-    set_cr4(NO_FAGSBASE);
+    if (!cpuid_fsgsbase()) {
+        CPU_NOT_SUPPORT;
+    }
+
+    set_cr4();
     
     // BP CPU执行内核初始化
     if (bpcpu_logical_flag) {

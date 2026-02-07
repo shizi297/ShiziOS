@@ -6,10 +6,10 @@
 #ifndef MEM_INIT_H
 #define MEM_INIT_H
 
-#include "bootmem/linear_map.h"
-#include "bootmem/boot_allot.h"
-#include "pmm/buddy.h"
-#include "vmm/vmm_map.h"
+#include <mm/bootmem/linear_map.h>
+#include <mm/bootmem/boot_allot.h>
+#include <mm/pmm/buddy.h>
+#include <mm/vmm/vmm_map.h>
 
 // 初始化内存管理
 static inline void memory_init(void) {

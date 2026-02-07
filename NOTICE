@@ -13,3 +13,7 @@ See LICENSES/LIBTREE_LICENSE for details.
 BOOTBOOT (kernel/include/bootboot.h)
 Licensed under the MIT License
 See LICENSES/BOOTBOOT_LICENSE for details.
+
+linux-like-list (kernel/include/list.h)
+Licensed under the MIT License
+See LICENSES/LINUX_LIKE_LIST_LICENSE for details.

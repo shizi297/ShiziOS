@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <processor.h>
 
-// 先声明，方便后面集成
+extern struct sched_class;
 typedef struct task_struct task_struct;
 typedef struct fair_rq_struct fair_rq_struct;
 typedef struct rt_rq_struct rt_rq_struct;
@@ -17,8 +17,8 @@ typedef struct rt_rq_struct rt_rq_struct;
 typedef struct _per_cpu {
     uint64_t (*timestamp)(void);    // 时间戳获取
     task_struct *current;
+    struct sched_class *sched_class;
 
-    uint16_t apic_id;
     uint16_t logical_id;
 
     // 调度器私有数据
@@ -42,6 +42,13 @@ void smp_data_init(
     struct idt_gate *idt_temp_addr, 
     struct tss *tss_temp_addr
 );
+
+/**
+ * 获取cpu核心的逻辑id
+ *
+ * @param apic_id 对应cpu核心的apic_id
+ */
+uint32_t get_logical_id(uint32_t apic_id);
 
 /*
  * 初始化所有核心

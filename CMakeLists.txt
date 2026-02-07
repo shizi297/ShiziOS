@@ -19,7 +19,7 @@ include_directories(
     config
     kernel/arch/x86_64/drivers
     kernel/drivers
-    kernel/arch/x86_64/mm     
+    kernel/arch/x86_64/include
 )
 
 # 编译kernel目录下的文件
@@ -80,6 +80,30 @@ add_custom_target(run
         -net none 
         -serial stdio
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+# 用内存生成磁盘镜像
+add_custom_target(ram-img
+    DEPENDS kernel.elf
+    COMMAND mkdir -p /dev/shm/shizios/initrd_root/sys
+    COMMAND cp ${CMAKE_BINARY_DIR}/kernel.elf /dev/shm/shizios/initrd_root/sys/core
+    COMMAND cp ${CMAKE_SOURCE_DIR}/config/CONFIG /dev/shm/shizios/initrd_root/sys/config
+    COMMAND ${CMAKE_SOURCE_DIR}/disk/mkbootimg ${CMAKE_SOURCE_DIR}/config/ShiziOS.json /dev/shm/shizios/shizios.img
+    WORKING_DIRECTORY /dev/shm/shizios
+)
+
+# 用内存的img内存运行qemu
+add_custom_target(ram-run
+    DEPENDS ram-img
+    COMMAND qemu-system-x86_64 
+        -bios /usr/share/ovmf/OVMF.fd 
+        -drive file=/dev/shm/shizios/shizios.img,format=raw,if=virtio 
+        -m 2G 
+        -smp 2 
+        -cpu max
+        -device virtio-gpu-pci,xres=1280,yres=720 
+        -net none 
+        -serial stdio
 )
 
 # 输出目录配置
