@@ -1,0 +1,57 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
+ */
+
+#ifndef TIMECYCLE_H
+#define TIMECYCLE_H
+
+#include <stdint.h>
+
+/**
+ * 初始化所有时间转换参数
+ * 
+ * @param hz 时钟频率
+ * @param max_seconds 最大时间跨度
+ * @param mult 输出正向乘数
+ * @param shift 输出正向移位
+ * @param mult_inv 输出反向乘数
+ * @param shift_inv 输出反向移位
+ */
+void timecycle_init_params(
+    uint64_t hz, uint64_t max_seconds,
+    uint32_t *mult, uint32_t *shift,
+    uint32_t *mult_inv, uint32_t *shift_inv
+);
+
+/**
+ * 将周期值转换为纳秒时间
+ * 
+ * @param cycles 周期值
+ * @param mult 乘数
+ * @param shift 移位
+ * @return 纳秒时间
+ */
+static inline uint64_t timecycle_cycles_to_ns(
+    uint64_t cycles,
+    uint32_t mult, uint32_t shift
+) {
+    return (uint64_t)(((__uint128_t)cycles * mult) >> shift);
+}
+
+/**
+ * 将纳秒时间转换为周期值
+ * 
+ * @param ns 纳秒时间
+ * @param mult_inv 反向乘数
+ * @param shift_inv 反向移位
+ * @return 周期值
+ */
+static inline uint64_t timecycle_ns_to_cycles(
+    uint64_t ns,
+    uint32_t mult_inv, uint32_t shift_inv
+) {
+    return (uint64_t)(((__uint128_t)ns * mult_inv) >> shift_inv);
+}
+
+#endif // TIMECYCLE_H

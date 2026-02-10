@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <processor.h>
 
-extern struct sched_class;
+struct sched_class;
 typedef struct task_struct task_struct;
 typedef struct fair_rq_struct fair_rq_struct;
 typedef struct rt_rq_struct rt_rq_struct;
@@ -43,12 +43,8 @@ void smp_data_init(
     struct tss *tss_temp_addr
 );
 
-/**
- * 获取cpu核心的逻辑id
- *
- * @param apic_id 对应cpu核心的apic_id
- */
-uint32_t get_logical_id(uint32_t apic_id);
+// 获取cpu核心的逻辑id
+uint32_t get_logical_id(void);
 
 /*
  * 初始化所有核心

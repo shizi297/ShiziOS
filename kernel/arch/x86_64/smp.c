@@ -155,17 +155,10 @@ void smp_data_init(
     SMP_PRINT("smp data init succeed\n");
 }
 
-/**
- * 获取cpu核心的逻辑id
- *
- * @param apic_id 对应cpu核心的apic_id
- */
-uint32_t get_logical_id(uint32_t apic_id) {
-    uint16_t count = logicalid_to_apicid_struct_ptr->count;
-    for (int i = 0;i < count;i++) {
-        uint16_t current_apic_id = logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[i];
-        if (current_apic_id == apic_id) return current_apic_id;
-    }
+// 获取cpu核心的逻辑id
+uint32_t get_logical_id(void) {
+    per_cpu *per_cpu_ptr = get_gs_base();
+    uint64_t apic_id = per_cpu_ptr->logical_id;
 } 
 
 /*

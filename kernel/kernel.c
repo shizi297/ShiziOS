@@ -30,4 +30,8 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     cpu_ready_flag = 1;
 
     smp_init(logical_id, apic_id);
+
+    while (1) {
+        cpu_pause();
+    }
 }

@@ -330,7 +330,18 @@ static inline void msr_write(uint32_t reg, uint64_t value) {
 
 // 设置gs寄存器
 static inline void set_gs_base(uint64_t base) {
-    msr_write(MSR_GS_BASE, base);
+    asm volatile("wrgsbase %0" : : "r"(base) : "memory");
+}
+
+/**
+ * 读取gs寄存器
+ *
+ * @return gs寄存器的值
+ */
+static inline void *get_gs_base(void) {
+    uint64_t base;
+    asm volatile("rdgsbase %0" : "=r"(base) : : "memory");
+    return (void *)base;
 }
 
 /**
@@ -349,11 +360,7 @@ static bool cpuid_fsgsbase(void) {
     return (ebx & (1 << 0)) != 0;
 }
 
-/**
- * 写入CR4(使用CR4_CONFIG)
- *
- * @param fsgsbase 是否设置fsgsbase位
- */ 
+// 写入CR4(使用CR4_CONFIG)
 static inline void set_cr4(void) {
     uint64_t current_cr4;
     uint64_t new_cr4;
