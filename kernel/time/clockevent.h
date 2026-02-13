@@ -7,6 +7,7 @@
 #define CLOCKEVENT_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 // 时钟事件结构体
 typedef struct clockevent_struct {
@@ -29,5 +30,50 @@ typedef struct clockevent_struct {
     
     void (*event_handler)(void);    // 回调
 }clockevent_struct;
+
+// 时钟事件框架初始化
+void clockevent_init(void);
+
+/**
+ * 注册回调函数到设备
+ * 设备中断时调用
+ * 
+ * @param event_handler 回调函数的函数指针
+ * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * 
+ * @return 失败： false
+ * @return 成功： true
+ */
+bool event_handler_register(void (*event_handler)(void), char *name);
+
+/**
+ * 设置中断值到设备
+ * 
+ * @param ns 纳秒(相对当前)
+ * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * 
+ * @return 失败： false
+ * @return 成功： true
+ */
+bool set_value_to_dev(uint64_t ns, char *name);
+
+/**
+ * 注册时钟到时钟事件框架
+ * 
+ * @param name 设备名称
+ * @param shutdown 停止的函数指针
+ * @param set_oneshot 设置为单次中断模式的函数指针
+ * @param set_periodic 设置为周期中断模式的函数指针
+ * @param set_value 设置下一次中断的值的函数指针
+ * @param hz 时钟频率
+ */
+void clockevent_register(
+    char *name, 
+    void (*shutdown)(void),
+    void (*set_oneshot)(void),
+    void (*set_periodic)(void),
+    void (*set_value)(uint64_t value),
+    uint64_t hz
+);
 
 #endif  // CLOCKEVENT_H

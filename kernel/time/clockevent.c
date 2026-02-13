@@ -4,8 +4,11 @@
  */
 
 #include "clockevent.h"
+#include "clocksource.h"
 #include "timecycle.h"
 #include <stdint.h>
+#include <stdbool.h>
+#include <shizi/string.h>
 #include <bootboot.h>
 #include <serial.h>
 #include <smp.h>
@@ -30,7 +33,7 @@ typedef struct {
     struct list_head head[];
 }clockevent_list_head;
 
-clockevent_list_head * clockevent_head = NULL;
+clockevent_list_head *clockevent_head = NULL;
 
 // 时钟事件框架初始化
 void clockevent_init(void) {
@@ -56,16 +59,110 @@ void clockevent_init(void) {
  * 
  * @param event_handler 回调函数的函数指针
  * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * 
+ * @return 失败： false
+ * @return 成功： true
  */
-void event_handler_register(void (*event_handler)(void), char *name) {
+bool event_handler_register(void (*event_handler)(void), char *name) {
     // 获取当前逻辑cpuid
     uint64_t logical_id = get_logical_id();
+    struct list_head *head = &clockevent_head->head[logical_id];
 
-    // TODO
+    // 使用最高精度的时钟
+    if (!name) {
+        if (list_empty(head)) {
+            // 没有时钟设备
+            CLOCKEVENT_PANIC("no clock device");
+        }
+        clockevent_list_struct *first = list_first_entry(head, clockevent_list_struct, node);
+        first->clockevent.event_handler = event_handler;
+        return true;
+    }
+
+    // 根据设备名称查找
+    clockevent_list_struct *pos = NULL;
+    list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+        if (!strcmp(pos->clockevent.name, name)) {
+            pos->clockevent.event_handler = event_handler;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /**
- * 注册时钟到时钟信号框架
+ * 设置中断值到设备
+ * 
+ * @param ns 纳秒(相对当前)
+ * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * 
+ * @return 失败： false
+ * @return 成功： true
+ */
+bool set_value_to_dev(uint64_t ns, char *name) {
+    // 获取当前逻辑cpuid
+    uint64_t logical_id = get_logical_id();
+    struct list_head *head = &clockevent_head->head[logical_id];
+
+    clockevent_list_struct *pos = NULL;
+
+    {
+        bool found = false;
+
+        // 使用最高精度的时钟
+        if (!name) {
+            if (list_empty(head)) {
+                // 没有时钟设备
+                CLOCKEVENT_PANIC("no clock device");
+            }
+            pos = list_first_entry(head, clockevent_list_struct, node);
+            found = true;
+        } else {
+            // 根据设备名称查找
+            list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+                if (!strcmp(pos->clockevent.name, name)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) return false;
+    }
+
+    {
+        void (*set_value)(uint64_t value) = pos->clockevent.set_value;
+        uint32_t mult_inv = pos->clockevent.mult_inv;
+        uint32_t shift_inv = pos->clockevent.shift_inv;
+
+        /*
+        * 在当前内核下
+        * apic始终为TSC DEADLINE模式
+        * 需要写入tsc绝对值
+        * 所以这里让apic特殊处理
+        */
+        if (!(strcmp(pos->clockevent.name, "apic"))) {
+            /*
+            * 使用时钟源框架
+            * 读取tsc的值
+            * 与调用方传的值相加
+            * 转为设备值再写入
+            */
+            uint64_t current_ns = 0;
+            if (!clocksource_read(NULL, &current_ns)) {
+                CLOCKEVENT_PANIC("read clocksource error");
+            }
+            set_value(timecycle_ns_to_cycles(current_ns + ns, mult_inv, shift_inv));
+        } else {
+            set_value(timecycle_ns_to_cycles(ns, mult_inv, shift_inv));
+        }
+    }
+    return true;
+}
+
+/**
+ * 注册时钟到时钟事件框架
  * 
  * @param name 设备名称
  * @param shutdown 停止的函数指针
@@ -110,6 +207,27 @@ void clockevent_register(
 
     // 获取当前逻辑cpuid
     uint64_t logical_id = get_logical_id();
-    
-    list_add(&current_list->node, &clockevent_head->head[logical_id]);
+    struct list_head *head = &clockevent_head->head[logical_id];
+
+    /*
+     * 按hz降序插入
+     * 找到第一个时钟的hz比新时钟小的节点
+     * 将新时钟插入找到的时钟之前
+     */
+    if (!list_empty(head)) {
+        clockevent_list_struct *pos = NULL;
+        list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+            if (pos->clockevent.hz < current_list->clockevent.hz) {
+                // 插入到 pos 节点之前
+                list_add_tail(&current_list->node, &pos->node);
+                return;
+            }
+        }
+    }
+    /*
+     * 链表为空
+     * 新时钟的 hz 不大于链表中任何节点的 hz
+     * 则添加到链表末尾 
+     */
+    list_add_tail(&current_list->node, head);
 }

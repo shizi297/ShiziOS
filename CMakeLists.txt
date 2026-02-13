@@ -38,6 +38,7 @@ add_subdirectory(kernel/arch/x86_64/mm)   # x86_64架构特定内存管理
 add_subdirectory(kernel/drivers)          # 通用驱动模块
 add_subdirectory(kernel/mm)               # 通用内存管理模块
 add_subdirectory(kernel/lib)              # 库模块
+add_subdirectory(kernel/time)              # 时间管理模块
 
 # 链接生成内核
 set(EMPTY_SOURCE ${CMAKE_BINARY_DIR}/empty.c)
@@ -53,7 +54,8 @@ target_link_libraries(kernel.elf
     x86_64_mm       
     kernel_drivers  
     kernel_mm
-    kernel_lib     
+    kernel_lib
+    kernel_time     
     "-Wl,--end-group"
 )
 
