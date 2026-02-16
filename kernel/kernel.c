@@ -8,7 +8,9 @@
 #include <processor.h>
 #include <kernel.h>
 #include <serial.h>  
+#include <time.h>
 
+extern void pit_init(void);
 extern uint8_t cpu_ready_flag;
 
 __attribute__((noreturn))
@@ -25,6 +27,9 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     struct tss* tss_temp_addr = get_tss_temp(); 
 
     smp_data_init(gdt_temp_addr, idt_temp_addr, tss_temp_addr);
+    
+    // 初始化time系统
+    time_init();
 
     // 设置标志位让ap启动
     cpu_ready_flag = 1;

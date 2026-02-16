@@ -25,7 +25,6 @@ Execute the following commands in the project root directory:
 - `kernel/include`: Kernel header files
 - `kernel/task`: Task management
 - `kernel/mm`: Memory management
-- `kernel/net`: Networking
 - `kernel/fs`: File system
 
 ## Project Home

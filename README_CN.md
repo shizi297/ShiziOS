@@ -25,7 +25,6 @@ ShiziOS 是一个轻量级的操作系统。目前仅支持 x86_64 架构，使�
 - `kernel/include`：内核头文件
 - `kernel/task`：任务管理
 - `kernel/mm`：内存管理
-- `kernel/net`：网络
 - `kernel/fs`：文件系统
 
 ## 项目主页

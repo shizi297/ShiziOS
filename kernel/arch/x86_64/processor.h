@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <fault.h>
 
 /*
  * GDT 条目数量
@@ -81,6 +82,8 @@ struct idt_gate {
     uint64_t high;
 } __attribute__((packed, aligned(16)));
 
+extern uint64_t irq_table[256];
+
 #define IDT_ENTRY_COUNT 256
 
 // 门描述符类型：中断门 (0xE) 自动清除 IF，陷阱门 (0xF) 不改变 IF
@@ -94,7 +97,7 @@ struct idt_gate {
 
 // 中断号
 #define IRQ_APIC    33
-#define IRQ_RES0    34
+#define IRQ_PIT     34
 #define IRQ_RES1    35
 #define IRQ_RES2    36
 #define IRQ_RES3    37
@@ -123,8 +126,8 @@ struct idt_gate {
                (((uint64_t)(type) & 0xF) << 40) | \
                (((uint64_t)(dpl) & 0x3) << 45) | \
                ((uint64_t)IDT_PRESENT << 47) | \
-               (((uint64_t)((offset) >> 16) & 0xFFFF) << 48), \
-        .high = (uint64_t)((offset) >> 32) \
+               (((uint64_t)((uint64_t)(offset) >> 16) & 0xFFFF) << 48), \
+        .high = (uint64_t)((uint64_t)(offset) >> 32) \
     }
 
 /*
@@ -238,16 +241,6 @@ struct tss {
 // 存储中断/异常/系统调用/信号处理时的信息
 struct pt_regs {
     /*
-     * 中断或异常时
-     * cpu会自动压入这些
-     */
-    uint64_t ss;    // 栈段选择子
-    uint64_t rsp;   // 异常发生时的栈指针 
-    uint64_t rflags;    // 处理器状态标志 
-    uint64_t cs;    // 代码段选择子，区分用户态和内核态 
-    uint64_t rip;   // 异常发生时的指令地址 
-    
-    /*
      * 保存这些通用寄存器
      * 因为有的用户程序会使用他们
      */
@@ -257,14 +250,7 @@ struct pt_regs {
     uint64_t r12;
     uint64_t rbp;
     uint64_t rbx;
-    
-    /*
-     * 存储系统调用号/异常错误码
-     * 系统调用：保存原始的系统调用号
-     * 异常：保存错误码（如果有）
-     */
-    uint64_t orig_ax;
-    
+
     /*
      * 调用者保存寄存器
      * 包括系统调用参数寄存器
@@ -284,12 +270,15 @@ struct pt_regs {
     uint64_t rdx;   // 系统调用第3个参数 
     uint64_t rsi;   // 系统调用第2个参数 
     uint64_t rdi;   // 系统调用第1个参数 
-    
-    /*
-     * 线程本地存储（TLS）指针
-     * x86-64使用MSR_FS_BASE寄存器保存用户态TLS基址
-     */
-    uint64_t fs_base;
+
+    uint64_t vector;     // 中断/异常向量号
+    uint64_t error_code; // 错误码（如果有），否则为0
+
+    uint64_t rip;   // 异常发生时的指令地址 
+    uint64_t cs;    // 代码段选择子，区分用户态和内核态 
+    uint64_t rflags;    // 处理器状态标志 
+    uint64_t rsp;   // 异常发生时的栈指针（仅来自用户态时有效）
+    uint64_t ss;    // 栈段选择子（仅来自用户态时有效）
 } __attribute__((packed, aligned(8)));
 
 // fpu信息

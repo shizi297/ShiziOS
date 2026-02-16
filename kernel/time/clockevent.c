@@ -4,7 +4,6 @@
  */
 
 #include "clockevent.h"
-#include "clocksource.h"
 #include "timecycle.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -14,9 +13,18 @@
 #include <smp.h>
 #include <list.h>
 #include <heap.h>
+#include <time.h>
 
 #define CLOCKEVENT_PANIC(str) \
     panic("[CLOCKEVENT] ERROR : " str "\n") 
+
+#define CLOCKEVENT_INFO(name, hz) \
+    serial_puts("[CLOCKEVENT] register clockevent : "); \
+    serial_puts(name); \
+    serial_puts("\n"); \
+    serial_puts("hz = "); \
+    serial_put_dec(hz); \
+    serial_puts("\n")
 
 typedef struct {
     clockevent_struct clockevent;
@@ -162,6 +170,52 @@ bool set_value_to_dev(uint64_t ns, char *name) {
 }
 
 /**
+ * 获取设备的事件处理函数
+ * 
+ * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * @param event_handler 存储回调函数的函数指针
+ * 
+ * @return 失败： NULL
+ * @return 成功： 回调函数的函数指针
+ */
+void get_event_handler(char *name, void (**event_handler)(void)) {
+    // 获取当前逻辑cpuid
+    uint64_t logical_id = get_logical_id();
+    struct list_head *head = &clockevent_head->head[logical_id];
+
+    clockevent_list_struct *pos = NULL;
+
+    {
+        bool found = false;
+
+        // 使用最高精度的时钟
+        if (!name) {
+            if (list_empty(head)) {
+                // 没有时钟设备
+                CLOCKEVENT_PANIC("no clock device");
+            }
+            pos = list_first_entry(head, clockevent_list_struct, node);
+            found = true;
+        } else {
+            // 根据设备名称查找
+            list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+                if (!strcmp(pos->clockevent.name, name)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            *event_handler = NULL;
+            return;
+        }
+    }
+
+     *event_handler = pos->clockevent.event_handler;
+}
+
+/**
  * 注册时钟到时钟事件框架
  * 
  * @param name 设备名称
@@ -230,4 +284,7 @@ void clockevent_register(
      * 则添加到链表末尾 
      */
     list_add_tail(&current_list->node, head);
+
+    // 打印注册驱动的信息
+    CLOCKEVENT_INFO(current_list->clockevent.name, current_list->clockevent.hz);
 }

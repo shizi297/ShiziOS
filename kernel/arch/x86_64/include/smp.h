@@ -54,4 +54,24 @@ uint32_t get_logical_id(void);
  */
 void smp_init(uint32_t logical_id, uint32_t apic_id);
 
+/**
+ * 注册中断处理函数
+ * 
+ * @param vector 中断向量号
+ * @param handler_addr 处理函数地址
+ * 
+ * @return 注册成功：true
+ * @return 注册失败：false
+ * 
+ * 使用中断门，DPL=0，IST=0
+ */
+bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr);
+
+/**
+ * 注销中断处理函数
+ * 
+ * @param vector 中断向量号
+ */
+void smp_irq_unregister_handler(uint8_t vector);
+
 #endif // TASK_TYPES_H

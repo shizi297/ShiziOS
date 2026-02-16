@@ -13,6 +13,7 @@
 #include <heap.h>
 #include <serial.h>
 #include <smp.h>
+#include <time.h>
 
 
 #define CLOCKSOURCE_PANIC(str) \

@@ -6,6 +6,15 @@ set(CMAKE_C_COMPILER x86_64-elf-gcc)
 set(CMAKE_ASM_NASM_COMPILER nasm)
 enable_language(ASM_NASM)
 
+# 查找并启用 ccache
+find_program(CCACHE_FOUND ccache)
+if(CCACHE_FOUND)
+    set(CMAKE_C_COMPILER_LAUNCHER ccache)
+    message(STATUS "Using ccache launcher for C compiler: ccache ${CMAKE_C_COMPILER}")
+else()
+    message(STATUS "No ccache found, using direct compiler: ${CMAKE_C_COMPILER}")
+endif()
+
 # 编译选项
 set(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone -mcmodel=kernel -O2")
 set(CMAKE_ASM_NASM_FLAGS "-f elf64")
@@ -20,6 +29,7 @@ include_directories(
     kernel/arch/x86_64/drivers
     kernel/drivers
     kernel/arch/x86_64/include
+    kernel/drivers/acpi/uacpi/include/
 )
 
 # 编译kernel目录下的文件

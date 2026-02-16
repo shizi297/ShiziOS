@@ -221,6 +221,47 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     SMP_PRINT("smp init succeed\n");
 
     while (1) {
-        __asm__ volatile ("pause");
-    };
+        cpu_pause();
+    }
+}
+
+/**
+ * 注册中断处理函数
+ * 
+ * @param vector 中断向量号
+ * @param handler_addr 处理函数地址
+ * 
+ * @return 注册成功：true
+ * @return 注册失败：false
+ * 
+ * 使用中断门，DPL=0，IST=0
+ */
+bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr) {
+    if (vector >= 256 || vector < 32) { 
+        // 无效的中断向量
+        return false;
+    }
+
+    if (handler_addr == 0) {
+        // 无效的处理函数地址
+        return false;
+    }
+    
+    // 更新数组，让中断处理函数知道位置
+    irq_table[vector] = handler_addr;
+}
+
+/**
+ * 注销中断处理函数
+ * 
+ * @param vector 中断向量号
+ */
+void smp_irq_unregister_handler(uint8_t vector) {
+    if (vector >= 256 || vector < 32) { 
+        // 无效的中断向量
+        return;
+    }
+
+    // 恢复默认值
+    irq_table[vector] = 0;
 }

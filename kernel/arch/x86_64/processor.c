@@ -93,3 +93,27 @@ void processor_init(void) {
     idt_temp_init();
     tss_temp_init();
 }
+
+uint64_t irq_table[256] = {
+    [EXC_DE] = (uint64_t)exc_de,
+    [EXC_DB] = (uint64_t)exc_db,
+    [EXC_NMI] = (uint64_t)exc_nmi,
+    [EXC_BP] = (uint64_t)exc_bp,
+    [EXC_OF] = (uint64_t)exc_of,
+    [EXC_BR] = (uint64_t)exc_br,
+    [EXC_UD] = (uint64_t)exc_ud,
+    [EXC_NM] = (uint64_t)exc_nm,
+    [EXC_DF] = (uint64_t)exc_df,
+    [EXC_CSO] = (uint64_t)exc_cso,
+    [EXC_TS] = (uint64_t)exc_ts,
+    [EXC_NP] = (uint64_t)exc_np,
+    [EXC_SS] = (uint64_t)exc_ss,
+    [EXC_GP] = (uint64_t)exc_gp,
+    [EXC_PF] = (uint64_t)exc_pf,
+    [EXC_SPUR] = 0, // 伪中断不需要处理函数
+    [EXC_MF] = (uint64_t)exc_mf,
+    [EXC_AC] = (uint64_t)exc_ac,
+    [EXC_MC] = (uint64_t)exc_mc,
+    [EXC_XM] = (uint64_t)exc_xm,
+    [EXC_VE] = (uint64_t)exc_ve,
+};

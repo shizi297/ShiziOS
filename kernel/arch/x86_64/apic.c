@@ -40,7 +40,7 @@ void set_apic_timer(uint64_t value) {
 
 // 初始化apic
 void apic_init() {
-    // 设置为x2apicm模式
+    // 设置为x2apic模式
     set_apic_x2apic();
 
     // 设置为TSC DEADLINE模式，中断号为IRQ_APIC

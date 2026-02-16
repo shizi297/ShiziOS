@@ -70,4 +70,30 @@
 #define FAULT_DPL_BITMAP \
     (1ULL << EXC_BP)
 
+#ifndef __ASSEMBLER__
+
+// 异常处理函数
+void exc_de(void);
+void exc_db(void);
+void exc_nmi(void);
+void exc_bp(void);
+void exc_of(void);
+void exc_br(void);
+void exc_ud(void);
+void exc_nm(void);
+void exc_df(void);
+void exc_cso(void);
+void exc_ts(void);
+void exc_np(void);
+void exc_ss(void);
+void exc_gp(void);
+void exc_pf(void);
+void exc_mf(void);
+void exc_ac(void);
+void exc_mc(void);
+void exc_xm(void);
+void exc_ve(void);
+
 #endif
+
+#endif  // ARCH_FAULT_H

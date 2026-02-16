@@ -68,6 +68,234 @@ static uintptr_t alloc_page_table_page(void) {
     return page;
 }
 
+static inline enum walk_state walk_start(uintptr_t pgd, bool create, uintptr_t out_blocks[3]) {
+    // 初始化out_blocks
+    if (create && out_blocks) {
+        out_blocks[0] = 0;
+        out_blocks[1] = 0;
+        out_blocks[2] = 0;
+    }
+    
+    if (pgd == 0) {
+        return WALK_PANIC;
+    }
+    
+    return WALK_PML4;
+}
+
+static inline enum walk_state walk_pml4(uintptr_t *current_phys, pte_t **pte_ptr, uintptr_t addr, bool create, vm_prot_t prot, uintptr_t out_blocks[3]) {
+    // 物理地址转虚拟地址
+    pte_t *current_virt = (pte_t*)PHYS_TO_LINEAR(*current_phys);
+    
+    // 获取PML4E
+    *pte_ptr = &current_virt[PML4_INDEX(addr)];
+    
+    // 原子读取PTE值
+    pte_t pml4e_value = __atomic_load_n(*pte_ptr, __ATOMIC_ACQUIRE);
+    
+    // 检查Present位
+    if (!PTE_IS_VALID(pml4e_value)) {
+        if (!create) {
+            return WALK_ERROR;
+        }
+        
+        // 分配PDPT页
+        uintptr_t pdpt_page = alloc_page_table_page();
+        if (pdpt_page == 0) {
+            return WALK_ERROR;
+        }
+        
+        // 设置PML4E
+        uintptr_t pdpt_phys = LINEAR_TO_PHYS(pdpt_page);
+        mmu_set_pte(*pte_ptr, pdpt_phys >> 12, false, prot);
+        
+        // 记录到out_blocks
+        if (out_blocks) {
+            out_blocks[0] = pdpt_page;
+        }
+        
+        // 更新当前物理地址为PDPT页的物理地址
+        *current_phys = pdpt_phys;
+    } else {
+        // 提取下一级物理地址
+        *current_phys = PTE_PFN(pml4e_value) << 12;
+        
+        // 如果create=true，增加引用计数并记录
+        if (create) {
+            uintptr_t pdpt_vaddr = (uintptr_t)PHYS_TO_LINEAR(*current_phys);
+            kheap_add_ref_count((void*)pdpt_vaddr);
+            
+            if (out_blocks) {
+                out_blocks[0] = pdpt_vaddr;
+            }
+        }
+    }
+    
+    return WALK_PDPT;
+}
+
+static inline enum walk_state walk_pdpt(uintptr_t *current_phys, pte_t **pte_ptr, uintptr_t addr, bool create, vm_prot_t prot, uintptr_t out_blocks[3]) {
+    // 物理地址转虚拟地址
+    pte_t *current_virt = (pte_t*)PHYS_TO_LINEAR(*current_phys);
+    
+    // 获取PDPTE
+    *pte_ptr = &current_virt[PDPT_INDEX(addr)];
+    
+    // 原子读取PTE值
+    pte_t pdpte_value = __atomic_load_n(*pte_ptr, __ATOMIC_ACQUIRE);
+    
+    // 检查Present位
+    if (!PTE_IS_VALID(pdpte_value)) {
+        if (!create) {
+            return WALK_ERROR;
+        }
+        
+        // 分配PD页
+        uintptr_t pd_page = alloc_page_table_page();
+        if (pd_page == 0) {
+            return WALK_ERROR;
+        }
+        
+        // 设置PDPTE
+        uintptr_t pd_phys = LINEAR_TO_PHYS(pd_page);
+        mmu_set_pte(*pte_ptr, pd_phys >> 12, false, prot);
+        
+        // 记录到out_blocks
+        if (out_blocks) {
+            out_blocks[1] = pd_page;
+        }
+        
+        // 更新当前物理地址为PD页的物理地址
+        *current_phys = pd_phys;
+    } else {
+        // 检查是否为大页（1GB）
+        if (PTE_IS_HUGE(pdpte_value)) {
+            /*
+             * 遇到大页
+             * 直接返回这个大页表项
+             * 让上层处理
+             * 不加入ptb
+             * 因为ptb用于快速释放页表页
+             * 而且因为没有东西指向他就没加引用计数
+             * 如果在没有引用计数增加的时候加入ptb会导致重复释放
+             */
+            return WALK_DONE;
+        }
+        
+        // 提取下一级物理地址
+        *current_phys = PTE_PFN(pdpte_value) << 12;
+        
+        // 如果create=true，增加引用计数并记录
+        if (create) {
+            uintptr_t pd_vaddr = (uintptr_t)PHYS_TO_LINEAR(*current_phys);
+            kheap_add_ref_count((void*)pd_vaddr);
+            
+            if (out_blocks) {
+                out_blocks[1] = pd_vaddr;
+            }
+        }
+    }
+    
+    return WALK_PD;
+}
+
+static inline enum walk_state walk_pd(uintptr_t *current_phys, pte_t **pte_ptr, uintptr_t addr, bool create, vm_prot_t prot, uintptr_t out_blocks[3]) {
+    // 物理地址转虚拟地址
+    pte_t *current_virt = (pte_t*)PHYS_TO_LINEAR(*current_phys);
+    
+    // 获取PDE
+    *pte_ptr = &current_virt[PD_INDEX(addr)];
+    
+    // 原子读取PTE值
+    pte_t pde_value = __atomic_load_n(*pte_ptr, __ATOMIC_ACQUIRE);
+    
+    // 检查Present位
+    if (!PTE_IS_VALID(pde_value)) {
+        if (!create) {
+            return WALK_ERROR;
+        }
+        
+        // 分配PT页
+        uintptr_t pt_page = alloc_page_table_page();
+        if (pt_page == 0) {
+            return WALK_ERROR;
+        }
+        
+        // 设置PDE
+        uintptr_t pt_phys = LINEAR_TO_PHYS(pt_page);
+        mmu_set_pte(*pte_ptr, pt_phys >> 12, false, prot);
+        
+        // 记录到out_blocks
+        if (out_blocks) {
+            out_blocks[2] = pt_page;
+        }
+        
+        // 更新当前物理地址为PT页的物理地址
+        *current_phys = pt_phys;
+    } else {
+        // 检查是否为大页（2MB）
+        if (PTE_IS_HUGE(pde_value)) {
+            // 遇到大页，直接返回这个大页表项，让上层处理，不加ptb，原因同上
+            return WALK_DONE;
+        }
+        
+        // 提取下一级物理地址
+        *current_phys = PTE_PFN(pde_value) << 12;
+        
+        // 如果create=true，增加引用计数并记录
+        if (create) {
+            uintptr_t pt_vaddr = (uintptr_t)PHYS_TO_LINEAR(*current_phys);
+            kheap_add_ref_count((void*)pt_vaddr);
+            
+            if (out_blocks) {
+                out_blocks[2] = pt_vaddr;
+            }
+        }
+    }
+    
+    return WALK_PT;
+}
+
+static inline enum walk_state walk_pt(uintptr_t *current_phys, pte_t **pte_ptr, uintptr_t addr) {
+    // 物理地址转虚拟地址
+    pte_t *current_virt = (pte_t*)PHYS_TO_LINEAR(*current_phys);
+    
+    // 获取PTE
+    *pte_ptr = &current_virt[PT_INDEX(addr)];
+    
+    return WALK_DONE;
+}
+
+static inline enum walk_state walk_done(void) {
+    return WALK_BREAK;
+}
+
+static inline enum walk_state walk_error(bool create, uintptr_t out_blocks[3], pte_t **pte_ptr) {
+    // 失败，清理已分配的页表页
+    if (create && out_blocks) {
+        // 这里按照分配的逆序释放
+        if (out_blocks[2] != 0) {
+            kheap_free((void*)out_blocks[2]);
+        }
+        if (out_blocks[1] != 0) {
+            kheap_free((void*)out_blocks[1]);
+        }
+        if (out_blocks[0] != 0) {
+            kheap_free((void*)out_blocks[0]);
+        }
+    }
+    
+    *pte_ptr = NULL;
+    return WALK_BREAK;
+}
+
+static inline enum walk_state walk_panic(pte_t **pte_ptr) {
+    // 严重错误，需要panic
+    panic("[MMU] ERROR: page walk encountered fatal error (possibly huge page conflict)");
+    *pte_ptr = NULL;
+    return WALK_BREAK;
+}
+
 /*
  * 遍历页表
  * 找到虚拟地址对应的页表的虚拟地址 
@@ -82,7 +310,7 @@ static uintptr_t alloc_page_table_page(void) {
  * @return 成功：PTE的虚拟地址
  */
 pte_t* mmu_walk(uintptr_t pgd, uintptr_t addr, bool create, vm_prot_t prot, uintptr_t out_blocks[3]) {
-    uint8_t walk = WALK_START;
+    enum walk_state walk = WALK_START;
     pte_t *pte_ptr = NULL;
     
     uint64_t current_phys = pgd;  // 当前页表的物理地址
@@ -130,241 +358,35 @@ pte_t* mmu_walk(uintptr_t pgd, uintptr_t addr, bool create, vm_prot_t prot, uint
     while (walk != WALK_BREAK) {
         switch (walk) {
         case WALK_START:
-            // 初始化out_blocks
-            if (create && out_blocks) {
-                out_blocks[0] = 0;
-                out_blocks[1] = 0;
-                out_blocks[2] = 0;
-            }
-            
-            if (pgd == 0) {
-                walk = WALK_PANIC;
-                break;
-            }
-            
-            walk = WALK_PML4;
+            walk = walk_start(pgd, create, out_blocks);
             break;
             
         case WALK_PML4:
-            // 物理地址转虚拟地址
-            current_virt = (pte_t*)PHYS_TO_LINEAR(current_phys);
-            
-            // 获取PML4E
-            pte_ptr = &current_virt[PML4_INDEX(addr)];
-            
-            // 原子读取PTE值
-            pte_t pml4e_value = __atomic_load_n(pte_ptr, __ATOMIC_ACQUIRE);
-            
-            // 检查Present位
-            if (!PTE_IS_VALID(pml4e_value)) {
-                if (!create) {
-                    walk = WALK_ERROR;
-                    break;
-                }
-                
-                // 分配PDPT页
-                uintptr_t pdpt_page = alloc_page_table_page();
-                if (pdpt_page == 0) {
-                    walk = WALK_ERROR;
-                    break;
-                }
-                
-                // 设置PML4E
-                uintptr_t pdpt_phys = LINEAR_TO_PHYS(pdpt_page);
-                mmu_set_pte(pte_ptr, pdpt_phys >> 12, false, intermediate_prot);
-                
-                // 记录到out_blocks
-                if (out_blocks) {
-                    out_blocks[0] = pdpt_page;
-                }
-                
-                // 更新当前物理地址为PDPT页的物理地址
-                current_phys = pdpt_phys;
-            } else {
-                // 提取下一级物理地址
-                current_phys = PTE_PFN(pml4e_value) << 12;
-                
-                // 如果create=true，增加引用计数并记录
-                if (create) {
-                    uintptr_t pdpt_vaddr = (uintptr_t)PHYS_TO_LINEAR(current_phys);
-                    kheap_add_ref_count((void*)pdpt_vaddr);
-                    
-                    if (out_blocks) {
-                        out_blocks[0] = pdpt_vaddr;
-                    }
-                }
-            }
-            
-            walk = WALK_PDPT;
+            walk = walk_pml4(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
             break;
             
         case WALK_PDPT:
-            // 物理地址转虚拟地址
-            current_virt = (pte_t*)PHYS_TO_LINEAR(current_phys);
-            
-            // 获取PDPTE
-            pte_ptr = &current_virt[PDPT_INDEX(addr)];
-            
-            // 原子读取PTE值
-            pte_t pdpte_value = __atomic_load_n(pte_ptr, __ATOMIC_ACQUIRE);
-            
-            // 检查Present位
-            if (!PTE_IS_VALID(pdpte_value)) {
-                if (!create) {
-                    walk = WALK_ERROR;
-                    break;
-                }
-                
-                // 分配PD页
-                uintptr_t pd_page = alloc_page_table_page();
-                if (pd_page == 0) {
-                    walk = WALK_ERROR;
-                    break;
-                }
-                
-                // 设置PDPTE
-                uintptr_t pd_phys = LINEAR_TO_PHYS(pd_page);
-                mmu_set_pte(pte_ptr, pd_phys >> 12, false, intermediate_prot);
-                
-                // 记录到out_blocks
-                if (out_blocks) {
-                    out_blocks[1] = pd_page;
-                }
-                
-                // 更新当前物理地址为PD页的物理地址
-                current_phys = pd_phys;
-            } else {
-                // 检查是否为大页（1GB）
-                if (PTE_IS_HUGE(pdpte_value)) {
-                    /*
-                     * 遇到大页
-                     * 直接返回这个大页表项
-                     * 让上层处理
-                     * 不加入ptb
-                     * 因为ptb用于快速释放页表页
-                     * 而且因为没有东西指向他就没加引用计数
-                     * 如果在没有引用计数增加的时候加入ptb会导致重复释放
-                     */
-                    walk = WALK_DONE;
-                    break;
-                }
-                
-                // 提取下一级物理地址
-                current_phys = PTE_PFN(pdpte_value) << 12;
-                
-                // 如果create=true，增加引用计数并记录
-                if (create) {
-                    uintptr_t pd_vaddr = (uintptr_t)PHYS_TO_LINEAR(current_phys);
-                    kheap_add_ref_count((void*)pd_vaddr);
-                    
-                    if (out_blocks) {
-                        out_blocks[1] = pd_vaddr;
-                    }
-                }
-            }
-            
-            walk = WALK_PD;
+            walk = walk_pdpt(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
             break;
             
         case WALK_PD:
-            // 物理地址转虚拟地址
-            current_virt = (pte_t*)PHYS_TO_LINEAR(current_phys);
-            
-            // 获取PDE
-            pte_ptr = &current_virt[PD_INDEX(addr)];
-            
-            // 原子读取PTE值
-            pte_t pde_value = __atomic_load_n(pte_ptr, __ATOMIC_ACQUIRE);
-            
-            // 检查Present位
-            if (!PTE_IS_VALID(pde_value)) {
-                if (!create) {
-                    walk = WALK_ERROR;
-                    break;
-                }
-                
-                // 分配PT页
-                uintptr_t pt_page = alloc_page_table_page();
-                if (pt_page == 0) {
-                    walk = WALK_ERROR;
-                    break;
-                }
-                
-                // 设置PDE
-                uintptr_t pt_phys = LINEAR_TO_PHYS(pt_page);
-                mmu_set_pte(pte_ptr, pt_phys >> 12, false, intermediate_prot);
-                
-                // 记录到out_blocks
-                if (out_blocks) {
-                    out_blocks[2] = pt_page;
-                }
-                
-                // 更新当前物理地址为PT页的物理地址
-                current_phys = pt_phys;
-            } else {
-                // 检查是否为大页（2MB）
-                if (PTE_IS_HUGE(pde_value)) {
-                    // 遇到大页，直接返回这个大页表项，让上层处理，不加ptb，原因同上
-                    walk = WALK_DONE;
-                    break;
-                }
-                
-                // 提取下一级物理地址
-                current_phys = PTE_PFN(pde_value) << 12;
-                
-                // 如果create=true，增加引用计数并记录
-                if (create) {
-                    uintptr_t pt_vaddr = (uintptr_t)PHYS_TO_LINEAR(current_phys);
-                    kheap_add_ref_count((void*)pt_vaddr);
-                    
-                    if (out_blocks) {
-                        out_blocks[2] = pt_vaddr;
-                    }
-                }
-            }
-            
-            walk = WALK_PT;
+            walk = walk_pd(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
             break;
             
         case WALK_PT:
-            // 物理地址转虚拟地址
-            current_virt = (pte_t*)PHYS_TO_LINEAR(current_phys);
-            
-            // 获取PTE
-            pte_ptr = &current_virt[PT_INDEX(addr)];
-            
-            walk = WALK_DONE;
+            walk = walk_pt(&current_phys, &pte_ptr, addr);
             break;
             
         case WALK_DONE:
-            // 成功完成，跳出循环
-            walk = WALK_BREAK;
+            walk = walk_done();
             break;
             
         case WALK_ERROR:
-            // 失败，清理已分配的页表页
-            if (create && out_blocks) {
-                // 这里按照分配的逆序释放
-                if (out_blocks[2] != 0) {
-                    kheap_free((void*)out_blocks[2]);
-                }
-                if (out_blocks[1] != 0) {
-                    kheap_free((void*)out_blocks[1]);
-                }
-                if (out_blocks[0] != 0) {
-                    kheap_free((void*)out_blocks[0]);
-                }
-            }
-            
-            pte_ptr = NULL;
-            walk = WALK_BREAK;
+            walk = walk_error(create, out_blocks, &pte_ptr);
             break;
             
         case WALK_PANIC:
-            // 严重错误，需要panic
-            panic("[MMU] ERROR: page walk encountered fatal error (possibly huge page conflict)");
-            walk = WALK_BREAK;
-            pte_ptr = NULL;
+            walk = walk_panic(&pte_ptr);
             break;
             
         default:

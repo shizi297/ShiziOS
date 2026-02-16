@@ -7,7 +7,7 @@
 
 .altmacro
 
-.extern irq_entry
+.extern irq_entry_c
 
 /*
  * 为每个中断向量生成独立入口点
@@ -38,7 +38,7 @@ irq_entry_\vector:
         pushq $0
     .endif
     pushq $\vector
-    jmp irq_entry
+    jmp common_interrupt
 .endm
 
 /* 地址表条目 */
@@ -87,3 +87,58 @@ irq_entry_table:
     .set vector, vector + 1
 .endr
 .size irq_entry_table, . - irq_entry_table
+
+/* 公共中断入口 */
+.section .text
+.globl common_interrupt
+.type common_interrupt, @function
+.align 8
+common_interrupt:
+    pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %rbp
+    pushq %rbx
+    pushq %r11
+    pushq %r10
+    pushq %r9
+    pushq %r8
+    pushq %rax
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+
+    testb $3, 144(%rsp)
+    jz 1f
+    swapgs
+1:
+    movq %rsp, %r12
+    andq $-16, %rsp
+    movq %r12, %rdi
+    call irq_entry
+    movq %r12, %rsp
+
+    testb $3, 144(%rsp)
+    jz 2f
+    swapgs
+2:
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rax
+    popq %r8
+    popq %r9
+    popq %r10
+    popq %r11
+    popq %rbx
+    popq %rbp
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
+
+    addq $16, %rsp
+    iretq
