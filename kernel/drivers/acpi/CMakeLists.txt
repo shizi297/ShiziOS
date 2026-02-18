@@ -1,5 +1,5 @@
 # kernel/drivers/acpi ACPI驱动模块
 
 file(GLOB_RECURSE ACPI_SOURCES "*.c")
-list(APPEND DRIVERS_SOURCES ${ACPI_SOURCES})
-set(DRIVERS_SOURCES "${DRIVERS_SOURCES}" PARENT_SCOPE)
+add_library(acpi_objects OBJECT ${ACPI_SOURCES})
+target_sources(kernel_drivers PRIVATE $<TARGET_OBJECTS:acpi_objects>)

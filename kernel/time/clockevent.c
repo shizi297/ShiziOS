@@ -4,7 +4,7 @@
  */
 
 #include "clockevent.h"
-#include "timecycle.h"
+#include <timecycle.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <shizi/string.h>

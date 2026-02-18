@@ -54,4 +54,44 @@ static inline uint64_t timecycle_ns_to_cycles(
     return (uint64_t)(((__uint128_t)ns * mult_inv) >> shift_inv);
 }
 
+/**
+ * 将微秒时间转换为纳秒时间
+ * 
+ * @param usec 微秒时间
+ * @return 纳秒时间
+ */
+static inline uint64_t timecycle_usec_to_ns(uint64_t usec) {
+    return usec * 1000;
+}
+
+/**
+ * 将毫秒时间转换为纳秒时间
+ * 
+ * @param msec 毫秒时间
+ * @return 纳秒时间
+ */
+static inline uint64_t timecycle_msec_to_ns(uint64_t msec) {
+    return msec * 1000000;
+}
+
+/**
+ * 将纳秒时间转换为微秒时间
+ * 
+ * @param ns 纳秒时间
+ * @return 微秒时间
+ */
+static inline uint64_t timecycle_ns_to_usec(uint64_t ns) {
+    return ns / 1000;
+}
+
+/**
+ * 将纳秒时间转换为毫秒时间
+ * 
+ * @param ns 纳秒时间
+ * @return 毫秒时间
+ */
+static inline uint64_t timecycle_ns_to_msec(uint64_t ns) {
+    return ns / 1000000;
+}
+
 #endif // TIMECYCLE_H

@@ -7,7 +7,33 @@
 #define ARCH_FAULT_H
 
 #ifndef __ASSEMBLER__
+
 #include <stdint.h>
+
+struct pt_regs;
+
+// 异常处理函数
+void exc_de(struct pt_regs *regs);
+void exc_db(struct pt_regs *regs);
+void exc_nmi(struct pt_regs *regs);
+void exc_bp(struct pt_regs *regs);
+void exc_of(struct pt_regs *regs);
+void exc_br(struct pt_regs *regs);
+void exc_ud(struct pt_regs *regs);
+void exc_nm(struct pt_regs *regs);
+void exc_df(struct pt_regs *regs);
+void exc_cso(struct pt_regs *regs);
+void exc_ts(struct pt_regs *regs);
+void exc_np(struct pt_regs *regs);
+void exc_ss(struct pt_regs *regs);
+void exc_gp(struct pt_regs *regs);
+void exc_pf(struct pt_regs *regs);
+void exc_mf(struct pt_regs *regs);
+void exc_ac(struct pt_regs *regs);
+void exc_mc(struct pt_regs *regs);
+void exc_xm(struct pt_regs *regs);
+void exc_ve(struct pt_regs *regs);
+
 #endif
 
 // 异常向量号
@@ -69,31 +95,5 @@
 // 异常DPL位图 (0-31): 1=用户态(DPL=3), 0=内核态(DPL=0) 
 #define FAULT_DPL_BITMAP \
     (1ULL << EXC_BP)
-
-#ifndef __ASSEMBLER__
-
-// 异常处理函数
-void exc_de(void);
-void exc_db(void);
-void exc_nmi(void);
-void exc_bp(void);
-void exc_of(void);
-void exc_br(void);
-void exc_ud(void);
-void exc_nm(void);
-void exc_df(void);
-void exc_cso(void);
-void exc_ts(void);
-void exc_np(void);
-void exc_ss(void);
-void exc_gp(void);
-void exc_pf(void);
-void exc_mf(void);
-void exc_ac(void);
-void exc_mc(void);
-void exc_xm(void);
-void exc_ve(void);
-
-#endif
 
 #endif  // ARCH_FAULT_H

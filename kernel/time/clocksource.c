@@ -3,8 +3,8 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#include "timecycle.h"
 #include "clocksource.h"
+#include <timecycle.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <shizi/string.h>

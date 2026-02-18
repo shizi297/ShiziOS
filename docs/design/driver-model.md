@@ -1,119 +1,134 @@
-# 驱动模型设计
+Driver Model Design
 
-本文档描述了我们操作系统的驱动模型设计。该模型旨在实现内核与驱动的解耦，使驱动在内核版本更新（包括接口重构）时能够保持二进制兼容，同时保持较高的运行效率。
+This document describes the driver model design for our operating system. This model aims to decouple the kernel from drivers, enabling drivers to maintain binary compatibility across kernel version updates (including interface refactoring) while retaining high runtime efficiency.
 
-## 1. 设计概述
+1. Design Overview
 
-我们的驱动模型基于以下核心思想：
+Our driver model is based on the following core ideas:
 
-- 内核维护一个**函数表**（function table），表中包含所有可供驱动调用的内核函数指针。
-- 内核在固定的虚拟地址提供一个函数指针，驱动通过该指针获取指定版本的函数表副本。
-- 驱动在初始化时将函数表副本复制到本地存储，后续所有内核调用均通过本地表间接进行，从而与内核的具体实现地址解耦。
-- 通过版本号机制支持多版本函数表共存，使得旧版驱动无需重新编译即可运行在新版内核上。
+· The kernel maintains a function table that contains pointers to all kernel functions available for drivers to call.
+· The kernel provides a function pointer at a fixed virtual address, through which drivers can obtain a copy of the function table for a specified version.
+· During initialization, the driver copies the function table into local storage; all subsequent kernel calls are made indirectly through this local table, thereby decoupling from the kernel's concrete implementation addresses.
+· A versioning mechanism supports coexistence of multiple function table versions, allowing older drivers to run on newer kernels without recompilation.
 
-## 2. 函数表的结构与版本管理
+2. Function Table Structure and Version Management
 
-### 2.1 函数表结构
-每个版本的函数表都是一个结构体，其布局由公共头文件定义。所有版本的函数表结构体均以 `size` 字段开头，表示该表中函数指针的数量。后续字段为具体的函数指针，顺序固定。
+2.1 Function Table Structure
 
-例如：
+The function table for each version is a struct whose layout is defined in a public header. All versioned function table structs begin with a size field, indicating the number of function pointers in the table. Subsequent fields are the specific function pointers in a fixed order.
+
+For example:
+
 ```c
 struct ftable_v1 {
-    uint64_t size;          // 函数数量
+    uint64_t size;          // number of functions
     int (*printk)(const char *fmt, ...);
     void *(*kmalloc)(size_t size);
-    // ... 其他函数指针
+    // ... other function pointers
 };
 ```
 
-当内核新增功能且不修改原有接口时，函数表版本号不变，仅在结构体末尾追加新的函数指针。旧驱动因只复制自己版本对应的表大小（通过 `size` 字段可知），因此不会感知到新增的函数，依然可以正常运行。
+When the kernel adds new functionality without modifying existing interfaces, the function table version number remains unchanged, and new function pointers are simply appended at the end of the struct. Old drivers, which only copy the table size corresponding to their version (as known from the size field), will not perceive the newly added functions and can still operate normally.
 
-### 2.2 内核维护的多版本表
-内核在初始化阶段为每个支持的版本构建一个静态的函数表结构体（如 `ftable_v1`、`ftable_v2` 等）。这些结构体存放在内核数据段，内容已填充好对应的函数地址。
+2.2 Kernel Maintains Multiple Version Tables
 
-内核维护一个全局指针数组 `static const void *ftables[MAX_VERSION]`，数组下标即版本号。每个非空元素指向对应版本的静态函数表。例如：
+During initialization, the kernel constructs a static function table struct for each supported version (e.g., ftable_v1, ftable_v2, etc.). These structs reside in the kernel data section and are pre-filled with the corresponding function addresses.
+
+The kernel maintains a global pointer array static const void *ftables[MAX_VERSION], where the array index is the version number. Each non‑null element points to the static function table of that version. For example:
+
 ```c
 static const struct ftable_v1 ftable_v1 = { ... };
 static const struct ftable_v2 ftable_v2 = { ... };
 static const void *ftables[] = {
     [1] = &ftable_v1,
     [2] = &ftable_v2,
-    // ... 更高版本
+    // ... higher versions
 };
 ```
 
-版本号的分配规则：
-- 主版本号递增表示不兼容的接口变更（如删除或修改旧函数）。旧版本的表仍被保留，以供旧驱动使用。
-- 仅增加新函数时不改变主版本号。
+Version numbering rules:
 
-## 3. 驱动获取函数表的机制
+· Incrementing the major version indicates an incompatible interface change (e.g., removal or modification of an old function). The old version's table is retained for use by older drivers.
+· Adding new functions without breaking existing ones does not change the major version.
 
-### 3.1 固定地址的获取函数
-内核在固定的虚拟地址（在kernel/arch/${ARCH}/include/mm_addr.h中定义）放置一个函数指针，该指针指向内核函数 `void *get_ftable(int version)`。驱动在运行时可直接通过该地址调用 `get_ftable`。
+3. Mechanism for Drivers to Obtain the Function Table
 
-函数原型：
+3.1 Function Table Acquisition at a Fixed Address
+
+The kernel places a function pointer at a fixed virtual address (defined in kernel/arch/${ARCH}/include/mm_addr.h), which points to the kernel function void *get_ftable(int version). At runtime, drivers can call get_ftable directly through this address.
+
+Function prototype:
+
 ```c
 void *get_ftable(int version);
 ```
 
-行为描述：
-- 调用时传入驱动期望的版本号（即驱动编译时对应的主版本号）。
-- 内核检查 `version` 是否在有效范围内且 `ftables[version]` 非空。若无效，返回 `NULL`。
-- 若版本有效，内核将对应版本的静态函数表内容**复制到当前内核栈**上（创建一个栈上临时副本），并返回该副本的指针。
+Behavior description:
 
-注意：返回的指针指向栈上的数据，该数据在 `get_ftable` 返回后即失效。因此驱动必须**立即**将整个表内容复制到自己的本地存储中。
+· The driver passes the version number it expects (i.e., the major version it was compiled against).
+· The kernel checks whether version is within the valid range and whether ftables[version] is non‑null. If invalid, it returns NULL.
+· If the version is valid, the kernel copies the content of the static function table for that version onto the current kernel stack (creating a temporary stack‑local copy) and returns a pointer to this copy.
 
-### 3.2 驱动保存函数表副本
-驱动在初始化阶段（如入口函数中）执行以下操作：
+Note: The returned pointer points to data on the stack, which becomes invalid as soon as get_ftable returns. Therefore, the driver must immediately copy the entire table into its own local storage.
+
+3.2 Driver Saves a Copy of the Function Table
+
+During initialization (e.g., in its entry function), the driver performs the following:
+
 ```c
-static struct ftable_v1 local_ft;   // 本地静态存储，与驱动需要的版本匹配
+static struct ftable_v1 local_ft;   // local static storage matching the required version
 
 void driver_init(void)
 {
-    struct ftable_v1 *p = (struct ftable_v1 *)get_ftable(1); // 假设使用版本1
+    struct ftable_v1 *p = (struct ftable_v1 *)get_ftable(1); // assuming version 1
     if (!p) {
-        // 版本不支持，处理错误
+        // version not supported, handle error
         return;
     }
-    // 将栈上的表复制到本地
+    // copy the table from the stack to local storage
     memcpy(&local_ft, p, sizeof(local_ft));
-    // 现在 local_ft 包含了所有可用的函数指针
+    // now local_ft contains all usable function pointers
 
-    // 后续通过 local_ft 调用内核函数
+    // subsequent kernel calls go through local_ft
     local_ft.printk("Driver initialized\n");
 }
 ```
 
-驱动必须确保本地存储的生命周期与驱动一致（例如使用模块内的全局变量或静态变量），以便在后续运行时始终可用。
+The driver must ensure that the lifetime of the local storage matches that of the driver (e.g., using global or static variables within the module) so that it remains available for all subsequent runtime operations.
 
-## 4. 驱动加载与初始化
+4. Driver Loading and Initialization
 
-### 4.1 加载流程
-驱动以内核模块的形式存在，内嵌数字签名。加载通过专用系统调用（例如 `sys_load_driver`）完成。
+4.1 Loading Process
 
-加载过程：
-1. 内核验证驱动的数字签名。签名算法计划采用 ed25519，公钥预先嵌入内核镜像中。
-2. 验证通过后，内核将驱动代码映射到内核地址空间，并设置好页表权限（可执行、可读、可写，取决于具体需求）。
-3. 驱动获得在内核态运行的能力，使用内核栈，与内核共享所有内存地址。
+Drivers exist as kernel modules and contain an embedded digital signature. Loading is performed via a dedicated system call (e.g., sys_load_driver).
 
-### 4.2 驱动初始化步骤
-驱动入口函数被调用后，依次执行：
-1. 调用 `get_ftable` 获取所需版本的函数表副本，并复制到本地存储（如前所述）。
-2. 通过本地表中的注册接口（如 `register_driver`）向内核注册自己。注册时需提供必要信息，例如驱动类型、支持设备 ID、回调函数指针等。这些回调函数也通过本地表注册，但本身由驱动实现，内核通过驱动注册时传入的函数指针来调用驱动。
-3. 初始化完成，驱动进入运行状态。
+Loading steps:
 
-注册接口本身是函数表中的一个函数指针，因此驱动通过 `local_ft.register_driver(...)` 调用。
+1. The kernel verifies the driver's digital signature. The signature algorithm is planned to be ed25519, with the public key embedded in the kernel image.
+2. Upon successful verification, the kernel maps the driver code into the kernel address space and sets appropriate page table permissions (executable, readable, writable, depending on requirements).
+3. The driver gains the ability to run in kernel mode, using the kernel stack and sharing all memory addresses with the kernel.
 
-## 5. 运行时调用内核函数
+4.2 Driver Initialization Steps
 
-在驱动的正常工作中，所有需要调用内核功能的地方均通过本地保存的函数表进行。例如：
+After the driver entry function is invoked, it performs the following:
+
+1. Calls get_ftable to obtain a copy of the required version's function table and copies it to local storage (as described above).
+2. Registers itself with the kernel via a registration interface (e.g., register_driver) provided in the local table. During registration, it supplies necessary information such as driver type, supported device IDs, callback function pointers, etc. These callback functions are implemented by the driver and are passed to the kernel through the registration call; the kernel will invoke them using the pointers provided.
+3. Initialization completes, and the driver enters the operational state.
+
+Note that the registration interface itself is a function pointer in the function table, so the driver calls it as local_ft.register_driver(...).
+
+5. Calling Kernel Functions at Runtime
+
+During normal operation, any kernel functionality needed by the driver is invoked through the locally saved function table. For example:
+
 ```c
 local_ft.kmalloc(size, flags);
 local_ft.printk("Some message\n");
 ```
 
-由于本地表是驱动的私有副本，这些调用不依赖内核中函数表的实际位置，也不涉及任何重定位操作。每次调用仅多一次从本地表读取函数指针的内存访问，相比直接调用开销极小。
+Because the local table is a private copy for the driver, these calls do not depend on the actual location of the function table in the kernel nor involve any relocation operations. Each call incurs only one extra memory access (to fetch the function pointer from the local table), resulting in minimal overhead compared to direct calls.
 
-## 6. 启动时驱动的加载
+6. Driver Loading at Boot Time
 
-系统启动过程中，内核本身不负责从文件系统查找和加载驱动。该职责由用户态初始化程序（如 init 进程）承担。用户态程序可以读取配置文件、枚举设备，然后通过加载驱动的系统调用将必要的驱动模块加载到内核中。
+During system startup, the kernel itself does not search for or load drivers from the file system. This responsibility is delegated to a user‑mode initialization program (e.g., the init process). The user‑mode program can read configuration files, enumerate devices, and then load the necessary driver modules into the kernel via the driver‑loading system call. This design decouples driver management from the core kernel, keeping the kernel simple and focused.

@@ -140,7 +140,7 @@ struct tss {
     uint64_t rsp1;   // 保留，设为 0
     uint64_t rsp2;   // 保留，设为 0
     uint64_t reserved1;
-    // 中断栈表指针：为关键异常提供独立栈
+    // 中断栈表指针
     uint64_t ist1;   // 通常用于双重错误 (#DF)
     uint64_t ist2;   // 通常用于 NMI
     uint64_t ist3;
@@ -459,6 +459,50 @@ typedef enum {
 static inline void processor_send_ipi_all(uint32_t vector, apic_scope scope) {
     uint64_t icr_val = ((uint64_t)scope << 18) | (vector & 0xFF);
     msr_write(X2APIC_MSR_ICR, icr_val);
+}
+
+/**
+ * 获取当前cpu标志值
+ * 
+ * @return 当前cpu标志值
+ */
+static inline uint64_t get_cpu_flags(void) {
+    uint64_t flags;
+    __asm__ volatile(
+        "pushfq\n\t"        
+        "pop %0"            
+        : "=r" (flags)     
+        :
+        : "memory"          
+    );
+    return flags;
+}
+
+#include <stdint.h>
+
+/**
+ * 设置CPU标志寄存器
+ * 
+ * @param flags 要设置的标志值
+ */
+static inline void write_cpu_flags(uint64_t flags) {
+    __asm__ volatile(
+        "push %0\n\t"       
+        "popfq"            
+        :
+        : "r" (flags)       
+        : "memory", "cc"    
+    );
+}
+
+// 禁止中断
+static inline void irq_off(void) {
+    __asm__ volatile("cli" ::: "memory");
+}
+
+// 开启中断
+static inline void irq_on(void) {
+    __asm__ volatile("sti" ::: "memory");
 }
 
 // 获取gdt模版的虚拟地址

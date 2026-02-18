@@ -3,7 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#include "timecycle.h"
+#include <timecycle.h>
 #include <serial.h>
 
 #define NSEC_PER_SEC 1000000000ULL

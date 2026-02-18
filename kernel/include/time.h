@@ -98,3 +98,17 @@ static inline void time_init(void) {
     clockevent_init();
     TIME_PRINT("time init success");
 }
+
+/**
+ * 忙等待
+ * 
+ * @param usec 等待的微秒数
+ */
+void time_stall(uint8_t usec);
+
+/**
+ * 睡眠
+ * 
+ * @param msec 睡眠的毫秒数
+ */
+void time_sleep(uint64_t msec);
