@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297> */
 
-#ifndef SHIZI_STRING_H
-#define SHIZI_STRING_H
+#pragma once
 
+#include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>   
+
 /**
  * 判断两个字符串是否相等
  *
@@ -23,4 +25,20 @@ static inline bool strcmp(const char *a, const char *b) {
     return (*a == *b);
 }
 
-#endif // SHIZI_STRING_H
+/**
+ * 比较两块内存是否相等
+ *
+ * @param a 内存块1
+ * @param b 内存块2
+ * @param n 要比较的字节数
+ *
+ * @return 相等：true
+ * @return 不相等：false
+ */
+static inline bool memcmp(const void *a, const void *b, size_t n) {
+    const uint8_t *pa = (uint8_t *)a, *pb = (uint8_t *)b;
+    for (size_t i = 0; i < n; i++) {
+        if (pa[i] != pb[i]) return false;
+    }
+    return true;
+}

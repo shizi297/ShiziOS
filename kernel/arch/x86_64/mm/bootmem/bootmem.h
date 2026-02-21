@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef BOOTMEM_H
-#define BOOTMEM_H
+#pragma once
 
 #include <stdint.h>
 
@@ -39,5 +38,3 @@ typedef struct {
     uint64_t start_pfn[TEMP_RECORD_MAX];
     uint64_t count;
 } temp_linear_map_t;
-
-#endif // BOOTMEM_H

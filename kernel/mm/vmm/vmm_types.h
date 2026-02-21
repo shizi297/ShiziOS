@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef VMM_TYPES_H
-#define VMM_TYPES_H
+#pragma once
 
 #include <stdint.h>
 
@@ -42,5 +41,3 @@ typedef enum {
 
 // 页表条目类型
 typedef uint64_t pte_t;
-
-#endif // VMM_TYPES_H

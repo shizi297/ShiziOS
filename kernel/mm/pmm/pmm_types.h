@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef PMM_TYPES_H
-#define PMM_TYPES_H
+#pragma once
 
 #define CACHE_LINE_SIZE 64
 
@@ -58,5 +57,3 @@ typedef struct {
 
     mem_block_t blocks[];   
 } mem_block_array_t;
-
-#endif // PMM_TYPES_H 

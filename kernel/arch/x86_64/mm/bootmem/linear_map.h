@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
  
-#ifndef LINEAR_MAP_H
-#define LINEAR_MAP_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -16,5 +15,3 @@
 
 void linear_map_setup(void);
 temp_linear_map_t* linear_map_get_temp(void);
-
-#endif /* LINEAR_MAP_H */

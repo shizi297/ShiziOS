@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#ifndef CLOCKEVENT_H
-#define CLOCKEVENT_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -30,5 +29,3 @@ typedef struct clockevent_struct {
     
     void (*event_handler)(void);    // 回调
 }clockevent_struct;
-
-#endif  // CLOCKEVENT_H

@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef TASK_TYPES_H
-#define TASK_TYPES_H
+#pragma once
 
 #include <stdint.h>
 #include <processor.h>
@@ -73,5 +72,3 @@ bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr);
  * @param vector 中断向量号
  */
 void smp_irq_unregister_handler(uint8_t vector);
-
-#endif // TASK_TYPES_H

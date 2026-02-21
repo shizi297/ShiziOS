@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef PROCESSOR_H
-#define PROCESSOR_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -516,5 +515,3 @@ struct tss* get_tss_temp(void);
 
 // 初始化所有模版
 void processor_init(void);
-
-#endif // PROCESSOR_H

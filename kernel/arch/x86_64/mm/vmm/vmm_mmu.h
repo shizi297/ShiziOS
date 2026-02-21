@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef VMM_MMU_H
-#define VMM_MMU_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -183,5 +182,3 @@ vmm_result_t mmu_remove_pgd(uintptr_t pgd);
  * 调用者需要自行刷新TLB
  */
 vmm_result_t mmu_remove_map(page_table_blocks_struct *page_table_blocks);
-
-#endif  // VMM_MMU_H

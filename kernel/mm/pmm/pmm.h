@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef PMM_H
-#define PMM_H
+#pragma once
 
 #include <stdint.h>
 
@@ -18,6 +17,4 @@
 #define PAGE_SHIFT 12
 
 #include "pmm_types.h"
-
-#endif // PMM_H
 

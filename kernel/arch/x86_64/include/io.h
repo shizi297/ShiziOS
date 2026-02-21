@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef IO_H
-#define IO_H
+#pragma once
 
 #include <stdint.h>
 
@@ -105,5 +104,3 @@ static inline uint64_t rdtscp(void) {
     asm volatile ("rdtscp" : "=a"(lo), "=d"(hi) : : "rcx");
     return ((uint64_t)hi << 32) | lo;
 }
-
-#endif

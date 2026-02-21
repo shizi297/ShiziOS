@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#ifndef MM_ADDR_H
-#define MM_ADDR_H
+#pragma once
 
 /* 线性映射区域 */
 #define LINEAR_MAP_START    0xffff808000000000ULL  
@@ -16,5 +15,3 @@
 
 /* 物理地址转虚拟地址 */
 #define PHYS_TO_LINEAR(pa) ((void*)((uintptr_t)(pa) + LINEAR_MAP_START))
-
-#endif  // MM_ADDR_H

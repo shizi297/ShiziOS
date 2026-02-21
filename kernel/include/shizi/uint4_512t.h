@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef UINT4_512T
-#define UINT4_512T
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -136,5 +135,3 @@ static inline void uint4_512_inc(uint4_512t *num) {
     // 第3位的进位预测：如果当前是511且第2位预测进位，下次自增就会进位
     num->carry_flags[3] = (num->digit[3] == 511) && num->carry_flags[2];
 }
-
-#endif // UINT4_512T

@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
  
-#ifndef BUDDY_H
-#define BUDDY_H
+#pragma once
 
 void pmm_init(void);
 
@@ -51,5 +50,3 @@ void pmm_sub_map_count(uint64_t pfn);
  * @param pfn 要清零映射计数的页帧号
  */
 void pmm_zero_map_count(uint64_t pfn);
-
-#endif 

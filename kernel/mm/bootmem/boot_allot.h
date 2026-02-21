@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef BOOT_ALLOC_H
-#define BOOT_ALLOC_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -27,5 +26,3 @@ void boot_alloc_info(void);
 
 // 获取早期位图的虚拟地址
 void* boot_alloc_get_bitmap(void);
-
-#endif //boot_allot.h

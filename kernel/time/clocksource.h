@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#ifndef CLOCKSOURCE_H
-#define CLOCKSOURCE_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -23,5 +22,3 @@ typedef struct {
     uint32_t mult_inv;
     uint32_t shift_inv;
 }clocksource_struct;
-
-#endif  // CLOCKSOURCE_H

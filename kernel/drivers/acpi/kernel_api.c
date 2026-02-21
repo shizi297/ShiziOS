@@ -14,6 +14,7 @@
 #include <stdatomic.h>
 #include <smp.h>
 #include <io.h>
+#include <shizi/string.h>
 #include <uacpi/kernel_api.h>
 
 #define UACPI_LOG(level, str) \
@@ -31,26 +32,93 @@ static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
  * @param out_rsdp_address 存储rsdp物理地址的指针
  * 
  * @return UACPI_STATUS_OK  成功获取地址
+ * @return UACPI_STATUS_NOT_FOUND 未找到RSDP
+ * @return UACPI_STATUS_INVALID_ARGUMENT 无效参数
  */
 uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
-    *out_rsdp_address = bootboot->arch.x86_64.acpi_ptr;
+    uacpi_phys_addr addr = bootboot->arch.x86_64.acpi_ptr;
+    const char *expected = "RSD PTR ";
+    uacpi_phys_addr found_addr = 0;
+    uint8_t *mapped = NULL;
+
+    // 检查给定的地址是否是RSDP
+    mapped = uacpi_kernel_map(addr, 8);
+    if (mapped) {
+        if (memcmp(mapped, expected, 8)) {
+            found_addr = addr;
+            goto found;
+        }
+        uacpi_kernel_unmap(mapped, 8);
+        mapped = NULL;
+    }
+
+    // 向前搜索最大64KB（不超过addr）
+    uacpi_size max_forward = (addr < 65536) ? (uacpi_size)addr : 65536;
+    for (uacpi_size offset = 1; offset <= max_forward; offset++) {
+        uacpi_phys_addr candidate = addr - offset;
+        mapped = uacpi_kernel_map(candidate, 8);
+        if (!mapped) continue;
+        if (memcmp(mapped, expected, 8)) {
+            found_addr = candidate;
+            goto found;
+        }
+        uacpi_kernel_unmap(mapped, 8);
+        mapped = NULL;
+    }
+
+    // 向后搜索64KB
+    for (uacpi_size offset = 1; offset <= 65536; offset++) {
+        uacpi_phys_addr candidate = addr + offset;
+        mapped = uacpi_kernel_map(candidate, 8);
+        if (!mapped) continue;
+        if (memcmp(mapped, expected, 8)) {
+            found_addr = candidate;
+            goto found;
+        }
+        uacpi_kernel_unmap(mapped, 8);
+        mapped = NULL;
+    }
+
+    // 搜索传统BIOS区域（0xE0000 - 0xFFFFF）
+    for (uacpi_phys_addr candidate = 0xE0000; candidate <= 0xFFFFF; candidate += 16) {
+        mapped = uacpi_kernel_map(candidate, 8);
+        if (!mapped) continue;
+        if (memcmp(mapped, expected, 8)) {
+            found_addr = candidate;
+            goto found;
+        }
+        uacpi_kernel_unmap(mapped, 8);
+        mapped = NULL;
+    }
+
+    // 未找到
+    UACPI_LOG(UACPI_LOG_ERROR, "RSDP not found");
+    return UACPI_STATUS_NOT_FOUND;
+
+found:
+    if (mapped) {
+        uacpi_kernel_unmap(mapped, 8);
+        mapped = NULL;
+    }
+    *out_rsdp_address = found_addr;
     return UACPI_STATUS_OK;
 }
 
 /**
- * 物理地址转虚拟地址（线性映射）
+ * 映射物理地址到虚拟地址
  * 
  * @param phys_addr 要映射的物理地址
  * @param len       映射长度（字节）
  * 
- * @return 映射后的虚拟地址，失败返回NULL
+ * @return 成功：映射后的虚拟地址
+ * @return 失败：NULL
  */
 void *uacpi_kernel_map(uacpi_phys_addr phys_addr, uacpi_size len) {
     return (void *)PHYS_TO_LINEAR(phys_addr);
 }
 
 /**
- * 解除映射（线性映射不需要实际unmap）
+ * 解除映射
  * 
  * @param virt_addr 之前返回的虚拟地址
  * @param len       之前映射的长度
@@ -74,7 +142,8 @@ void uacpi_kernel_log(uacpi_log_level level, const uacpi_char *message) {
  * 
  * @param size 要分配的字节数
  * 
- * @return 分配的内存指针，失败返回NULL
+ * @return 成功：指向分配内存的指针
+ * @return 失败：NULL
  */
 void *uacpi_kernel_alloc(uacpi_size size) {
     return kheap_alloc((uint64_t)size);
@@ -92,7 +161,8 @@ void uacpi_kernel_free(void *mem) {
 /**
  * 获取启动后纳秒数
  * 
- * @return 当前纳秒数，失败返回0
+ * @return 成功：纳秒数
+ * @return 失败：0
  */
 uacpi_u64 uacpi_kernel_get_nanoseconds_since_boot(void) {
     uacpi_u64 ns = 0;
@@ -124,7 +194,8 @@ void uacpi_kernel_sleep(uacpi_u64 msec) {
 /**
  * 创建互斥锁
  * 
- * @return 互斥锁句柄，失败返回NULL
+ * @return 成功：互斥锁句柄
+ * @return 失败：NULL
  */
 uacpi_handle uacpi_kernel_create_mutex(void) {
     // 目前先使用自旋锁模拟
@@ -166,7 +237,7 @@ uacpi_status uacpi_kernel_acquire_mutex(uacpi_handle mutex, uacpi_u16 timeout) {
             return spin_trylock(lock) ? UACPI_STATUS_OK : UACPI_STATUS_TIMEOUT;
         }
     }
-
+    // 等待成功获取锁
     while (1) {
         if (spin_trylock(lock)) {
             return UACPI_STATUS_OK;
@@ -195,9 +266,10 @@ void uacpi_kernel_release_mutex(uacpi_handle mutex) {
 }
 
 /**
- * 创建事件（计数器信号量）
+ * 创建事件
  * 
- * @return 事件句柄，失败返回NULL
+ * @return 成功：事件句柄
+ * @return 失败：NULL
  */
 uacpi_handle uacpi_kernel_create_event(void) {
     _Atomic uint64_t *event = (_Atomic uint64_t *)uacpi_kernel_alloc(sizeof(_Atomic uint64_t));
@@ -217,7 +289,7 @@ void uacpi_kernel_free_event(uacpi_handle event) {
 }
 
 /**
- * 等待事件（带超时）
+ * 等待事件
  * 
  * @param event      事件句柄
  * @param timeout_ms 超时毫秒数（0xFFFF 无限等待）
@@ -233,6 +305,7 @@ uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle event, uacpi_u16 timeout_ms)
         return UACPI_FALSE;
     }
 
+    // 事件计数器大于0时表示事件已触发，等待时会将计数器减1
     while (1) {
         uint64_t old = atomic_load(event_counter);
         if (old > 0) {
@@ -257,7 +330,7 @@ uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle event, uacpi_u16 timeout_ms)
 }
 
 /**
- * 触发事件（计数器加1）
+ * 触发事件
  * 
  * @param event 事件句柄
  */
@@ -281,7 +354,7 @@ void uacpi_kernel_reset_event(uacpi_handle event) {
  * 
  * @return 线程id
  */
-uacpi_thread_id uacpi_kernel_get_current_thread_id(void) {
+uacpi_thread_id uacpi_kernel_get_thread_id(void) {
     // 目前先用cpuid替代
     return (uacpi_thread_id)(uintptr_t)get_logical_id();
 }
@@ -335,7 +408,7 @@ void uacpi_kernel_unlock_spinlock(uacpi_handle spinlock, uacpi_cpu_flags flags) 
 }
 
 /**
- * 映射io端口（x86直接返回基址）
+ * 映射io端口
  * 
  * @param base       io端口基址
  * @param len        范围长度（字节）
@@ -344,6 +417,7 @@ void uacpi_kernel_unlock_spinlock(uacpi_handle spinlock, uacpi_cpu_flags flags) 
  * @return UACPI_STATUS_OK  成功
  */
 uacpi_status uacpi_kernel_io_map(uacpi_io_addr base, uacpi_size len, uacpi_handle *out_handle) {
+    // 对于x86_64，io端口通过特殊指令访问，不需要实际映射，直接返回基址
     *out_handle = (uacpi_handle)base;
     return UACPI_STATUS_OK;
 }
@@ -453,7 +527,7 @@ uacpi_status uacpi_kernel_io_write32(uacpi_handle handle, uacpi_size offset, uac
  * @param address    pci设备地址
  * @param out_handle 输出句柄
  * 
- * @return UACPI_STATUS_UNIMPLEMENTED
+ * @return UACPI_STATUS_UNIMPLEMENTED   
  */
 uacpi_status uacpi_kernel_pci_device_open(uacpi_pci_address address, uacpi_handle *out_handle) {
     return UACPI_STATUS_UNIMPLEMENTED;

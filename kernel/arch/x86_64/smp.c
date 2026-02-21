@@ -10,6 +10,8 @@
 #include <stdint.h>
 #include <config.h>
 #include <serial.h>
+#include <acpi.h>
+#include <pit.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
@@ -169,6 +171,17 @@ uint32_t get_logical_id(void) {
  */
 __attribute__((noreturn))
 void smp_init(uint32_t logical_id, uint32_t apic_id) {
+    // 设置当前cpu的栈
+    uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
+
+    __asm__ volatile(
+        "movq %0, %%rsp\n"
+        "xorq %%rbp, %%rbp\n"
+        :
+        : "r"(new_stack_top), "D"(logical_id)
+        : "memory"
+    );
+
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
     logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id] = apic_id;
@@ -207,16 +220,13 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     // 设置当前cpu的gs到per_cpu
     set_gs_base((uint64_t)&per_cpu_ptr[logical_id]);
 
-    // 设置当前cpu的栈
-    uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
-
-    __asm__ volatile(
-        "movq %0, %%rsp\n"
-        "xorq %%rbp, %%rbp\n"
-        :
-        : "r"(new_stack_top), "D"(logical_id)
-        : "memory"
-    );
+    // 如果是bp，执行特定初始化
+    if (logical_id == bootboot->bspid) {
+        bool acpi_init_result = acpi_init();
+        if (!acpi_init_result) {
+            SMP_PRINT("acpi init failed\n");
+        }
+    }
 
     SMP_PRINT("smp init succeed\n");
 

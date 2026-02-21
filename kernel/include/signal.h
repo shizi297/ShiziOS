@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef SIGNAL_H
-#define SIGNAL_H
+#pragma once
 
 #include <stdint.h>
 
@@ -90,5 +89,3 @@ typedef struct {
 // 测试信号是否在信号集中
 #define sigismember(set, sig) \
     ((set)->__bits[_SIGSET_WORD(sig)] & (1UL << _SIGSET_BIT(sig)))
-
-#endif // SIGNAL_H

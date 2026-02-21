@@ -10,7 +10,6 @@
 #include <serial.h>  
 #include <time.h>
 
-extern void pit_init(void);
 extern uint8_t cpu_ready_flag;
 
 __attribute__((noreturn))

@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef ARCH_FAULT_H
-#define ARCH_FAULT_H
+#pragma once
 
 #ifndef __ASSEMBLER__
 
@@ -93,7 +92,4 @@ void exc_ve(struct pt_regs *regs);
      (1ULL << EXC_VE))
 
 // 异常DPL位图 (0-31): 1=用户态(DPL=3), 0=内核态(DPL=0) 
-#define FAULT_DPL_BITMAP \
-    (1ULL << EXC_BP)
-
-#endif  // ARCH_FAULT_H
+#define FAULT_DPL_BITMAP (1ULL << EXC_BP)

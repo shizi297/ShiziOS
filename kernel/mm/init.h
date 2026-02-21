@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef MEM_INIT_H
-#define MEM_INIT_H
+#pragma once
 
 #include <mm/bootmem/linear_map.h>
 #include <mm/bootmem/boot_allot.h>
@@ -20,9 +19,6 @@ static inline void memory_init(void) {
 }
 
 // 获取内存状态信息
-static inline void memory_info(void)
-{
+static inline void memory_info(void){
     boot_alloc_info();
 }
-
-#endif /* MEM_INIT_H */

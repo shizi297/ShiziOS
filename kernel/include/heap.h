@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef HEAP_H
-#define HEAP_H
+#pragma once
 
 #include <stdint.h>
 #include <mm/pmm/pmm.h>
@@ -102,5 +101,3 @@ void vheap_free(as_t *as, void *addr, size_t size);
  * @param as 进程地址空间描述符
  */
 void vheap_free_all(as_t *as);
-
-#endif // HEAP_H

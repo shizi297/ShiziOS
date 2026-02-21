@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#ifndef TIMECYCLE_H
-#define TIMECYCLE_H
+#pragma once
 
 #include <stdint.h>
 
@@ -93,5 +92,3 @@ static inline uint64_t timecycle_ns_to_usec(uint64_t ns) {
 static inline uint64_t timecycle_ns_to_msec(uint64_t ns) {
     return ns / 1000000;
 }
-
-#endif // TIMECYCLE_H

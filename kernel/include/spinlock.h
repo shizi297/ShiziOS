@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef _SPINLOCK_H
-#define _SPINLOCK_H
+#pragma once
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -39,5 +38,3 @@ static inline void spin_unlock(spinlock_t *lock) {
 static inline bool spin_trylock(spinlock_t *lock) {
     return !atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire);
 }
-
-#endif

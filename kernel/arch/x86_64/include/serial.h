@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef SERIAL_H
-#define SERIAL_H
+#pragma once
 
 #include <stdint.h>
 #include <io.h>
@@ -75,5 +74,3 @@ static inline void panic(const char* msg) {
         __asm__ __volatile__("hlt");
     }
 }
-
-#endif

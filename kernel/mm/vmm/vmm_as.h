@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef VMM_AS_H
-#define VMM_AS_H
+#pragma once
 
 #include <stdint.h>
 #include <mm/vmm/vmm_mmu.h>
@@ -194,5 +193,3 @@ vmm_result_t vma_get_nolock(as_t *as, vma_result_t **result);
  * 用于计算空的内存地址
  */
 vm_area_t *vma_find_end(as_t *as);
-
-#endif // VMM_AS_H

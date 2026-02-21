@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef TASK_TYPES_H
-#define TASK_TYPES_H
+#pragma once
 
 #include <stdint.h>
 #include <signal.h>
@@ -43,5 +42,3 @@ typedef struct task_struct {
     struct pt_regs *regs;    // 存储中断/异常/系统调用/信号处理信息
     struct thread_struct *thread;   // 任务切换时保存的信息
 }task_struct;
-
-#endif // TASK_TYPES_H

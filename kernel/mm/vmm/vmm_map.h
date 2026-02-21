@@ -3,8 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#ifndef VMM_MAP_H
-#define VMM_MAP_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -102,5 +101,3 @@ vmm_result_t vmm_map_anon(
  * 
  * vmm_result_t vmm_map_device(){}
  */
-
-#endif // VMM_MAP_H
