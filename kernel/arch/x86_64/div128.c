@@ -23,20 +23,16 @@
 __uint128_t __udivti3(__uint128_t a, __uint128_t b) {
     uint64_t b_hi = HI(b);
     uint64_t b_lo = LO(b);
-
-    // 除数高64位必须为零
-    if (b_hi != 0)
-        __builtin_trap();
-    if (b_lo == 0)
-        DIV0_TRAP();
+    if (b_hi != 0) __builtin_trap();
+    if (b_lo == 0) DIV0_TRAP();
 
     uint64_t a_hi = HI(a);
     uint64_t a_lo = LO(a);
-    uint64_t q;
+    uint64_t q, r;
 
     __asm__ volatile (
-        "divq %3"
-        : "=a"(q), "=d"(a_hi)
+        "divq %4"
+        : "=a"(q), "=d"(r)
         : "a"(a_lo), "d"(a_hi), "rm"(b_lo)
         : "cc"
     );

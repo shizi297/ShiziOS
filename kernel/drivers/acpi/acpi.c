@@ -111,7 +111,7 @@ bool acpi_namespace_init(void) {
  * 遍历指定类型的ACPI表中的所有子表
  *
  * @param type 要遍历的ACPI表类型
- * @param callback 每个子表
+ * @param callback 每个子表的回调函数
  * @param context 传递给回调的上下文指针
  * 
  * @return 成功： true

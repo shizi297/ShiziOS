@@ -15,9 +15,22 @@
 #include <smp.h>
 #include <time.h>
 
-
 #define CLOCKSOURCE_PANIC(str) \
     panic("[CLOCKSOURCE] ERROR : " str "\n")
+
+// 以json格式输出注册信息
+#define CLOCKSOURCE_INFO(name, hz) \
+    serial_puts("[CLOCKSOURCE] register clocksource : ["); \
+    serial_puts("“name” = "); \
+    serial_putchar('"'); \
+    serial_puts(name); \
+    serial_putchar('"'); \
+    serial_puts(", "); \
+    serial_puts("“hz” = "); \
+    serial_putchar('"'); \
+    serial_put_dec(hz); \
+    serial_putchar('"'); \
+    serial_puts("]\n")
 
 typedef struct {
     clocksource_struct clocksource;
@@ -159,4 +172,7 @@ void clocksource_register(
      * 则添加到链表末尾 
      */
     list_add_tail(&current_list->node, head);
+
+    // 输出注册信息
+    CLOCKSOURCE_INFO(name, hz);
 }

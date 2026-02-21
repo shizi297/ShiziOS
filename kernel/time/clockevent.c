@@ -18,13 +18,20 @@
 #define CLOCKEVENT_PANIC(str) \
     panic("[CLOCKEVENT] ERROR : " str "\n") 
 
+// 以json格式输出注册信息
 #define CLOCKEVENT_INFO(name, hz) \
-    serial_puts("[CLOCKEVENT] register clockevent : "); \
+    serial_puts("[CLOCKEVENT] register clockevent : ["); \
+    serial_puts("“name” = "); \
+    serial_putchar('"'); \
     serial_puts(name); \
-    serial_puts("\n"); \
-    serial_puts("hz = "); \
+    serial_putchar('"'); \
+    serial_puts(", "); \
+    serial_puts("“hz” = "); \
+    serial_putchar('"'); \
     serial_put_dec(hz); \
-    serial_puts("\n")
+    serial_putchar('"'); \
+    serial_puts("]\n")
+
 
 typedef struct {
     clockevent_struct clockevent;

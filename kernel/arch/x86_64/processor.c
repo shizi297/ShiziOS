@@ -14,7 +14,7 @@ static struct tss tss_temp = {0};
 
 /*
  * GDT模版初始化
- * 后续被复制到per_cpu结构体中
+ * 后续被复制到per_cpu中
  */
 static void gdt_temp_init(void) {
     gdt_temp[GDT_NULL_INDEX] = GDT_NULL_DESC;
@@ -27,7 +27,7 @@ static void gdt_temp_init(void) {
 
 /*
  * idt模版初始化
- * 后续被复制到per_cpu结构体中
+ * 后续被复制到per_cpu中
  */
 static void idt_temp_init(void) {
     for (int i = 0; i < 256; i++) {

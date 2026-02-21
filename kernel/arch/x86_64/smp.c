@@ -16,6 +16,9 @@
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
 
+#define SMP_PANIC(str) \
+    serial_puts("[SMP] PANIC: " str); 
+
 gdte *gdt_ptr = NULL;
 struct idt_gate *idt_ptr = NULL;
 struct tss *tss_ptr = NULL;
@@ -160,8 +163,8 @@ void smp_data_init(
 // 获取cpu核心的逻辑id
 uint32_t get_logical_id(void) {
     per_cpu *per_cpu_ptr = get_gs_base();
-    uint64_t apic_id = per_cpu_ptr->logical_id;
-} 
+    return per_cpu_ptr->logical_id;
+}
 
 /*
  * 初始化所有核心
@@ -224,8 +227,10 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     if (logical_id == bootboot->bspid) {
         bool acpi_init_result = acpi_init();
         if (!acpi_init_result) {
-            SMP_PRINT("acpi init failed\n");
+            SMP_PANIC("acpi init failed\n");
         }
+
+        pit_init();
     }
 
     SMP_PRINT("smp init succeed\n");
