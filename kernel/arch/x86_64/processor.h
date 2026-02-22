@@ -368,11 +368,7 @@ static inline void set_cr4(void) {
 
 // 获取当前CPU的APIC ID
 static inline uint32_t get_apic_id(void) {
-    uint32_t eax, ebx, ecx, edx;
-    __asm__ volatile("cpuid"
-                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
-                     : "a"(1));
-    return ebx >> 24;
+    return (uint32_t)msr_read(X2APIC_MSR_APIC_ID);
 }
  
 // 为当前 CPU 启用 x2APIC 模式

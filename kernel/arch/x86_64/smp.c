@@ -12,6 +12,7 @@
 #include <serial.h>
 #include <acpi.h>
 #include <pit.h>
+#include <ioapic.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
@@ -140,9 +141,13 @@ void smp_data_init(
         gdt_ptr = kheap_alloc(gdt_size);
         idt_ptr = kheap_alloc(idt_size);
         tss_ptr = kheap_alloc(tss_size);
+        
+        if (!gdt_ptr || !idt_ptr || !tss_ptr) SMP_PANIC("memory allocation failed");
     }
     // 给每个cpu分配内核栈
     void *kernel_stack = kheap_alloc(KERNEL_START_SIZE * max_cpu_count);
+    
+    if (!kernel_stack) SMP_PANIC("memory allocation failed");
 
     tss_init(tss_temp_addr, tss_ptr, kernel_stack, max_cpu_count);
     idt_init(idt_temp_addr, idt_ptr, max_cpu_count);
@@ -150,10 +155,12 @@ void smp_data_init(
 
     // 分配per_cpu
     per_cpu_ptr = kheap_alloc(sizeof(per_cpu) * max_cpu_count);
+    if (!per_cpu_ptr) SMP_PANIC("memory allocation failed");
 
     // 分配逻辑cpuid映射apicid结构体
     uint16_t logicalid_to_apicid_struct_size = sizeof(uint16_t) + (sizeof(uint16_t) * max_cpu_count);
     logicalid_to_apicid_struct_ptr = kheap_alloc(logicalid_to_apicid_struct_size);
+    if (!logicalid_to_apicid_struct_ptr) SMP_PANIC("memory allocation failed");
 
     logicalid_to_apicid_struct_ptr->count = max_cpu_count;
 
@@ -225,10 +232,8 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
 
     // 如果是bp，执行特定初始化
     if (logical_id == bootboot->bspid) {
-        bool acpi_init_result = acpi_init();
-        if (!acpi_init_result) {
-            SMP_PANIC("acpi init failed\n");
-        }
+        if (!acpi_init()) SMP_PANIC("acpi init failed\n");
+        if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
 
         pit_init();
     }
@@ -264,6 +269,8 @@ bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr) {
     
     // 更新数组，让中断处理函数知道位置
     irq_table[vector] = handler_addr;
+    
+    return true;
 }
 
 /**

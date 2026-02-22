@@ -9,6 +9,7 @@
 #include <time.h>           
 #include <processor.h>    
 #include <smp.h>   
+#include <ioapic.h>
 
 #define PIT_COUNTER0        0x40
 #define PIT_CONTROL         0x43
@@ -22,24 +23,26 @@
 #define PIT_CTRL_ONESHOT    (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE0 | PIT_BINARY)  
 #define PIT_CTRL_PERIODIC   (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE3 | PIT_BINARY)  
 
-#define PIC_MASTER_CMD      0x20
-#define PIC_EOI             0x20
+#define PIT_GSI 0
 
 // 停止时钟事件
 static void pit_shutdown(void) {
-    // TODO: 屏蔽 IRQ_PIT 中断
+    // 屏蔽 IRQ_PIT 中断
+    ioapic_mask_gsi(PIT_GSI);
 }
 
 // 设置为单次模式
 static void pit_set_oneshot(void) {
     outb(PIT_CTRL_ONESHOT, PIT_CONTROL);
-    // TODO: 使能 IRQ_PIT 中断
+    // 使能 IRQ_PIT 中断
+    ioapic_unmask_gsi(PIT_GSI);
 }
 
 // 设置为周期模式
 static void pit_set_periodic(void) {
     outb(PIT_CTRL_PERIODIC, PIT_CONTROL);
-    // TODO: 使能 IRQ_PIT 中断
+    // 使能 IRQ_PIT 中断
+    ioapic_unmask_gsi(PIT_GSI);
 }
 
 /**
@@ -77,8 +80,13 @@ static uint64_t pit_read(void) {
     return 65536 - cnt;
 }
 
-// 初始化
-void pit_init(void) {
+/**
+ * PIT初始化
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool pit_init(void) {
     // 确保 PIT 归零
     outb(PIT_CTRL_ONESHOT, PIT_CONTROL);   // 设置为模式0
     outb(0x01, PIT_COUNTER0);               // 写入 1
@@ -112,4 +120,10 @@ void pit_init(void) {
         pit_read,
         1193182
     );
+
+    // 注册到ioapic
+    bool is_scuuess = ioapic_register_gsi(PIT_GSI, IRQ_PIT, get_apic_id(), 0);
+    if (!is_scuuess) return false;
+
+    return true;
 }

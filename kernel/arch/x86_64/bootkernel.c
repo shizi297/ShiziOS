@@ -9,6 +9,7 @@
 #include <serial.h>
 #include <spinlock.h>
 #include <processor.h>
+#include <apic.h>
 
 #define BOOTKERNEL_PRINT(str) \
     serial_puts("[BOOTKERNEL] " str)
@@ -41,6 +42,14 @@ __attribute__((aligned(64)))
  */
 volatile uint8_t cpu_ready_flag = 0;
 
+/*
+ * 用于早期无法确认bp时只需要单次初始化的步骤
+ * 初始化后为ture
+ * 其他cpu不会再次初始化
+ */
+bool boot_init = false;
+spinlock_t boot_init_spin = SPIN_LOCK_INIT;
+
 // logical_id_raw是bootboot引导传的当前逻辑cpuid
 __attribute__((noreturn))
 void _start(uint64_t logical_id_raw) {
@@ -51,6 +60,14 @@ void _start(uint64_t logical_id_raw) {
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
     // bootboot在加载内核前已经初始化串口，这里不初始化
+
+    spin_lock(&boot_init_spin);
+
+    if (!boot_init) {
+        apic_boot_init();
+    }
+    
+    spin_unlock(&boot_init_spin);
 
     apic_id = get_apic_id();
 

@@ -9,9 +9,11 @@
 #include <uacpi/uacpi.h>
 #include <uacpi/acpi.h>
 #include <uacpi/tables.h>
+#include <config.h>
+#include <acpi.h>
 
 #define ACPI_PRINT(str) \
-    serial_puts("[ACPI] " str "\n")
+    serial_puts("[ACPI] " str)
 
 typedef enum {
     ACPI_TABLE_RSDP,
@@ -117,7 +119,7 @@ bool acpi_namespace_init(void) {
  * @return 成功： true
  * @return 失败： false
  */
-bool acpi_foreach_subtable(
+static bool acpi_foreach_subtable(
     acpi_table_type type,
     uacpi_subtable_iteration_callback callback,
     void *context
@@ -186,3 +188,59 @@ DONE:
         uacpi_table_unref(&table);
     return result;
 }
+
+#if ARCH == ARCH_X86_64
+
+/**
+ * ioapic条目遍历回调
+ * 用于找到数据后停止继续寻找并保存信息
+ * 
+ * @param handle 填充数据的结构体
+ * @param hdr 当前条目的数据信息
+ * 
+ * @return 找到数据，退出遍历：UACPI_ITERATION_DECISION_BREAK
+ * @return 没找到数据，继续遍历：UACPI_ITERATION_DECISION_CONTINUE
+ */
+static uacpi_iteration_decision acpi_get_ioapic_info_callback(
+    uacpi_handle handle, 
+    struct acpi_entry_hdr *hdr
+) {
+    acpi_ioapic_info_struct *acpi_ioapic_info = (acpi_ioapic_info_struct *)handle;
+
+    if (hdr->type == ACPI_MADT_ENTRY_TYPE_IOAPIC) {
+        // 填充数据
+        struct acpi_madt_ioapic *ioapic = (struct acpi_madt_ioapic *)hdr;
+        acpi_ioapic_info_struct *ioapic_info = (acpi_ioapic_info_struct *)handle;
+        ioapic_info->base = ioapic->address;
+        ioapic_info->start_gsi = ioapic->gsi_base;
+
+        return UACPI_ITERATION_DECISION_BREAK;
+    }
+
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+/**
+ * 获取ioapic信息
+ * 
+ * @param ioapic_info 数据存放的位置的指针
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool acpi_get_ioapic_info(acpi_ioapic_info_struct *acpi_ioapic_info) {
+    acpi_ioapic_info->base = 0;
+    acpi_ioapic_info->start_gsi = 0;
+
+    bool is_success = acpi_foreach_subtable(
+        ACPI_TABLE_MADT,
+        &acpi_get_ioapic_info_callback, 
+        (void *)acpi_ioapic_info
+    );
+
+    if (!is_success || !acpi_ioapic_info->base) return false;
+    
+    return true; 
+}
+
+#endif

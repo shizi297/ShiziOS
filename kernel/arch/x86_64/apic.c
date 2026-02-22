@@ -38,11 +38,14 @@ void set_apic_timer(uint64_t value) {
     apic_set_tsc_deadline(value);
 }
 
-// 初始化apic
-void apic_init() {
+// 早期初始化，用于启动x2apic模式，让系统可以使用一些东西
+void apic_boot_init(void) {
     // 设置为x2apic模式
     set_apic_x2apic();
+}
 
+// 初始化apic
+void apic_init(void) {
     // 设置为TSC DEADLINE模式，中断号为IRQ_APIC
     apic_set_lvt_timer(IRQ_APIC,APIC_TSC_DEADLINE,0);
 }
