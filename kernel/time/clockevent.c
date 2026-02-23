@@ -97,7 +97,7 @@ bool event_handler_register(void (*event_handler)(void), char *name) {
     // 根据设备名称查找
     clockevent_list_struct *pos = NULL;
     list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-        if (!strcmp(pos->clockevent.name, name)) {
+        if (strcmp(pos->clockevent.name, name)) {  
             pos->clockevent.event_handler = event_handler;
             return true;
         }
@@ -136,7 +136,7 @@ bool set_value_to_dev(uint64_t ns, char *name) {
         } else {
             // 根据设备名称查找
             list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-                if (!strcmp(pos->clockevent.name, name)) {
+                if (strcmp(pos->clockevent.name, name)) {
                     found = true;
                     break;
                 }
@@ -157,7 +157,7 @@ bool set_value_to_dev(uint64_t ns, char *name) {
         * 需要写入tsc绝对值
         * 所以这里让apic特殊处理
         */
-        if (!(strcmp(pos->clockevent.name, "apic"))) {
+        if (strcmp(pos->clockevent.name, "apic")) { 
             /*
             * 使用时钟源框架
             * 读取tsc的值
@@ -206,7 +206,7 @@ void get_event_handler(char *name, void (**event_handler)(void)) {
         } else {
             // 根据设备名称查找
             list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-                if (!strcmp(pos->clockevent.name, name)) {
+                if (strcmp(pos->clockevent.name, name)) { 
                     found = true;
                     break;
                 }
@@ -220,6 +220,69 @@ void get_event_handler(char *name, void (**event_handler)(void)) {
     }
 
      *event_handler = pos->clockevent.event_handler;
+}
+
+/**
+ * 设置设备的中断模式
+ * 
+ * @param name 设备名称
+ * @param mode 要设置的模式
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool clockevent_set_mode(const char *name, clockevent_mode_t mode) {
+    // 获取当前逻辑cpuid
+    uint64_t logical_id = get_logical_id();
+    struct list_head *head = &clockevent_head->head[logical_id];
+
+    clockevent_list_struct *pos = NULL;
+
+    {
+        bool found = false;
+
+        // 使用最高精度的时钟
+        if (!name) {
+            if (list_empty(head)) {
+                // 没有时钟设备
+                CLOCKEVENT_PANIC("no clock device");
+            }
+            pos = list_first_entry(head, clockevent_list_struct, node);
+            found = true;
+        } else {
+            // 根据设备名称查找
+            list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+                if (strcmp(pos->clockevent.name, name)) {  
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            return false;
+        }
+    }
+
+    // 根据模式调用对应的函数指针
+    clockevent_struct *ce = &pos->clockevent;
+    switch (mode) {
+        case CLOCKEVENT_MODE_SHUTDOWN:
+            if (ce->shutdown) ce->shutdown();
+            else return false;
+            break;
+        case CLOCKEVENT_MODE_ONESHOT:
+            if (ce->set_oneshot) ce->set_oneshot();
+            else return false;
+            break;
+        case CLOCKEVENT_MODE_PERIODIC:
+            if (ce->set_periodic) ce->set_periodic();
+            else return false;
+            break;
+        default:
+            return false;
+    }
+    return true;
 }
 
 /**

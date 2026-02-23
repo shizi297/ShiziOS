@@ -12,6 +12,12 @@
 #define TIME_PRINT(str) \
     serial_puts("[TIME]" str "\n")
 
+typedef enum {
+    CLOCKEVENT_MODE_SHUTDOWN,   // 关闭定时器
+    CLOCKEVENT_MODE_ONESHOT,    // 单次模式
+    CLOCKEVENT_MODE_PERIODIC,   // 周期模式
+} clockevent_mode_t;
+
 // 时钟事件框架初始化
 void clockevent_init(void);
 
@@ -48,6 +54,17 @@ bool set_value_to_dev(uint64_t ns, char *name);
  * @return 成功： 回调函数的函数指针
  */
 void get_event_handler(char *name, void (**event_handler)(void));
+
+/**
+ * 设置设备的中断模式
+ * 
+ * @param name 设备名称
+ * @param mode 要设置的模式
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool clockevent_set_mode(const char *name, clockevent_mode_t mode);
 
 /**
  * 注册时钟到时钟事件框架

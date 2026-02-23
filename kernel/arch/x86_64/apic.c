@@ -48,5 +48,8 @@ void apic_boot_init(void) {
 void apic_init(void) {
     // 设置为TSC DEADLINE模式，中断号为IRQ_APIC
     apic_set_lvt_timer(IRQ_APIC,APIC_TSC_DEADLINE,0);
+
+    // 设置svr，让系统可以接收外部中断
+    apic_set_svr(EXC_SPUR); 
 }
 

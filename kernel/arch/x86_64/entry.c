@@ -6,6 +6,7 @@
 #include <fault.h>
 #include <processor.h>
 #include <serial.h>
+#include <apic.h>
 
 #define IRQ_PRINT(str) \
     serial_puts("[IRQ] " str "\n")
@@ -47,5 +48,5 @@ void irq_entry(struct pt_regs *regs) {
     }
 
     // 发送EOI，通知APIC中断处理已完成，对于异常不需要发送EOI
-    if (!is_vector) processor_eoi();
+    if (!is_vector) apic_eoi();
 }   

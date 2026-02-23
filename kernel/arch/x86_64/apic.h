@@ -29,3 +29,6 @@ void apic_eoi(void);
 
 // 早期初始化，用于启动x2apic模式，让系统可以使用一些东西
 void apic_boot_init(void);
+
+// 初始化apic
+void apic_init(void);

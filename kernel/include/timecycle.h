@@ -7,6 +7,10 @@
 
 #include <stdint.h>
 
+#define NSEC_PER_SEC  1000000000ULL
+#define NSEC_PER_MSEC 1000000ULL
+#define NSEC_PER_USEC 1000ULL
+
 /**
  * 初始化所有时间转换参数
  * 
@@ -59,9 +63,7 @@ static inline uint64_t timecycle_ns_to_cycles(
  * @param usec 微秒时间
  * @return 纳秒时间
  */
-static inline uint64_t timecycle_usec_to_ns(uint64_t usec) {
-    return usec * 1000;
-}
+#define timecycle_usec_to_ns(usec) ((uint64_t)(usec) * NSEC_PER_USEC)
 
 /**
  * 将毫秒时间转换为纳秒时间
@@ -69,9 +71,7 @@ static inline uint64_t timecycle_usec_to_ns(uint64_t usec) {
  * @param msec 毫秒时间
  * @return 纳秒时间
  */
-static inline uint64_t timecycle_msec_to_ns(uint64_t msec) {
-    return msec * 1000000;
-}
+#define timecycle_msec_to_ns(msec) ((uint64_t)(msec) * NSEC_PER_MSEC)
 
 /**
  * 将纳秒时间转换为微秒时间
@@ -79,9 +79,7 @@ static inline uint64_t timecycle_msec_to_ns(uint64_t msec) {
  * @param ns 纳秒时间
  * @return 微秒时间
  */
-static inline uint64_t timecycle_ns_to_usec(uint64_t ns) {
-    return ns / 1000;
-}
+#define timecycle_ns_to_usec(ns) ((uint64_t)(ns) / NSEC_PER_USEC)
 
 /**
  * 将纳秒时间转换为毫秒时间
@@ -89,6 +87,12 @@ static inline uint64_t timecycle_ns_to_usec(uint64_t ns) {
  * @param ns 纳秒时间
  * @return 毫秒时间
  */
-static inline uint64_t timecycle_ns_to_msec(uint64_t ns) {
-    return ns / 1000000;
-}
+#define timecycle_ns_to_msec(ns) ((uint64_t)(ns) / NSEC_PER_MSEC)
+
+/**
+ * 将秒转为纳秒
+ * 
+ * @param s 秒时间
+ * @return 纳秒秒时间
+ */
+#define timecycle_s_to_ns(s) ((__uint128_t)(s) * NSEC_PER_SEC)

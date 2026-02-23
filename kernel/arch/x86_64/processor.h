@@ -110,6 +110,7 @@ extern uint64_t irq_table[256];
 #define IRQ_RES10   45
 #define IRQ_RES11   46
 #define IRQ_RES12   47
+#define EXC_SPUR    255  // 伪中断
 
 /*
  * IDT 门描述符构建宏
@@ -422,6 +423,17 @@ static inline void apic_set_tsc_deadline(uint64_t tsc_value) {
     msr_write(MSR_IA32_TSC_DEADLINE, tsc_value);
 }
 
+/**
+ * 设置svr寄存器
+ *
+ * @param value 伪中断向量号
+ */
+static inline void apic_set_svr(uint8_t value) {
+    uint64_t svr =  msr_read(X2APIC_MSR_SVR);
+    svr = (svr & ~0xFF) | ((1 << 8)) | value;
+    msr_write(X2APIC_MSR_SVR, svr);
+}
+
 // 读取错误状态寄存器
 static inline uint32_t apic_read_esr(void) {
     msr_write(X2APIC_MSR_ESR, 0);
@@ -498,6 +510,18 @@ static inline void irq_off(void) {
 // 开启中断
 static inline void irq_on(void) {
     __asm__ volatile("sti" ::: "memory");
+}
+
+// 读取tsc设备值
+static inline uint64_t rdtsc(void) {
+    uint32_t lo, hi;
+    asm volatile ("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
+    return ((uint64_t)hi << 32) | lo;
+}
+
+// 内存屏障
+static inline void barrier(void) {
+    __asm__ volatile ("" ::: "memory");
 }
 
 // 获取gdt模版的虚拟地址

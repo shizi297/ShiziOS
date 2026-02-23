@@ -34,6 +34,7 @@ static void pit_shutdown(void) {
 // 设置为单次模式
 static void pit_set_oneshot(void) {
     outb(PIT_CTRL_ONESHOT, PIT_CONTROL);
+
     // 使能 IRQ_PIT 中断
     ioapic_unmask_gsi(PIT_GSI);
 }
@@ -41,6 +42,7 @@ static void pit_set_oneshot(void) {
 // 设置为周期模式
 static void pit_set_periodic(void) {
     outb(PIT_CTRL_PERIODIC, PIT_CONTROL);
+    
     // 使能 IRQ_PIT 中断
     ioapic_unmask_gsi(PIT_GSI);
 }
@@ -90,7 +92,7 @@ bool pit_init(void) {
     // 确保 PIT 归零
     outb(PIT_CTRL_ONESHOT, PIT_CONTROL);   // 设置为模式0
     outb(0x01, PIT_COUNTER0);               // 写入 1
-    outb(0x00, PIT_COUNTER0);               
+    outb(0x00, PIT_COUNTER0);
 
     // 轮询等待计数归零
     while (1) {
@@ -122,8 +124,8 @@ bool pit_init(void) {
     );
 
     // 注册到ioapic
-    bool is_scuuess = ioapic_register_gsi(PIT_GSI, IRQ_PIT, get_apic_id(), 0);
-    if (!is_scuuess) return false;
+    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, get_apic_id(), 0);
+    if (!is_success) return false;
 
     return true;
 }

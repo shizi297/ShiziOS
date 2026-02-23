@@ -51,7 +51,6 @@ void exc_ve(struct pt_regs *regs);
 #define EXC_SS     12  // 栈段故障
 #define EXC_GP     13  // 一般保护故障
 #define EXC_PF     14  // 页故障
-#define EXC_SPUR   15  // 伪中断
 #define EXC_MF     16  // 浮点异常
 #define EXC_AC     17  // 对齐检查
 #define EXC_MC     18  // 机器检查
@@ -84,7 +83,6 @@ void exc_ve(struct pt_regs *regs);
      (1ULL << EXC_SS)   | \
      (1ULL << EXC_GP)   | \
      (1ULL << EXC_PF)   | \
-     (1ULL << EXC_SPUR) | \
      (1ULL << EXC_MF)   | \
      (1ULL << EXC_AC)   | \
      (1ULL << EXC_MC)   | \

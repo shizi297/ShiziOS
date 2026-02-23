@@ -3,10 +3,12 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#include <stdint.h>
-#include <stdbool.h>
-
 #pragma once
 
-// 初始化
-bool pit_init(void);
+/**
+ * 初始化tsc
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool tsc_init(void);

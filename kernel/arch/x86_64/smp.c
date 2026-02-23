@@ -13,12 +13,14 @@
 #include <acpi.h>
 #include <pit.h>
 #include <ioapic.h>
+#include <tsc.h>
+#include <apic.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
 
 #define SMP_PANIC(str) \
-    serial_puts("[SMP] PANIC: " str); 
+    panic("[SMP] ERROR: " str); 
 
 gdte *gdt_ptr = NULL;
 struct idt_gate *idt_ptr = NULL;
@@ -230,12 +232,17 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     // 设置当前cpu的gs到per_cpu
     set_gs_base((uint64_t)&per_cpu_ptr[logical_id]);
 
+    // 开启中断
+    irq_on();
+    
+    apic_init();
+
     // 如果是bp，执行特定初始化
     if (logical_id == bootboot->bspid) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
-
-        pit_init();
+        if (!pit_init()) SMP_PANIC("pit init failed\n");
+        if (!tsc_init()) SMP_PANIC("tsc init failed\n");  
     }
 
     SMP_PRINT("smp init succeed\n");

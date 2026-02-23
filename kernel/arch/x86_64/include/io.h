@@ -82,25 +82,3 @@ static inline void outsl(uint16_t port, const void* buffer, uint32_t count) {
     asm volatile ("cld; rep outsl" : "+S"(buffer), "+c"(count) : "d"(port) : "memory");
     io_barrier();
 }
-
-static inline void rdmsr(uint32_t msr, uint32_t* lo, uint32_t* hi) {
-    asm volatile ("rdmsr" : "=a"(*lo), "=d"(*hi) : "c"(msr));
-    io_barrier();
-}
-
-static inline void wrmsr(uint32_t msr, uint32_t lo, uint32_t hi) {
-    asm volatile ("wrmsr" : : "a"(lo), "d"(hi), "c"(msr));
-    io_barrier();
-}
-
-static inline uint64_t rdtsc(void) {
-    uint32_t lo, hi;
-    asm volatile ("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static inline uint64_t rdtscp(void) {
-    uint32_t lo, hi;
-    asm volatile ("rdtscp" : "=a"(lo), "=d"(hi) : : "rcx");
-    return ((uint64_t)hi << 32) | lo;
-}
