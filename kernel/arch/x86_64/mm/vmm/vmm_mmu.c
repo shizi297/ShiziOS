@@ -47,6 +47,11 @@ __attribute__((noinline)) void mmu_init(void) {
     __asm__ volatile("mov %%cr3, %0" : "=r" (kernel_pgd));
 }
 
+// 获取内核pgd
+uintptr_t mmu_get_kernel_pgd(void) {
+    return kernel_pgd;
+};
+
 /*
  * 分配一个新的页表页
  * 
@@ -418,6 +423,7 @@ void mmu_set_pte(pte_t *pte, uint64_t pfn, bool huge, vm_prot_t prot) {
     if (prot & VM_WRITE) flags |= PTE_WRITABLE;
     if (prot & VM_USER) flags |= PTE_USER;
     if (!(prot & VM_EXEC)) flags |= PTE_NX;
+    if (prot & VM_UC) flags |= PTE_PWT | PTE_PCD;
     
     // 大页设置
     if (huge) flags |= PTE_HUGE;

@@ -87,6 +87,9 @@ typedef struct _page_table_blocks {
  */
 void mmu_init(void);
 
+// 获取内核pgd
+uintptr_t mmu_get_kernel_pgd(void);
+
 /*
  * 遍历页表
  * 找到虚拟地址对应的页表项的虚拟地址 

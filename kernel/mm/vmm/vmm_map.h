@@ -53,6 +53,17 @@ vmm_result_t vmm_unmap(as_t *as, uintptr_t addr);
  */
 void vmm_switch_as(as_t *as);
 
+/**
+ * 映射mmio地址
+ * 
+ * @param phy_addr 物理地址
+ * @param page_count 大小
+ * 
+ * @return 成功 ： 映射的虚拟内存
+ * @return 失败 ：0
+ */
+uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count);
+
 /*
  * 销毁进程地址空间
  *

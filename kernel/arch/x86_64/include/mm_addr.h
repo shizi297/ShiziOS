@@ -5,10 +5,15 @@
 
 #pragma once
 
+#include <bootboot.h>
+
 /* 线性映射区域 */
 #define LINEAR_MAP_START    0xffff808000000000ULL  
 #define LINEAR_MAP_END      0xffff880000000000ULL  
 #define LINEAR_MAP_SIZE     (8ULL << 40)    
+
+// mmio地址
+#define MMIO_MAP    BOOTBOOT_MMIO
 
 /* 线性映射地址转物理地址 */
 #define LINEAR_TO_PHYS(va) ((uintptr_t)(va) - LINEAR_MAP_START)

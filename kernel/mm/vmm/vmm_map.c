@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
+static uintptr_t mmio_addr = MMIO_MAP;
+static spinlock_t mmio_map_lock = SPIN_LOCK_INIT;
+
 // 初始化
 void vmm_init(void) {
     mmu_init();
@@ -161,6 +164,44 @@ void vmm_switch_as(as_t *as) {
         return;
     }
     mmu_set_pgd(as->pgd);
+}
+
+/**
+ * 映射mmio地址
+ * 
+ * @param phy_addr 物理地址
+ * @param page_count 大小
+ * 
+ * @return 成功 ： 映射的虚拟内存
+ * @return 失败 ：0
+ */
+uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
+    spin_lock(&mmio_map_lock);
+
+    vm_prot_t mmio_prot = VM_READ | VM_WRITE | VM_UC;
+    uintptr_t current_mmio = mmio_addr;
+     
+
+    vmm_result_t result = mmu_add_map(
+        mmu_get_kernel_pgd(),
+        mmio_addr,  
+        (uintptr_t)phy_addr,
+        page_count,   
+        mmio_prot,  
+        0,  // 没有特殊标志
+        NULL    // 没有ptb
+    );
+
+    if (result != VMM_OK) goto fail;
+
+    // 设置下一次映射的虚拟起始地址
+    mmio_addr += page_count * PAGE_SIZE;
+    spin_unlock(&mmio_map_lock);
+    return current_mmio;
+
+    fail:
+        spin_unlock(&mmio_map_lock);
+        return 0;
 }
 
 /*

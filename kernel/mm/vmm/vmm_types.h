@@ -14,6 +14,7 @@ typedef enum {
     VM_WRITE = 1 << 1,  // 可写
     VM_EXEC  = 1 << 2,  // 可执行
     VM_USER  = 1 << 3,  // 用户空间（否则为内核空间）
+    VM_UC    = 1 << 4, 
 } vm_prot_t;
 
 // VMM返回码

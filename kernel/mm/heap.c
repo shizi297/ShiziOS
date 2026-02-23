@@ -238,3 +238,18 @@ void vheap_free_all(as_t *as) {
     if (as == NULL) return;
     vmm_destroy_as(as);
 }
+
+/**
+ * 映射物理地址到mmio
+ * 
+ * @param phy 物理地址
+ * @param len 要映射的大小
+ * 
+ * @return 成功：映射到的虚拟地址
+ * @return 失败：NULL
+ */
+void *vheap_map_mmio(uint64_t phy_addr, uint64_t len) {
+    uint64_t page_count = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    return (void *)vmm_map_mmio(phy_addr, page_count);
+}
