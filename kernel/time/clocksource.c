@@ -99,7 +99,7 @@ bool clocksource_read(char *name, uint64_t *value) {
     // 根据设备名称查找
     clocksource_list_struct *pos = NULL;
     list_for_each_entry_t(pos, head, clocksource_list_struct, node) {
-        if (!strcmp(pos->clocksource.name, name)) {
+        if (strcmp(pos->clocksource.name, name)) {
             uint64_t dev_value = pos->clocksource.read();
             *value = timecycle_cycles_to_ns(
                 dev_value, 
