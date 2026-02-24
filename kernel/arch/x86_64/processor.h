@@ -90,9 +90,9 @@ extern uint64_t irq_table[256];
 #define IDT_TRAP_GATE 0xF       // 用于异常处理
 
 // 门描述符属性位
-#define IDT_PRESENT (1 << 7)    // 描述符存在位
-#define IDT_DPL_KERNEL (0 << 5) // 内核级门，只能由内核调用
-#define IDT_DPL_USER (3 << 5)   // 用户级门，允许用户程序调用
+#define IDT_PRESENT 1
+#define IDT_DPL_KERNEL 0
+#define IDT_DPL_USER 3
 
 // 中断号
 #define IRQ_APIC    33
@@ -241,17 +241,6 @@ struct tss {
 // 存储中断/异常/系统调用/信号处理时的信息
 struct pt_regs {
     /*
-     * 保存这些通用寄存器
-     * 因为有的用户程序会使用他们
-     */
-    uint64_t r15;
-    uint64_t r14;
-    uint64_t r13;
-    uint64_t r12;
-    uint64_t rbp;
-    uint64_t rbx;
-
-    /*
      * 调用者保存寄存器
      * 包括系统调用参数寄存器
      * 
@@ -261,15 +250,26 @@ struct pt_regs {
      * 因此它们在系统调用时同时作为：
      * 通用寄存器和保存关键控制寄存器值
      */
-    uint64_t r11;   // 系统调用时保存用户rflags，也作为通用寄存器r11
-    uint64_t r10;   // 系统调用第4个参数 
-    uint64_t r9;    // 系统调用第6个参数 
-    uint64_t r8;    // 系统调用第5个参数 
-    uint64_t rax;   // 系统调用号/返回值 
-    uint64_t rcx;   // 系统调用时保存用户rip，也作为通用寄存器rcx 
-    uint64_t rdx;   // 系统调用第3个参数 
-    uint64_t rsi;   // 系统调用第2个参数 
     uint64_t rdi;   // 系统调用第1个参数 
+    uint64_t rsi;   // 系统调用第2个参数 
+    uint64_t rdx;   // 系统调用第3个参数 
+    uint64_t rcx;   // 系统调用时保存用户rip，也作为通用寄存器rcx 
+    uint64_t rax;   // 系统调用号/返回值 
+    uint64_t r8;    // 系统调用第5个参数 
+    uint64_t r9;    // 系统调用第6个参数 
+    uint64_t r10;   // 系统调用第4个参数 
+    uint64_t r11;   // 系统调用时保存用户rflags，也作为通用寄存器r11
+
+    /*
+     * 保存这些通用寄存器
+     * 因为有的用户程序会使用他们
+     */
+    uint64_t rbx;
+    uint64_t rbp;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
 
     uint64_t vector;     // 中断/异常向量号
     uint64_t error_code; // 错误码（如果有），否则为0

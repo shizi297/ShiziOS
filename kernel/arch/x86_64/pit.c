@@ -17,11 +17,11 @@
 #define PIT_SEL0            0x00
 #define PIT_RW_LSB_MSB      0x30
 #define PIT_MODE0           0x00        // 模式0，单次
-#define PIT_MODE3           0x06        // 模式3，周期
+#define PIT_MODE2           0x04        // 模式2，周期中断（rate generator）
 #define PIT_BINARY          0x00
 
 #define PIT_CTRL_ONESHOT    (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE0 | PIT_BINARY)  
-#define PIT_CTRL_PERIODIC   (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE3 | PIT_BINARY)  
+#define PIT_CTRL_PERIODIC   (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE2 | PIT_BINARY)  
 
 #define PIT_GSI 0
 
@@ -59,7 +59,7 @@ static void pit_set_value(uint64_t value) {
 }
 
 // 中断处理
-static void pit_irq(void) {
+static void pit_irq(struct pt_regs *regs) {
     void (*handler)(void);
 
     // 获取 PIT 设备自己的事件处理函数
@@ -123,8 +123,12 @@ bool pit_init(void) {
         1193182
     );
 
+    // 禁用pic
+    outb(0xFF, 0xA1); 
+    outb(0xFF, 0x21); 
+
     // 注册到ioapic
-    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, get_apic_id(), 0);
+    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, get_apic_id(), IOAPIC_POLARITY);
     if (!is_success) return false;
 
     return true;

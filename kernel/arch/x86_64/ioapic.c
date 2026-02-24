@@ -7,9 +7,15 @@
 #include <acpi.h>
 #include <serial.h>
 #include <mm_addr.h>
+#include <heap.h>
 #include <ioapic.h>
 
-#define IOAPIC_VER 0x01 // 版本寄存器的偏移
+// 寄存器偏移
+#define IOAPIC_IOREGSEL 0x00    // 索引寄存器
+#define IOAPIC_IOWIN    0x10    // 数据寄存器
+
+// 内部寄存器
+#define IOAPIC_VER 0x01 // 版本寄存器的索引
 
 #define IOAPIC_INTR_START_BIT 16    // ioapi重定向表索引起始位 
 #define IOAPIC_MAX_INTR(reg_val) \
@@ -34,6 +40,33 @@ struct {
 } static ioapic_info = {0};
 
 /**
+ * 向ioapic的内部寄存器写入32位值
+ * 
+ * @param reg 寄存器索引
+ * @param val 要写入的值
+ */
+static inline void ioapic_write(uint32_t reg, uint32_t val) {
+    volatile uint32_t *io_sel = (volatile uint32_t *)ioapic_info.base;      // IOREGSEL 在偏移 0
+    volatile uint32_t *io_win = (volatile uint32_t *)(ioapic_info.base + 0x10); // IOWIN 在偏移 0x10
+    *io_sel = reg;
+    *io_win = val;
+}
+
+/**
+ * 从ioapic的内部寄存器读取32位值
+ * 
+ * @parma reg 寄存器索引
+ * 
+ * @return 读到的值
+ */
+static inline uint32_t ioapic_read(uint32_t reg) {
+    volatile uint32_t *io_sel = (volatile uint32_t *)ioapic_info.base;
+    volatile uint32_t *io_win = (volatile uint32_t *)(ioapic_info.base + 0x10);
+    *io_sel = reg;
+    return *io_win;
+}
+
+/**
  * 初始化ioapic
  * 
  * @return 成功：true
@@ -45,13 +78,14 @@ bool ioapic_init(void) {
     bool is_success = acpi_get_ioapic_info(&acpi_ioapic_info);
     if (!is_success) return false;
 
-    // 转为虚拟地址
-    ioapic_info.base = (uintptr_t)PHYS_TO_LINEAR(acpi_ioapic_info.base);
+    // 映射虚拟地址
+    ioapic_info.base = (uintptr_t)vheap_map_mmio(acpi_ioapic_info.base, PAGE_SIZE);
+    if (!ioapic_info.base) return false;
+
     ioapic_info.start_gsi = acpi_ioapic_info.start_gsi;
 
-    volatile uint32_t *reg_ptr = (volatile uint32_t *)(ioapic_info.base + IOAPIC_VER);
-    uint32_t reg_val = *reg_ptr;
-
+    // 通过索引窗口读取版本寄存器
+    uint32_t reg_val = ioapic_read(IOAPIC_VER);
     uint32_t max_intr = IOAPIC_MAX_INTR(reg_val);
     ioapic_info.gsi_count = max_intr + 1;
 
@@ -81,16 +115,9 @@ bool ioapic_register_gsi(
         gsi < ioapic_info.start_gsi
     ) return false;
 
-    // 重定向表的地址
-    volatile uint32_t *low_addr = 
-        (volatile uint32_t*)(
-            ioapic_info.base +
-            IOAPIC_REDIR_TABLE + 
-            IOAPIC_ENTRY_BYTE *
-            (gsi - ioapic_info.start_gsi)
-        );
-    
-    volatile uint32_t *high_addr = (volatile uint32_t *)(low_addr + 1);
+    // 计算重定向表项的索引
+    uint32_t index_low = IOAPIC_REDIR_TABLE + 2 * (gsi - ioapic_info.start_gsi);
+    uint32_t index_high = index_low + 1;
 
     /*
      * 构建低32位的值
@@ -105,8 +132,8 @@ bool ioapic_register_gsi(
 
     uint32_t high = dest;
 
-    *low_addr = low;
-    *high_addr = high;
+    ioapic_write(index_low, low);
+    ioapic_write(index_high, high);
 
     return true;
 }
@@ -122,16 +149,10 @@ void ioapic_mask_gsi(uint32_t gsi) {
         gsi < ioapic_info.start_gsi
     ) return;
 
-    volatile uint32_t *low = 
-        (volatile uint32_t*)(
-            ioapic_info.base +
-            IOAPIC_REDIR_TABLE + 
-            IOAPIC_ENTRY_BYTE *
-            (gsi - ioapic_info.start_gsi)
-        );
-    uint32_t val = *low;
+    uint32_t index_low = IOAPIC_REDIR_TABLE + 2 * (gsi - ioapic_info.start_gsi);
+    uint32_t val = ioapic_read(index_low);
     val |= (1 << IOAPIC_MASK_BIT);
-    *low = val;
+    ioapic_write(index_low, val);
 }
 
 /**
@@ -145,14 +166,8 @@ void ioapic_unmask_gsi(uint32_t gsi) {
         gsi < ioapic_info.start_gsi
     ) return;
 
-        volatile uint32_t *low = 
-        (volatile uint32_t*)(
-            ioapic_info.base +
-            IOAPIC_REDIR_TABLE + 
-            IOAPIC_ENTRY_BYTE *
-            (gsi - ioapic_info.start_gsi)
-        );
-    uint32_t val = *low;
+    uint32_t index_low = IOAPIC_REDIR_TABLE + 2 * (gsi - ioapic_info.start_gsi);
+    uint32_t val = ioapic_read(index_low);
     val &= ~(1 << IOAPIC_MASK_BIT);
-    *low = val;
+    ioapic_write(index_low, val);
 }

@@ -212,6 +212,25 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     };
     __asm__ volatile("lgdt %0" : : "m"(gdtr));
 
+    // 刷新CS
+    __asm__ volatile(
+        "pushq %0\n\t"
+        "pushq $1f\n\t"
+        "lretq\n"
+        "1:\n\t"
+        : : "r"((uint64_t)GDT_KERNEL_CODE_SELECTOR)
+    );
+
+    // 刷新数据段寄存器
+    __asm__ volatile(
+        "mov %0, %%ds\n\t"
+        "mov %0, %%es\n\t"
+        "mov %0, %%ss\n\t"
+        "mov %0, %%fs\n\t"
+        "mov %0, %%gs\n\t"
+        : : "r"((uint16_t)GDT_KERNEL_DATA_SELECTOR)
+    );
+
     // 加载IDT
     struct {
         uint16_t limit;
