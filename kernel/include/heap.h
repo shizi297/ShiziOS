@@ -101,3 +101,14 @@ void vheap_free(as_t *as, void *addr, size_t size);
  * @param as 进程地址空间描述符
  */
 void vheap_free_all(as_t *as);
+
+/**
+ * 映射物理地址到mmio
+ * 
+ * @param phy 物理地址
+ * @param len 要映射的大小
+ * 
+ * @return 成功：映射到的虚拟地址
+ * @return 失败：NULL
+ */
+void *vheap_map_mmio(uint64_t phy_addr, uint64_t len);

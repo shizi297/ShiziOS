@@ -181,6 +181,8 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
     vm_prot_t mmio_prot = VM_READ | VM_WRITE | VM_UC;
     uintptr_t current_mmio = mmio_addr;
      
+    page_table_blocks_struct *ptb = kheap_alloc(PAGE_SIZE);
+    if (!ptb) goto fail;
 
     vmm_result_t result = mmu_add_map(
         mmu_get_kernel_pgd(),
@@ -188,8 +190,8 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
         (uintptr_t)phy_addr,
         page_count,   
         mmio_prot,  
-        0,  // 没有特殊标志
-        NULL    // 没有ptb
+        0,      // 没有特殊标志
+        ptb     // 没有ptb
     );
 
     if (result != VMM_OK) goto fail;

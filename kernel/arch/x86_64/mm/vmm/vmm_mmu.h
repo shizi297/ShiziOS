@@ -138,6 +138,9 @@ void mmu_invalidate_all(void);
  */
 void mmu_set_pgd(uintptr_t pgd_phys);
 
+// 代表特殊映射，不需要ptb
+#define NO_PTB ((page_table_blocks_struct *)1)
+
 /*
  * 创建页表映射
  * 
