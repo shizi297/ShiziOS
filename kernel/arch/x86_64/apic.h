@@ -31,4 +31,4 @@ void apic_eoi(void);
 void apic_boot_init(void);
 
 // 初始化apic
-void apic_init(void);
+bool apic_init(void);

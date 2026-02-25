@@ -15,6 +15,7 @@
 #include <ioapic.h>
 #include <tsc.h>
 #include <apic.h>
+#include <spinlock.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
@@ -253,15 +254,20 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
 
     // 开启中断
     irq_on();
-    
-    apic_init();
+
+    // 定义一个静态自旋锁，保护串口输出
+    static spinlock_t init_print_lock = SPIN_LOCK_INIT;
+
+    spin_lock(&init_print_lock);
+    if (!tsc_init()) SMP_PANIC("tsc init failed\n");
+    if (!apic_init()) SMP_PANIC("apic init failed\n");
+    spin_unlock(&init_print_lock);
 
     // 如果是bp，执行特定初始化
     if (logical_id == bootboot->bspid) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
-        if (!tsc_init()) SMP_PANIC("tsc init failed\n");  
     }
 
     SMP_PRINT("smp init succeed\n");

@@ -23,7 +23,7 @@
 #define PIT_CTRL_ONESHOT    (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE0 | PIT_BINARY)  
 #define PIT_CTRL_PERIODIC   (PIT_SEL0 | PIT_RW_LSB_MSB | PIT_MODE2 | PIT_BINARY)  
 
-#define PIT_GSI 0
+#define PIT_GSI 2
 
 // 停止时钟事件
 static void pit_shutdown(void) {

@@ -32,6 +32,19 @@
     serial_putchar('"'); \
     serial_puts("]\n")
 
+#define CLOCKSOURCE_FAIL(name, hz) \
+    serial_puts("[CLOCKSOURCE] register clocksource fail : ["); \
+    serial_puts("“name” = "); \
+    serial_putchar('"'); \
+    serial_puts(name); \
+    serial_putchar('"'); \
+    serial_puts(", "); \
+    serial_puts("“hz” = "); \
+    serial_putchar('"'); \
+    serial_put_dec(hz); \
+    serial_putchar('"'); \
+    serial_puts("]\n")
+
 typedef struct {
     clocksource_struct clocksource;
     struct list_head node;
@@ -71,6 +84,7 @@ void clocksource_init(void) {
  * 获取时钟源的值(返回ns)
  * 
  * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
+ * @param value 用于接收时钟源值的指针
  * 
  * @return 成功：true
  * @return 失败: false
@@ -114,6 +128,43 @@ bool clocksource_read(char *name, uint64_t *value) {
 }
 
 /**
+ * 获取时钟源设备的hz
+ * 
+ * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
+ * @param value 用于接收时钟源hz的指针
+ * 
+ * @return 成功：true
+ * @return 失败: false
+ */
+bool clocksource_get_dev_hz(char *name, uint64_t *hz) {
+    // 获取当前逻辑cpuid
+    uint64_t logical_id = get_logical_id();
+    struct list_head *head = &clocksource_head->head[logical_id];
+
+    // 使用最高精度的时钟
+    if (!name) {
+        if (list_empty(head)) {
+            // 没有时钟设备
+            CLOCKSOURCE_PANIC("no clock device");
+        }
+        clocksource_list_struct *first = list_first_entry(head, clocksource_list_struct, node);
+        *hz = first->clocksource.hz;
+        return true;
+    }
+
+    // 根据设备名称查找
+    clocksource_list_struct *pos = NULL;
+    list_for_each_entry_t(pos, head, clocksource_list_struct, node) {
+        if (strcmp(pos->clocksource.name, name)) {
+            *hz = pos->clocksource.hz;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
  * 注册时钟到时钟源框架
  * 
  * @param name 时钟名称
@@ -125,10 +176,13 @@ void clocksource_register(
     uint64_t (*read)(void),
     uint64_t hz
 ) {
+    bool success = true;
+
     clocksource_list_struct *current_list = 
-    (clocksource_list_struct *)kheap_alloc(sizeof(clocksource_list_struct));
+        (clocksource_list_struct *)kheap_alloc(sizeof(clocksource_list_struct));
     if (!current_list) {
-        CLOCKSOURCE_PANIC("memory alloc error");
+        success = false;
+        goto finish;
     }
 
     INIT_LIST_HEAD(&current_list->node);
@@ -162,7 +216,7 @@ void clocksource_register(
             if (pos->clocksource.hz < current_list->clocksource.hz) {
                 // 插入到 pos 节点之前
                 list_add_tail(&current_list->node, &pos->node);
-                return;
+                goto finish;
             }
         }
     }
@@ -173,6 +227,11 @@ void clocksource_register(
      */
     list_add_tail(&current_list->node, head);
 
-    // 输出注册信息
-    CLOCKSOURCE_INFO(name, hz);
+finish:
+    if (success) {
+        // 输出注册信息
+        CLOCKSOURCE_INFO(name, hz);
+    } else {
+        CLOCKSOURCE_FAIL(name, hz);
+    }
 }

@@ -99,6 +99,17 @@ void clocksource_init(void);
 bool clocksource_read(char *name, uint64_t *value);
 
 /**
+ * 获取时钟源设备的hz
+ * 
+ * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
+ * @param value 用于接收时钟源hz的指针
+ * 
+ * @return 成功：true
+ * @return 失败: false
+ */
+bool clocksource_get_dev_hz(char *name, uint64_t *hz);
+
+/**
  * 注册时钟到时钟源框架
  * 
  * @param name 时钟名称

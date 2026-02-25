@@ -87,7 +87,7 @@ add_custom_target(run
         -drive file=${CMAKE_SOURCE_DIR}/disk/shizios.img,format=raw,if=virtio 
         -m 2G 
         -smp 2 
-        -cpu max
+        -cpu max,+invtsc,tsc-frequency=2400000000
         -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 
         -serial stdio
@@ -112,7 +112,7 @@ add_custom_target(ram-run
         -drive file=/dev/shm/shizios/shizios.img,format=raw,if=virtio 
         -m 2G 
         -smp 2 
-        -cpu max
+        -cpu max,+invtsc,tsc-frequency=2400000000
         -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 
         -serial stdio

@@ -32,6 +32,19 @@
     serial_putchar('"'); \
     serial_puts("]\n")
 
+#define CLOCKEVENT_FAIL(name, hz) \
+    serial_puts("[CLOCKEVENT] register clockevent fail : ["); \
+    serial_puts("“name” = "); \
+    serial_putchar('"'); \
+    serial_puts(name); \
+    serial_putchar('"'); \
+    serial_puts(", "); \
+    serial_puts("“hz” = "); \
+    serial_putchar('"'); \
+    serial_put_dec(hz); \
+    serial_putchar('"'); \
+    serial_puts("]\n")
+
 
 typedef struct {
     clockevent_struct clockevent;
@@ -303,10 +316,13 @@ void clockevent_register(
     void (*set_value)(uint64_t value),
     uint64_t hz
 ) {
+    bool success = true;
+
     clockevent_list_struct *current_list = 
-    (clockevent_list_struct *)kheap_alloc(sizeof(clockevent_list_struct));
+        (clockevent_list_struct *)kheap_alloc(sizeof(clockevent_list_struct));
     if (!current_list) {
-        CLOCKEVENT_PANIC("memory alloc error");
+        success = false;
+        goto finish;
     }
 
     INIT_LIST_HEAD(&current_list->node);
@@ -344,7 +360,7 @@ void clockevent_register(
             if (pos->clockevent.hz < current_list->clockevent.hz) {
                 // 插入到 pos 节点之前
                 list_add_tail(&current_list->node, &pos->node);
-                return;
+                goto finish;
             }
         }
     }
@@ -355,6 +371,11 @@ void clockevent_register(
      */
     list_add_tail(&current_list->node, head);
 
-    // 打印注册驱动的信息
-    CLOCKEVENT_INFO(current_list->clockevent.name, current_list->clockevent.hz);
+finish:
+    if (success) {
+        // 打印注册驱动的信息
+        CLOCKEVENT_INFO(name, hz);
+    } else {
+        CLOCKEVENT_FAIL(name, hz);
+    }
 }

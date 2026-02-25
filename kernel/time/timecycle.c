@@ -77,10 +77,20 @@ static void calc_inverse_params(
     uint32_t mult, uint32_t shift,
     uint32_t *mult_inv, uint32_t *shift_inv
 ) {
-    uint32_t extra_shift = 32;
-    __uint128_t one = (__uint128_t)1 << (shift + extra_shift);
-    *mult_inv = (uint32_t)(one / mult);
-    *shift_inv = shift + extra_shift;
+    // 从 32 开始向下尝试，找到第一个能让结果在 32 位内的 extra_shift
+    for (uint32_t extra_shift = 32; extra_shift > 0; extra_shift--) {
+        __uint128_t one = (__uint128_t)1 << (shift + extra_shift);
+        uint64_t inv = (uint64_t)(one / mult);
+        if (inv <= UINT32_MAX) {
+            *mult_inv = (uint32_t)inv;
+            *shift_inv = shift + extra_shift;
+            return;
+        }
+    }
+    // 如果所有尝试都失败
+    *mult_inv = 0;
+    *shift_inv = shift;
+    TIMECYCLE_PANIC("cannot find valid inverse parameters");
 }
 
 /**
