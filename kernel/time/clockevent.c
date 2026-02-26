@@ -87,11 +87,12 @@ void clockevent_init(void) {
  * 
  * @param event_handler 回调函数的函数指针
  * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * @param out_selected_name 当成功且name为NULL时，返回被选中的设备名称
  * 
  * @return 失败： false
  * @return 成功： true
  */
-bool event_handler_register(void (*event_handler)(void), char *name) {
+bool event_handler_register(void (*event_handler)(void), char *name, const char **out_selected_name) {
     // 获取当前逻辑cpuid
     uint64_t logical_id = get_logical_id();
     struct list_head *head = &clockevent_head->head[logical_id];
@@ -102,9 +103,18 @@ bool event_handler_register(void (*event_handler)(void), char *name) {
             // 没有时钟设备
             CLOCKEVENT_PANIC("no clock device");
         }
-        clockevent_list_struct *first = list_first_entry(head, clockevent_list_struct, node);
-        first->clockevent.event_handler = event_handler;
-        return true;
+        clockevent_list_struct *pos;
+        list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+            if (pos->clockevent.event_handler == NULL) {
+                pos->clockevent.event_handler = event_handler;
+                if (out_selected_name) {
+                    *out_selected_name = pos->clockevent.name;
+                }
+                return true;
+            }
+        }
+        // 没有空闲设备
+        return false;
     }
 
     // 根据设备名称查找
@@ -112,6 +122,9 @@ bool event_handler_register(void (*event_handler)(void), char *name) {
     list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
         if (strcmp(pos->clockevent.name, name)) {  
             pos->clockevent.event_handler = event_handler;
+            if (out_selected_name) {
+                *out_selected_name = pos->clockevent.name;
+            }
             return true;
         }
     }
@@ -140,12 +153,8 @@ bool set_value_to_dev(uint64_t ns, char *name) {
 
         // 使用最高精度的时钟
         if (!name) {
-            if (list_empty(head)) {
-                // 没有时钟设备
-                CLOCKEVENT_PANIC("no clock device");
-            }
-            pos = list_first_entry(head, clockevent_list_struct, node);
-            found = true;
+            // name为NULL不再支持，直接返回失败
+            return false;
         } else {
             // 根据设备名称查找
             list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
@@ -210,12 +219,9 @@ void get_event_handler(char *name, void (**event_handler)(void)) {
 
         // 使用最高精度的时钟
         if (!name) {
-            if (list_empty(head)) {
-                // 没有时钟设备
-                CLOCKEVENT_PANIC("no clock device");
-            }
-            pos = list_first_entry(head, clockevent_list_struct, node);
-            found = true;
+            // name为NULL不再支持，直接返回空
+            *event_handler = NULL;
+            return;
         } else {
             // 根据设备名称查找
             list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
@@ -256,12 +262,8 @@ bool clockevent_set_mode(const char *name, clockevent_mode_t mode) {
 
         // 使用最高精度的时钟
         if (!name) {
-            if (list_empty(head)) {
-                // 没有时钟设备
-                CLOCKEVENT_PANIC("no clock device");
-            }
-            pos = list_first_entry(head, clockevent_list_struct, node);
-            found = true;
+            // name为NULL不再支持，直接返回失败
+            return false;
         } else {
             // 根据设备名称查找
             list_for_each_entry_t(pos, head, clockevent_list_struct, node) {

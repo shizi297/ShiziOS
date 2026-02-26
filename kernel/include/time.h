@@ -27,11 +27,12 @@ void clockevent_init(void);
  * 
  * @param event_handler 回调函数的函数指针
  * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * @param out_selected_name 当成功且name为NULL时，返回被选中的设备名称
  * 
  * @return 失败： false
  * @return 成功： true
  */
-bool event_handler_register(void (*event_handler)(void), char *name);
+bool event_handler_register(void (*event_handler)(void), char *name, const char **out_selected_name);
 
 /**
  * 设置中断值到设备
