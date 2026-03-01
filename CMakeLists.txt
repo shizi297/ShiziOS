@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.15)
 project(ShiziOS)
 
 # 工具链配置
-set(CMAKE_C_COMPILER x86_64-elf-gcc)
+set(CMAKE_C_COMPILER clang)
+set(CMAKE_C_COMPILER_TARGET x86_64-elf)
 set(CMAKE_ASM_NASM_COMPILER nasm)
 enable_language(ASM_NASM)
 
@@ -13,6 +14,15 @@ if(CCACHE_FOUND)
     message(STATUS "Using ccache launcher for C compiler: ccache ${CMAKE_C_COMPILER}")
 else()
     message(STATUS "No ccache found, using direct compiler: ${CMAKE_C_COMPILER}")
+endif()
+
+# 查找并启用 lld 链接器
+find_program(LLD_FOUND ld.lld)
+if(LLD_FOUND)
+    add_link_options("-fuse-ld=lld")
+    message(STATUS "Using lld linker: ${LLD_FOUND}")
+else()
+    message(STATUS "No lld found, using default linker")
 endif()
 
 # 编译选项
@@ -47,7 +57,7 @@ add_subdirectory(kernel/arch/x86_64)      # x86_64架构模块
 add_subdirectory(kernel/arch/x86_64/mm)   # x86_64架构特定内存管理
 add_subdirectory(kernel/drivers)          # 通用驱动模块
 add_subdirectory(kernel/mm)               # 通用内存管理模块
-add_subdirectory(kernel/lib)              # 库模块
+add_subdirectory(kernel/lib)               # 库模块
 add_subdirectory(kernel/time)              # 时间管理模块
 
 # 链接生成内核

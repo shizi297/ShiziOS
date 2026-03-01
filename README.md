@@ -9,7 +9,7 @@ This project provides a precompiled version. The `disk` folder contains an image
 
 ### Build from Source
 You need to install the following components:
-- x86_64-elf-gcc
+- clang
 - cmake
 - make
 

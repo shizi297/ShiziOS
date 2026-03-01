@@ -253,3 +253,23 @@ void *vheap_map_mmio(uint64_t phy_addr, uint64_t len) {
 
     return (void *)vmm_map_mmio(phy_addr, page_count);
 }
+
+/*
+ * 创建一个新的进程地址空间
+ * 自动分配页全局目录
+ * 
+ * @return 失败：NULL
+ * @return 成功：进程地址空间的虚拟地址
+ */
+as_t *vheap_create_as(void) {
+    return vmm_create_as();
+}
+
+/*
+ * 销毁进程地址空间
+ *
+ * @param as 进程地址空间的虚拟地址
+ */
+void vheap_destroy_as(as_t *as) {
+    return vmm_destroy_as(as);
+}

@@ -63,6 +63,7 @@ static inline void serial_put_dec(uint64_t value) {
     serial_puts(p);
 }
 
+__attribute__((noreturn))
 static inline void panic(const char* msg) {
     // 关闭中断，避免打断
     __asm__ __volatile__("cli");

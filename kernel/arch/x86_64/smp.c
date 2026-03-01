@@ -289,7 +289,8 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
  * 使用中断门，DPL=0，IST=0
  */
 bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr) {
-    if (vector >= 256 || vector < 32) { 
+    // vector是uint8_t，不会超过255，不需要检查
+    if (vector < 32) { 
         // 无效的中断向量
         return false;
     }
@@ -311,7 +312,8 @@ bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr) {
  * @param vector 中断向量号
  */
 void smp_irq_unregister_handler(uint8_t vector) {
-    if (vector >= 256 || vector < 32) { 
+    // vector是uint8_t，不会超过255，不需要检查
+    if (vector < 32) { 
         // 无效的中断向量
         return;
     }
