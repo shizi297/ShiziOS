@@ -50,3 +50,19 @@ void pmm_sub_map_count(uint64_t pfn);
  * @param pfn 要清零映射计数的页帧号
  */
 void pmm_zero_map_count(uint64_t pfn);
+
+/*
+ * 设置页表页的上层页表项指针
+ *
+ * @param pfn 页表页的页帧号
+ * @param ptr 上层页表项的虚拟地址
+ */
+void pmm_set_on_pte_ptr(uint64_t pfn, uintptr_t ptr);
+
+/*
+ * 获取页表页的上层页表项指针
+ *
+ * @param pfn 页表页的页帧号
+ * @return 上层页表项的虚拟地址
+ */
+uintptr_t pmm_get_on_pte_ptr(uint64_t pfn);

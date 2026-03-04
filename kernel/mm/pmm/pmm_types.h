@@ -7,23 +7,20 @@
 
 #define CACHE_LINE_SIZE 64
 
-#include <stdint.h>
-#include <spinlock.h>
 
 #include "pmm.h"
+#include <stdint.h>
+#include <spinlock.h>
+#include <list.h>
 
-
-typedef struct free_list_node {
-    struct free_list_node *prev;  
-    struct free_list_node *next;  
-} free_list_t;
+typedef struct list_head free_list_t;
 
 /*
  * 空闲链表的头节点
  * 指向第一个链表节点
  */
 typedef struct {
-    free_list_t *head;                     
+    struct list_head head;
 } free_area_t;
 
 typedef struct {
@@ -36,7 +33,7 @@ typedef struct {
 } zone_t;
 
 //内存块结构体，多个页组成，order大小与空闲链表相关
-typedef struct __attribute__((packed)) {
+typedef struct {
     uint8_t is_head:1;   //是否为块的首页
     uint8_t is_free:1;    //是否被分配
     uint8_t flags:6;    //预留
@@ -46,6 +43,8 @@ typedef struct __attribute__((packed)) {
     
     uint16_t map_count;    //映射计数
     uint32_t ref_count;     //引用计数
+
+    uintptr_t on_pte_ptr;   // 页表页的上层页表项（不是页表页）指针（虚拟地址）
 } mem_block_t;
 
 typedef struct {

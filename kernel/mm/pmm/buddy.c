@@ -3,15 +3,18 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
+#include "pmm.h"
 #include <stdint.h>
 #include <bootboot.h>
 #include <mm/bootmem/boot_allot.h>
 #include <serial.h>
 #include <spinlock.h>
 #include <stddef.h>
-#include "pmm.h"
+#include <list.h>
+#include <bitmap.h>
 
-
+#define PMM_PANIC(str) panic("[PMM] ERROR: " str)
+#define PMM_PRINT(str) serial_puts("[PMM] " str)
 
 static zone_t zones[3];
 
@@ -32,6 +35,12 @@ static uint64_t* bitmap64 = NULL;
  * 退化为page_struct
  */
 static mem_block_array_t* mem_block = NULL;
+
+static inline void check_pfn_valid(uint64_t pfn) {
+    if (pfn > max_pfn) {
+        PMM_PANIC("invalid pfn");
+    }
+}
 
 static void calculate_max_pfn(void) {
     size_t num_entries = (((BOOTBOOT*)BOOTBOOT_INFO)->size - 128) / sizeof(MMapEnt);
@@ -72,15 +81,12 @@ static void alloc_bitmap_init(void){
     
     void* alloc_bitmap = boot_alloc(alloc_bitmap_size);
     
-    size_t qword_count = (alloc_bitmap_size * PAGE_SIZE) / sizeof(uint64_t);
     bitmap64 = (uint64_t*)alloc_bitmap;
     
     void* boot_bitmap = boot_alloc_get_bitmap();
     
     // 初始化位图，将所有位设置为1（默认已分配）
-    for (size_t i = 0; i < qword_count; i++) {
-        bitmap64[i] = 0xFFFFFFFFFFFFFFFF;
-    }
+    bitmap_fill((bitmap_t*)bitmap64, max_pfn + 1);
     
     // 遍历BOOTBOOT内存映射，将空闲区域标记为0
     MMapEnt* mmap_ent = &((BOOTBOOT*)BOOTBOOT_INFO)->mmap;
@@ -101,10 +107,7 @@ static void alloc_bitmap_init(void){
             if (end_pfn > max_pfn + 1) end_pfn = max_pfn + 1;
             
             for (uint64_t pfn = start_pfn; pfn < end_pfn; pfn++) {
-                size_t index = pfn / 64;           
-                size_t bit = pfn % 64;             
-                
-                bitmap64[index] &= ~(1ULL << bit);
+                bitmap_clear((bitmap_t*)bitmap64, pfn);
             }
         }
     }
@@ -115,19 +118,11 @@ static void alloc_bitmap_init(void){
      */
     if (boot_bitmap) {
         for (size_t pfn = 0; pfn < BOOT_ALLOC_MAX_PAGES; pfn++) {
-            size_t boot_byte_index = pfn / 8;
-            size_t boot_bit_index = pfn % 8;
-            uint8_t boot_byte = ((uint8_t*)boot_bitmap)[boot_byte_index];
-            bool is_allocated = (boot_byte >> boot_bit_index) & 1;
-            
-            size_t index = pfn / 64;
-            size_t bit = pfn % 64;
-            uint64_t mask = 1ULL << bit;
-            
+            bool is_allocated = bitmap_check((bitmap_t*)boot_bitmap, pfn);
             if (is_allocated) {
-                bitmap64[index] |= mask;
+                bitmap_set((bitmap_t*)bitmap64, pfn);
             } else {
-                bitmap64[index] &= ~mask;
+                bitmap_clear((bitmap_t*)bitmap64, pfn);
             }
         }
     }
@@ -143,10 +138,7 @@ static void alloc_bitmap_init(void){
         uint64_t end_pfn = (boot_bitmap_phys + BOOT_ALLOC_BITMAP_SIZE + PAGE_SIZE - 1) / PAGE_SIZE;
         
         for (uint64_t pfn = start_pfn; pfn < end_pfn; pfn++) {
-            size_t index = pfn / 64;           
-            size_t bit = pfn % 64;             
-            
-            bitmap64[index] &= ~(1ULL << bit);
+            bitmap_clear((bitmap_t*)bitmap64, pfn);
         }
     }
 }
@@ -161,10 +153,7 @@ static void *bitmap_alloc(uint64_t pages) {
     uint64_t start_pfn = 0;    
     
     for (uint64_t i = 0; i <= max_pfn; i++) {
-        size_t index = i / 64;  
-        size_t bit = i % 64;    
-        
-        if ((bitmap64[index] & (1ULL << bit)) == 0) {
+        if (!bitmap_check((bitmap_t*)bitmap64, i)) {
             if (consecutive == 0) {
                 start_pfn = i;
             }
@@ -172,9 +161,7 @@ static void *bitmap_alloc(uint64_t pages) {
             
             if (consecutive == pages) {
                 for (uint64_t j = start_pfn; j < start_pfn + pages; j++) {
-                    size_t idx = j / 64;
-                    size_t b = j % 64;
-                    bitmap64[idx] |= (1ULL << b);
+                    bitmap_set((bitmap_t*)bitmap64, j);
                 }
                 return PHYS_TO_LINEAR(start_pfn * PAGE_SIZE);
             }
@@ -183,7 +170,8 @@ static void *bitmap_alloc(uint64_t pages) {
         }
     }
     
-    panic("[PMM] ERROR: Cannot allocate required memory for system initialization\n");
+    PMM_PANIC("Cannot allocate required memory for system initialization");
+    return NULL;
 }
 
 /*
@@ -226,7 +214,7 @@ static void zone_init(void){
     for(i = 0; i < 3; i++){
         spinlock_init(&zones[i].lock);  
         for(j = 0; j < MAX_ORDER; j++){
-            zones[i].free_areas[j].head = NULL;
+            INIT_LIST_HEAD(&zones[i].free_areas[j].head);
         }
     }
 }
@@ -242,37 +230,7 @@ static void zone_init(void){
  * 因为访问了空闲链表
  */ 
 static void add_free_lists(free_list_t *free_list, uint8_t zone_count, uint8_t order_count) {
-    free_area_t *free_area = &zones[zone_count].free_areas[order_count];
-    
-    free_list->prev = NULL;
-    free_list->next = NULL;
-    
-    if (free_area->head == NULL) {
-        free_area->head = free_list;
-    } else {
-        free_list_t *current = free_area->head;
-        free_list_t *prev = NULL;
-        
-        // 按地址顺序查找插入位置
-        while (current != NULL && (uintptr_t)current < (uintptr_t)free_list) {
-            prev = current;
-            current = current->next;
-        }
-        
-        if (prev == NULL) {
-            free_list->next = free_area->head;
-            free_area->head->prev = free_list;
-            free_area->head = free_list;
-        } else if (current == NULL) {
-            prev->next = free_list;
-            free_list->prev = prev;
-        } else {
-            prev->next = free_list;
-            free_list->prev = prev;
-            free_list->next = current;
-            current->prev = free_list;
-        }
-    }
+    list_add(free_list, &zones[zone_count].free_areas[order_count].head);
 }
 
 /**
@@ -287,7 +245,7 @@ static void add_free_lists(free_list_t *free_list, uint8_t zone_count, uint8_t o
  */
 static void remove_free_lists(uint64_t pfn) {
     uintptr_t phys_addr = pfn * PAGE_SIZE;
-    free_list_t *node = (free_list_t *)PHYS_TO_LINEAR(phys_addr);
+    struct list_head *node = (struct list_head *)PHYS_TO_LINEAR(phys_addr);
     uint8_t zone = mem_block->blocks[pfn].zone;
     uint8_t order = mem_block->blocks[pfn].order;
 
@@ -296,18 +254,7 @@ static void remove_free_lists(uint64_t pfn) {
         return;
     }
     
-    free_list_t *next = node->next;
-    free_list_t *prev = node->prev;
-
-    if (node->prev == NULL) {
-        zones[zone].free_areas[order].head = next;
-    } else {
-        prev->next = next;
-    }
-
-    if (next != NULL) {
-        next->prev = prev;
-    }
+    list_del(node);
 }
 
 /*
@@ -406,9 +353,7 @@ static free_list_t* merge_buddy_block(uint64_t pfn1, uint64_t pfn2) {
  * 因为伙伴系统建立后使用mem_block
  */ 
 static inline bool page_is_alloc(uint64_t pfn) {
-    size_t index = pfn / 64;
-    size_t bit = pfn % 64;
-    return (bitmap64[index] >> bit) & 1ULL;
+    return bitmap_check((bitmap_t*)bitmap64, pfn);
 }
 
 /*
@@ -421,10 +366,6 @@ static void free_lists_init(void) {
     // 遍历每个内存区域
     for (int zone_id = ZONE_DMA; zone_id <= ZONE_NORMAL; zone_id++) {
         zone_t* zone = &zones[zone_id];
-        
-        for (int order = 0; order < MAX_ORDER; order++) {
-            zone->free_areas[order].head = NULL;
-        }
         
         uint64_t pfn = zone->start_pfn;
         
@@ -484,7 +425,7 @@ static void free_lists_init(void) {
 }
 
 static void print_zone_info(void) {
-    serial_puts("[PMM] Zone DMA: 0-16MB");
+    PMM_PRINT("Zone DMA: 0-16MB");
     
     uint64_t total_memory = (max_pfn + 1) * PAGE_SIZE;
     uint64_t total_mb = total_memory / (1024 * 1024);
@@ -505,13 +446,12 @@ static void print_zone_info(void) {
 //计算总空闲内存
 static uint64_t calculate_total_free_pages(void) {
     uint64_t total_free_pages = 0;
+    struct list_head *pos;
     
     for (int z = ZONE_DMA; z <= ZONE_NORMAL; z++) {
         for (int o = 0; o < MAX_ORDER; o++) {
-            free_list_t* node = zones[z].free_areas[o].head;  
-            while (node) {
+            list_for_each(pos, &zones[z].free_areas[o].head) {
                 total_free_pages += (1ULL << o);
-                node = node->next;
             }
         }
     }
@@ -574,11 +514,9 @@ static void mem_block_init(void) {
 
     for (uint8_t zone_id = ZONE_DMA; zone_id <= ZONE_NORMAL; zone_id++) {
         for (uint8_t order_id = 0; order_id < MAX_ORDER; order_id++) {
-            for (free_list_t *free_lists_ptr = zones[zone_id].free_areas[order_id].head; 
-                 free_lists_ptr != NULL; 
-                 free_lists_ptr = free_lists_ptr->next) {
-                
-                uintptr_t phys_addr = LINEAR_TO_PHYS((uintptr_t)free_lists_ptr);
+            struct list_head *pos;
+            list_for_each(pos, &zones[zone_id].free_areas[order_id].head) {
+                uintptr_t phys_addr = LINEAR_TO_PHYS((uintptr_t)pos);
                 pfn = phys_addr >> PAGE_SHIFT;
                 uint64_t pages = 1ULL << order_id;
                 
@@ -603,11 +541,6 @@ static void mem_block_init(void) {
  * 
  * 
  * - order必须小于MAX_ORDER
- * 
- * 1. 在指定zone的对应order链表中查找空闲块
- * 2. 若找不到，尝试更高order（拆分）
- * 3. 若zone不足，回退到上一个zone
- * 4. 更新位图和mem_block元数据
  */
 uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
     // 检查zone和order是否合规
@@ -635,13 +568,14 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
      * 会一直向上寻找
      */
     for (uint8_t current_order = order; current_order < MAX_ORDER; current_order++) {
-        free_list_t *head = zones[zone].free_areas[current_order].head;
+        struct list_head *head = &zones[zone].free_areas[current_order].head;
 
-        if (head == NULL) {
+        if (list_empty(head)) {
             continue;  // 当前oarder没有空闲块
         } else {
             // 找到空闲块保存信息退出循环
-            pfn = LINEAR_TO_PHYS((uintptr_t)head) >> PAGE_SHIFT;
+            struct list_head *first = head->next;
+            pfn = LINEAR_TO_PHYS((uintptr_t)first) >> PAGE_SHIFT;
             
             if (mem_block->blocks[pfn].is_free == 0 ||
                 mem_block->blocks[pfn].order != current_order ||
@@ -701,13 +635,9 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
  * 释放内存
  * 
  * @param pfn 被释放的伙伴块的页帧号
- * 
- * 释放后会尝试合并伙伴
- * 只要有一次合并成功
- * 就继续向上尝试合并
- * 直到到达MAX_ORDER或者没有伙伴块
  */
 void pmm_free_pages(uint64_t pfn) {
+    check_pfn_valid(pfn);
     /*
      * 获取pfn的zone
      * 获取zone不需要锁
@@ -747,82 +677,33 @@ void pmm_free_pages(uint64_t pfn) {
         return;
     }
     
-    
     free_list_t *addr = (free_list_t *)PHYS_TO_LINEAR(pfn * PAGE_SIZE);
     add_free_lists(addr, zone, order);
     
     /*
      * 尝试合并伙伴块
-     * 检测节点是左伙伴还是右伙伴
-     * 
-     * 如果是左伙伴
-     * 就计算右伙伴的pfn
-     * 检测右伙伴的pfn是否和前驱指针的pfn相同
-     * 如果相同就合并
-     * 不相同就继续检查
-     * 
-     * 如果是右伙伴
-     * 就计算左伙伴的pfn
-     * 检测左伙伴的pfn是否和后继指针的pfn相同
-     * 如果相同就合并
-     * 不相同就退出循环
-     */ 
+     * 直接计算伙伴pfn并通过mem_block检查状态
+     */
     {
-        free_list_t *current_node = addr;
         uint64_t current_pfn = pfn;
         uint8_t current_order = order;
-        bool can_merge = true;  
         
-        while (can_merge && current_order < MAX_ORDER - 1) {
-            can_merge = false;  // 默认下次不合并
+        while (current_order < MAX_ORDER - 1) {
+            uint64_t buddy_pfn = current_pfn ^ (1ULL << current_order);
             
-            // 判断当前节点是左伙伴还是右伙伴
-            bool is_left = ((current_pfn & (1ULL << current_order)) == 0);
-            uint64_t buddy_pfn;
-            
-            if (is_left) {
-                // 当前是左伙伴，计算右伙伴的pfn
-                buddy_pfn = current_pfn + (1ULL << current_order);
+            if (buddy_pfn <= max_pfn &&
+                mem_block->blocks[buddy_pfn].is_free &&
+                mem_block->blocks[buddy_pfn].order == current_order &&
+                mem_block->blocks[buddy_pfn].zone == zone) {
                 
-                // 检查后继节点是否存在且是当前节点的右伙伴
-                if (current_node->next != NULL) {
-                    uint64_t next_pfn = LINEAR_TO_PHYS((uintptr_t)current_node->next) >> PAGE_SHIFT;
-                    if (next_pfn == buddy_pfn) {
-                        // 合并
-                        free_list_t *merged_node = merge_buddy_block(current_pfn, buddy_pfn);
-                        if (merged_node != NULL) {
-                            // 合并成功，更新当前节点和状态
-                            current_node = merged_node;
-                            current_pfn = LINEAR_TO_PHYS((uintptr_t)merged_node) >> PAGE_SHIFT;
-                            current_order = mem_block->blocks[current_pfn].order;
-                            can_merge = true;   // 可以继续向上合并
-                            continue;
-                        }
-                    }
-                }
-            } else {
-                // 当前是右伙伴，计算左伙伴的pfn
-                buddy_pfn = current_pfn - (1ULL << current_order);
-                
-                // 检查前驱节点是否存在且是当前节点左伙伴
-                if (current_node->prev != NULL) {
-                    uint64_t prev_pfn = LINEAR_TO_PHYS((uintptr_t)current_node->prev) >> PAGE_SHIFT;
-                    if (prev_pfn == buddy_pfn) {
-                        // 执行合并
-                        free_list_t *merged_node = merge_buddy_block(buddy_pfn, current_pfn);
-                        if (merged_node != NULL) {
-                            // 合并成功，更新当前节点和状态
-                            current_node = merged_node;
-                            current_pfn = LINEAR_TO_PHYS((uintptr_t)merged_node) >> PAGE_SHIFT;
-                            current_order = mem_block->blocks[current_pfn].order;
-                            can_merge = true; // 可以继续向上合并
-                            continue;
-                        }
-                    }
+                free_list_t *merged_node = merge_buddy_block(current_pfn, buddy_pfn);
+                if (merged_node != NULL) {
+                    current_pfn = current_pfn < buddy_pfn ? current_pfn : buddy_pfn;
+                    current_order++;
+                    continue;
                 }
             }
-            
-            // 如果无法合并，退出循环
+            break;
         }
     }
     
@@ -837,6 +718,7 @@ void pmm_free_pages(uint64_t pfn) {
  * @param pfn 要增加引用计数的页帧号
  */
 void pmm_add_ref_count(uint64_t pfn) {
+    check_pfn_valid(pfn);
     spin_lock(&mem_block->lock);
     
     mem_block_t* block = &mem_block->blocks[pfn];
@@ -857,6 +739,7 @@ void pmm_add_ref_count(uint64_t pfn) {
  * @param pfn 要增加映射计数的页帧号
  */
 void pmm_add_map_count(uint64_t pfn) {
+    check_pfn_valid(pfn);
     spin_lock(&mem_block->lock);
     
     mem_block_t* block = &mem_block->blocks[pfn];
@@ -878,6 +761,7 @@ void pmm_add_map_count(uint64_t pfn) {
  * @param pfn 要减少映射计数的页帧号
  */
 void pmm_sub_map_count(uint64_t pfn) {
+    check_pfn_valid(pfn);
     spin_lock(&mem_block->lock);
     
     mem_block_t* block = &mem_block->blocks[pfn];
@@ -902,6 +786,7 @@ void pmm_sub_map_count(uint64_t pfn) {
  * @param pfn 要清零映射计数的页帧号
  */
 void pmm_zero_map_count(uint64_t pfn) {
+    check_pfn_valid(pfn);
     spin_lock(&mem_block->lock);
     
     mem_block_t* block = &mem_block->blocks[pfn];
@@ -917,8 +802,45 @@ void pmm_zero_map_count(uint64_t pfn) {
     spin_unlock(&mem_block->lock);
 }
 
+/*
+ * 设置页表页的上层页表项指针
+ *
+ * @param pfn 页表页的页帧号
+ * @param ptr 上层页表项的虚拟地址
+ */
+void pmm_set_on_pte_ptr(uint64_t pfn, uintptr_t ptr) {
+    check_pfn_valid(pfn);
+    spin_lock(&mem_block->lock);
+    
+    mem_block_t* block = &mem_block->blocks[pfn];
+    uint8_t order = block->order;
+    uint64_t block_size = 1ULL << order;
+    
+    // 设置块内所有页的on_pte_ptr
+    for (uint64_t i = 0; i < block_size; i++) {
+        mem_block_t* current = &mem_block->blocks[pfn + i];
+        current->on_pte_ptr = ptr;
+    }
+    
+    spin_unlock(&mem_block->lock);
+}
+
+/*
+ * 获取页表页的上层页表项指针
+ *
+ * @param pfn 页表页的页帧号
+ * @return 上层页表项的虚拟地址
+ */
+uintptr_t pmm_get_on_pte_ptr(uint64_t pfn) {
+    check_pfn_valid(pfn);
+    spin_lock(&mem_block->lock);
+    uintptr_t ptr = mem_block->blocks[pfn].on_pte_ptr;
+    spin_unlock(&mem_block->lock);
+    return ptr;
+}
+
 void pmm_init(void) {
-    serial_puts("[PMM] Initializing physical memory manager\n");
+    PMM_PRINT("Initializing physical memory manager\n");
     
     calculate_max_pfn();  
     serial_puts("[PMM] Physical memory: ");
