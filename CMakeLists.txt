@@ -26,7 +26,7 @@ else()
 endif()
 
 # 编译选项
-set(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone -mcmodel=kernel -O2")
+set(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -mno-red-zone -mcmodel=kernel -O2 -mgeneral-regs-only")
 set(CMAKE_ASM_NASM_FLAGS "-f elf64")
 set(CMAKE_EXE_LINKER_FLAGS "-nostdlib -static -T ${CMAKE_SOURCE_DIR}/linker.ld")
 

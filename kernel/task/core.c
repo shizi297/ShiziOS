@@ -50,6 +50,13 @@ typedef enum {
     TASK_SETTLS     = 1 << 6,       // 设置tls
 } task_flags;
 
+// copy函数的参数
+struct task_copy_arg {
+    task_flags flags;
+    uint64_t user_stack;
+    uint64_t tls;
+};
+
 /**
  * pid与tgid分配
  * 
@@ -57,13 +64,20 @@ typedef enum {
  * @return 失败：-1
  */
 static pid_t pid_alloc(void) {
-    pid_t pid = (pid_t)bitmap_find(&pid_bitmap, PID_MAX, 0, 1);
+    pid_t pid = (pid_t)bitmap_find(&pid_bitmap, PID_MAX, 0, 0);
     if (pid == PID_MAX) return -1;
 
     return pid;
 }
 
-task_struct *task_create(void (*entry)(void *), void *arg, task_flags flags) {
+/**
+ * 复制任务的操作
+ * 
+ * @param arg.flags 标志位
+ * @param arg.user_stack 用户栈地址
+ * @param arg.tls 是否设置tls，只在有TASK_SETTLS标志时有效
+ */
+task_struct *task_copy(struct task_copy_arg arg) {
     // TODO
 }
 

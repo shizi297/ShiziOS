@@ -66,4 +66,6 @@ typedef struct task_struct {
     struct thread_struct thread;   // 任务切换时保存的信息
 
     struct list_head zombie;    // 僵尸队列头
+
+    bool exit_signal;   // 进程终止时是否向父进程发送SIGCHLD信号
 }task_struct;
