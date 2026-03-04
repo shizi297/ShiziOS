@@ -71,6 +71,17 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count);
  */
 void vmm_destroy_as(as_t *as);
 
+/**
+ * 复制地址空间
+ * 自动分配新的页表页与物理内存
+ * 
+ * @param as 进程地址空间的虚拟地址
+ * 
+ * @return 失败：NULL
+ * @return 成功：进程地址空间的虚拟地址
+ */
+as_t *vmm_copy_as(as_t *as);
+
 /*
  * 映射匿名内存区域
  * 

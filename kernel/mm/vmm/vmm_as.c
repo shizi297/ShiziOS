@@ -6,6 +6,131 @@
 #include "vmm_as.h"
 #include <heap.h>
 #include <mm/bootmem/linear_map.h>
+#include <list.h>
+#include <libtree.h>
+#include <shizi/string.h>
+
+// 字段信息表，用于通用读写
+static const struct {
+    size_t offset;
+    size_t size;
+    bool writable;
+} vma_field_info[] = {
+    [VMA_FIELD_START]  = { offsetof(vm_area_t, start),       sizeof(uintptr_t), false },
+    [VMA_FIELD_END]    = { offsetof(vm_area_t, end),         sizeof(uintptr_t), false },
+    [VMA_FIELD_LINEAR] = { offsetof(vm_area_t, linear_addr), sizeof(uintptr_t), true  },
+    [VMA_FIELD_PROT]   = { offsetof(vm_area_t, prot),        sizeof(vm_prot_t), false },
+    [VMA_FIELD_FLAGS]  = { offsetof(vm_area_t, flags),       sizeof(uint8_t),   false },
+};
+
+/**
+ * 红黑树节点比较（按 start 地址）
+ * 
+ * @param a 要比较的红黑树的第一个节点
+ * @param b 要比较的红黑树的第二个节点
+ * 
+ * @return -1 a小于b
+ * @return 0 相等
+ * @return 1 a大于b
+ */
+static int vma_rb_cmp(const struct rbtree_node *a, const struct rbtree_node *b) {
+    const vm_area_t *va = container_of(a, vm_area_t, rb_node);
+    const vm_area_t *vb = container_of(b, vm_area_t, rb_node);
+    if (va->start < vb->start)
+        return -1;
+    if (va->start > vb->start)
+        return 1;
+    return 0;
+}
+
+/**
+ * 在红黑树中查找第一个 start >= addr 的节点
+ * 
+ * @param tree 红黑树头节点
+ * @param addr 要找的地址
+ * 
+ * @return vma指针
+ */
+static vm_area_t *vma_rb_find_ge(struct rbtree *tree, uintptr_t addr) {
+    struct rbtree_node *cur = tree->root;
+    vm_area_t *candidate = NULL;
+
+    while (cur) {
+        vm_area_t *vma = container_of(cur, vm_area_t, rb_node);
+        if (vma->start >= addr) {
+            candidate = vma;
+            cur = cur->left;
+        } else {
+            cur = cur->right;
+        }
+    }
+    return candidate;
+}
+
+/**
+ * 在红黑树中查找最后一个 start <= addr 的节点
+ * 
+ * @param tree 红黑树头节点
+ * @param addr 要找的地址
+ * 
+ * @return vma指针
+ */
+static vm_area_t *vma_rb_find_le(struct rbtree *tree, uintptr_t addr) {
+    struct rbtree_node *cur = tree->root;
+    vm_area_t *candidate = NULL;
+
+    while (cur) {
+        vm_area_t *vma = container_of(cur, vm_area_t, rb_node);
+        if (vma->start <= addr) {
+            candidate = vma;
+            cur = cur->right;
+        } else {
+            cur = cur->left;
+        }
+    }
+    return candidate;
+}
+
+/*
+ * 读取VMA指定字段的值
+ *
+ * @param vma VMA指针
+ * @param field 要读取的字段
+ * @param out_data 输出缓冲区
+ *
+ * @return VMM_OK 成功
+ * @return VMM_INVALID_ARGUMENT 参数无效
+ */
+vmm_result_t vma_read(const vm_area_t *vma, vma_field_t field, void *out_data) {
+    if (!vma || !out_data || field >= sizeof(vma_field_info)/sizeof(vma_field_info[0]))
+        return VMM_INVALID_ARGUMENT;
+
+    const typeof(vma_field_info[0]) *info = &vma_field_info[field];
+    memcpy(out_data, (const uint8_t*)vma + info->offset, info->size);
+    return VMM_OK;
+}
+
+/*
+ * 写入VMA指定字段的值
+ *
+ * @param vma VMA指针
+ * @param field 要写入的字段
+ * @param data 待写入数据
+ *
+ * @return VMM_OK 成功
+ * @return VMM_INVALID_ARGUMENT 参数无效或字段不可写
+ */
+vmm_result_t vma_write(vm_area_t *vma, vma_field_t field, const void *data) {
+    if (!vma || !data || field >= sizeof(vma_field_info)/sizeof(vma_field_info[0]))
+        return VMM_INVALID_ARGUMENT;
+
+    const typeof(vma_field_info[0]) *info = &vma_field_info[field];
+    if (!info->writable)
+        return VMM_INVALID_ARGUMENT;
+
+    memcpy((uint8_t*)vma + info->offset, data, info->size);
+    return VMM_OK;
+}
 
 /*
  * 创建进程地址空间描述符
@@ -20,10 +145,10 @@ as_t *as_create(uintptr_t pgd) {
         return NULL;
     }
 
-    // 初始化
     spinlock_init(&vaddr->lock);
     vaddr->pgd = pgd;
-    vaddr->vma_list = NULL;
+    INIT_LIST_HEAD(&vaddr->vma_list);
+    rbtree_init(&vaddr->vma_tree, vma_rb_cmp, 0);
 
     return vaddr;
 }
@@ -59,7 +184,8 @@ void as_destroy(as_t *as) {
  * 
  * 调用时需要加as锁
  */
-vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t prot, uint8_t flags) {
+vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end,
+                            vm_prot_t prot, uint8_t flags) {
     // 参数检查
     if (as == NULL) {
         return VMM_INVALID_ARGUMENT;
@@ -67,13 +193,37 @@ vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t 
     
     // 地址有效性检查
     if (start >= end) {
-        return VMM_INVALID_ADDRESS;
+        return VMM_INVALID_ARGUMENT;
     }
     
     if ((start & (PAGE_SIZE - 1)) != 0 || (end & (PAGE_SIZE - 1)) != 0) {
-        return VMM_INVALID_ADDRESS;  // 地址未页对齐
+        return VMM_INVALID_ARGUMENT;
     }
-    
+
+    // 重叠检查
+    vm_area_t *next = vma_rb_find_ge(&as->vma_tree, start);
+    if (next) {
+        // 检查 next 自身是否与新区间重叠
+        if (next->start < end)
+            return VMM_INVALID_ARGUMENT;
+
+        // 检查 next 的前驱
+        struct rbtree_node *prev_node = rbtree_prev(&next->rb_node);
+        if (prev_node) {
+            vm_area_t *prev = container_of(prev_node, vm_area_t, rb_node);
+            if (prev->end > start)
+                return VMM_INVALID_ARGUMENT;
+        }
+    } else {
+        // 没有 start >= start 的节点，检查最后一个节点
+        struct rbtree_node *last_node = rbtree_last(&as->vma_tree);
+        if (last_node) {
+            vm_area_t *last = container_of(last_node, vm_area_t, rb_node);
+            if (last->end > start)
+                return VMM_INVALID_ARGUMENT;
+        }
+    }
+
     // 分配VMA结构
     vm_area_t *new_vma = (vm_area_t *)kheap_alloc(sizeof(vm_area_t));
     if (new_vma == NULL) {
@@ -85,54 +235,20 @@ vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t 
     new_vma->end = end;
     new_vma->prot = prot;
     new_vma->flags = flags;
-    new_vma->linear_addr = 0;
-    new_vma->page_table_blocks.page_table_blocks_count = 0;
-    new_vma->page_table_blocks.page_table_blocks = NULL;
-    new_vma->anon_vma = NULL;
-    new_vma->file = NULL;
-    new_vma->device = NULL;
-    new_vma->prev = NULL;
-    new_vma->next = NULL;
-    
-    //  链表为空，直接插入
-    if (as->vma_list == NULL) {
-        as->vma_list = new_vma;
-        return VMM_OK;
+    // kheap_alloc 已清零，其他字段已为0或NULL
+    INIT_LIST_HEAD(&new_vma->list_node);
+
+    // 插入红黑树
+    struct rbtree_node *exist = rbtree_insert(&new_vma->rb_node, &as->vma_tree);
+    if (exist) {
+        // 重叠检查已做，若发生说明代码错误
+        kheap_free(new_vma);
+        return VMM_INVALID_ARGUMENT;
     }
-    
-    vm_area_t *current = as->vma_list;
-    vm_area_t *prev = NULL;
-    
-    // 遍历链表找到插入位置（按start地址升序）
-    while (current != NULL) {
-        // 找到插入位置：当前节点start大于新节点start
-        if (current->start > start) {
-            break;
-        }
-        
-        // 移动到下一个节点
-        prev = current;
-        current = current->next;
-    }
-    
-    // 插入新节点
-    if (prev == NULL) {
-        // 插入到链表头部
-        new_vma->next = as->vma_list;
-        as->vma_list->prev = new_vma;
-        as->vma_list = new_vma;
-    } else if (current == NULL) {
-        // 插入到链表尾部
-        prev->next = new_vma;
-        new_vma->prev = prev;
-    } else {
-        // 插入到中间
-        prev->next = new_vma;
-        new_vma->prev = prev;
-        new_vma->next = current;
-        current->prev = new_vma;
-    }
-    
+
+    // 插入链表尾部
+    list_add_tail(&new_vma->list_node, &as->vma_list);
+
     return VMM_OK;
 }
 
@@ -145,7 +261,8 @@ vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t 
  * @param prot 权限标志
  * @param flags 映射标志
  */
-vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t prot, uint8_t flags) {
+vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
+                     vm_prot_t prot, uint8_t flags) {
     // 参数检查
     if (as == NULL) {
         return VMM_INVALID_ARGUMENT;
@@ -171,32 +288,14 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t prot, u
  */
 vm_area_t* vma_find_nolock(as_t *as, uintptr_t addr) {
     if (as == NULL) {
-        return NULL;  // 无效参数
+        return NULL;
     }
-    
-    vm_area_t *current = as->vma_list;
-    
-    while (current != NULL) {
-        /* 
-         * 因为链表按start升序排列
-         * 如果当前节点的start已经大于目标地址
-         * 后续节点的start更大
-         * 不可能包含addr
-         * 所以可以提前结束
-         */
-        if (addr < current->start) {
-            break;
-        }
-        
-        // 检查当前节点是否包含目标地址
-        if (addr < current->end) {
-            return current;
-        }
-        
-        current = current->next;
+
+    vm_area_t *candidate = vma_rb_find_le(&as->vma_tree, addr);
+    if (candidate && addr < candidate->end) {
+        return candidate;
     }
-    
-    return NULL;  // 未找到
+    return NULL;
 }
 
 /*
@@ -210,7 +309,7 @@ vm_area_t* vma_find_nolock(as_t *as, uintptr_t addr) {
  */
 vm_area_t* vma_find(as_t *as, uintptr_t addr) {
     if (as == NULL) {
-        return NULL;  // 无效参数
+        return NULL;
     }
     
     spin_lock(&as->lock);
@@ -236,38 +335,13 @@ vmm_result_t vma_remove_nolock(as_t *as, vm_area_t *vma) {
     if (as == NULL || vma == NULL) {
         return VMM_INVALID_ARGUMENT;
     }
-    
-    // 确保vma在as的链表中
-    vm_area_t *current = as->vma_list;
-    bool found = false;
-    
-    while (current != NULL) {
-        if (current == vma) {
-            found = true;
-            break;
-        }
-        current = current->next;
-    }
-    
-    if (!found) {
-        return VMM_INVALID_ARGUMENT;  // vma不属于这个as
-    }
-    
-    // 从链表中移除vma
-    if (vma->prev == NULL) {
-        // vma是链表头
-        as->vma_list = vma->next;
-        if (vma->next != NULL) {
-            vma->next->prev = NULL;
-        }
-    } else {
-        // vma在链表中间或尾部
-        vma->prev->next = vma->next;
-        if (vma->next != NULL) {
-            vma->next->prev = vma->prev;
-        }
-    }
-    
+
+    // 从链表中移除
+    list_del(&vma->list_node);
+
+    // 从红黑树中移除
+    rbtree_remove(&vma->rb_node, &as->vma_tree);
+
     // 释放vma关联的资源
     if (vma->anon_vma != NULL && vma->anon_vma->refcount > 0) {
         vma->anon_vma->refcount--;
@@ -339,38 +413,34 @@ vmm_result_t vma_get(as_t *as, vma_result_t **result) {
  * 需要加as锁
  */
 vmm_result_t vma_get_nolock(as_t *as, vma_result_t **result) {
-
     if (as == NULL || result == NULL) {
         return VMM_INVALID_ARGUMENT;
     }
 
-    // 遍历VMA链表，计算VMA数量
+    // 遍历链表，计算VMA数量
     uint64_t count = 0;
-    vm_area_t *current = as->vma_list;
-    while (current != NULL) {
+    vm_area_t *pos;
+    list_for_each_entry(pos, &as->vma_list, list_node) {
         count++;
-        current = current->next;
     }
 
     // 创建结构体用于返回
     uint64_t size = sizeof(vma_result_t) + count * sizeof(vma_data_t);
     vma_result_t *vma_result = kheap_alloc(size);
-
     if (vma_result == NULL) {
         return VMM_OUT_OF_MEMORY;
     }
 
     vma_result->addr_count = count;
-    current = as->vma_list;
-    for (uint64_t i = 0;current != NULL;i++) {
-        vma_result->vma_data[i].start_addr = current->start;
-        vma_result->vma_data[i].end_addr = current->end;
-        vma_result->vma_data[i].linear = current->linear_addr;
-        current = current->next;
+    uint64_t i = 0;
+    list_for_each_entry(pos, &as->vma_list, list_node) {
+        vma_result->vma_data[i].start_addr = pos->start;
+        vma_result->vma_data[i].end_addr = pos->end;
+        vma_result->vma_data[i].linear = pos->linear_addr;
+        i++;
     }
 
     *result = vma_result;
-
     return VMM_OK;
 }
 
@@ -388,10 +458,7 @@ vm_area_t *vma_find_end(as_t *as) {
         return NULL;
     }
 
-    vm_area_t *current = as->vma_list;
-    while (current != NULL && current->next != NULL) {
-        current = current->next;
-    }
-
-    return current;
+    // 不加锁，由调用者负责
+    struct rbtree_node *last_node = rbtree_last(&as->vma_tree);
+    return last_node ? container_of(last_node, vm_area_t, rb_node) : NULL;
 }

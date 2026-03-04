@@ -73,8 +73,12 @@ static uintptr_t vmm_alloc_addr(as_t *as, uint64_t size) {
         // 第一个VMA，从USER_START开始
         start_addr = USER_START;
     } else {
+        uintptr_t last_end;
+        if (vma_read(last_vma, VMA_FIELD_END, &last_end) != VMM_OK) return 0;
+        
         // 在最后一个VMA之后分配，加上4KB间隙
-        start_addr = last_vma->end + 4096;
+        start_addr = last_end + 4096;
+
         // 页对齐
         start_addr = (start_addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     }
@@ -99,7 +103,7 @@ static uintptr_t vmm_alloc_addr(as_t *as, uint64_t size) {
  */
 vmm_result_t vmm_unmap_nolock(as_t *as, uintptr_t addr) {
     /*
-     * 这里直接释放页表页并刷新TLB
+     * 这里直接释放页表页并刷新tlb
      * 不清除上级页表项
      * 缺页处理程序会处理后续访问
      */
@@ -114,24 +118,32 @@ vmm_result_t vmm_unmap_nolock(as_t *as, uintptr_t addr) {
         return VMM_INVALID_ADDRESS;
     }
 
+    // 读取vma的 start 和 end 用于tlb刷新
+    uintptr_t start, end;
+    if (vma_read(vma, VMA_FIELD_START, &start) != VMM_OK ||
+        vma_read(vma, VMA_FIELD_END, &end) != VMM_OK) {
+        return VMM_INTERNAL_ERROR;
+    }
+
     // 释放页表页
-    mmu_remove_map(&vma->page_table_blocks);
+    page_table_blocks_struct *ptb = vma_get_ptb(vma);
+    mmu_remove_map(ptb);
+    
+    // 释放线性地址
+    if (vma->linear_addr != 0) {
+        kheap_free((void *)vma->linear_addr);
+    }
     
     // 根据映射大小选择TLB刷新策略
-    uint64_t page_count = (vma->end - vma->start) / PAGE_SIZE;
+    uint64_t page_count = (end - start) / PAGE_SIZE;
     if (page_count > TLB_FLUSH_THRESHOLD_PAGES) {
         // 大范围，刷新整个TLB
         mmu_invalidate_all();
     } else {
         // 小范围，逐页刷新
-        for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE) {
+        for (uintptr_t va = start; va < end; va += PAGE_SIZE) {
             mmu_invalidate(va);
         }
-    }
-    
-    // 释放数据页（如果有）
-    if (vma->linear_addr != 0) {
-        kheap_free((void *)vma->linear_addr);
     }
     
     // 从地址空间中移除vma
@@ -228,13 +240,14 @@ void vmm_destroy_as(as_t *as) {
     spin_lock(&as->lock);
 
     // 释放所有VMA及其映射
-    while (as->vma_list != NULL) {
-        vm_area_t *vma = as->vma_list;
+    while (!list_empty(&as->vma_list)) {
+        vm_area_t *vma = list_first_entry(&as->vma_list, vm_area_t, list_node);
         
         // 释放页表页
-        mmu_remove_map(&vma->page_table_blocks);
+        page_table_blocks_struct *ptb = vma_get_ptb(vma);
+        mmu_remove_map(ptb);
         
-        // 释放数据页（如果有）
+        // 释放线性地址
         if (vma->linear_addr != 0) {
             kheap_free((void *)vma->linear_addr);
         }
@@ -250,6 +263,26 @@ void vmm_destroy_as(as_t *as) {
 
     // 销毁地址空间结构体
     as_destroy(as);
+}
+
+/**
+ * 复制地址空间
+ * 自动分配新的页表页与物理内存
+ * 
+ * @param as 进程地址空间的虚拟地址
+ * 
+ * @return 失败：NULL
+ * @return 成功：进程地址空间的虚拟地址
+ */
+as_t *vmm_copy_as(as_t *as) {
+    /*
+     * TODO :
+     * 使用mmu创建新的页表 
+     * 复制as，遍历vma
+     * 在新的as进行创建分配所有旧的vma对应的地址
+     * 复制旧的内存的数据
+     */
+    return NULL;
 }
 
 /*
@@ -354,12 +387,21 @@ vmm_result_t vmm_map_anon(
             return VMM_OUT_OF_MEMORY;
         }
         
-        // 建立映射，传入page_table_blocks指针用于接收页表页数组
+        // 设置线性地址
+        if (vma_write(vma, VMA_FIELD_LINEAR, &alloc_addr) != VMM_OK) {
+            kheap_free((void *)alloc_addr);
+            vma_remove_nolock(as, vma);
+            spin_unlock(&as->lock);
+            return VMM_INTERNAL_ERROR;
+        }
+        
+        // 建立映射，传入page_table_blocks指针
         uintptr_t paddr_start = LINEAR_TO_PHYS(alloc_addr);
-        result = mmu_add_map(as->pgd, addr, paddr_start, page, prot, flags, &vma->page_table_blocks);
+        page_table_blocks_struct *ptb = vma_get_ptb(vma);
+        result = mmu_add_map(as->pgd, addr, paddr_start, page, prot, flags, ptb);
         
         if (result != VMM_OK) {
-            // 映射失败，释放物理内存并移除VMA
+            // 映射失败，释放线性地址并移除VMA
             kheap_free((void *)alloc_addr);
             vma_remove_nolock(as, vma);
             spin_unlock(&as->lock);
@@ -368,14 +410,9 @@ vmm_result_t vmm_map_anon(
             }
             return result;
         }
-        
-        // 保存线性地址
-        vma->linear_addr = alloc_addr;
-    } else {
-        // 不预分配，页表块数组暂时为空
-        vma->page_table_blocks.page_table_blocks = NULL;
-        vma->page_table_blocks.page_table_blocks_count = 0;
-    }
+        // 线性地址已设置，无需额外操作
+    } 
+    // 不预分配，页表块数组为空，无需额外操作
     
     spin_unlock(&as->lock);
     

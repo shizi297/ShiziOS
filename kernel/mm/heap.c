@@ -153,6 +153,36 @@ void kheap_zero_map_count(void *vaddr) {
     pmm_zero_map_count(pfn);
 }
 
+/*
+ * 设置页表页的上层页表项指针
+ *
+ * @param vaddr 页表页的虚拟地址
+ * @param pte_ptr 上层页表项的虚拟地址
+ */
+void kheap_set_on_pte_ptr(void *vaddr, uintptr_t pte_ptr) {
+    if (vaddr == NULL) return;
+
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
+    pmm_set_on_pte_ptr(pfn, pte_ptr);
+}
+
+/*
+ * 获取页表页的上层页表项指针
+ *
+ * @param vaddr 页表页的虚拟地址
+ * @return 上层页表项的虚拟地址
+ */
+uintptr_t kheap_get_on_pte_ptr(void *vaddr) {
+    if (vaddr == NULL) return 0;
+
+    uintptr_t phys = LINEAR_TO_PHYS((uintptr_t)vaddr);
+    uint64_t pfn = phys >> PAGE_SHIFT;
+
+    return pmm_get_on_pte_ptr(pfn);
+}
+
 /**
  * 虚拟堆分配
  * 
@@ -271,5 +301,5 @@ as_t *vheap_create_as(void) {
  * @param as 进程地址空间的虚拟地址
  */
 void vheap_destroy_as(as_t *as) {
-    return vmm_destroy_as(as);
+    vmm_destroy_as(as);
 }

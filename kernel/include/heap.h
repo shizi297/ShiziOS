@@ -58,6 +58,22 @@ void kheap_sub_map_count(void *vaddr);
  */
 void kheap_zero_map_count(void *vaddr);
 
+/*
+ * 设置页表页的上层页表项指针
+ *
+ * @param vaddr 页表页的虚拟地址
+ * @param pte_ptr 上层页表项的虚拟地址
+ */
+void kheap_set_on_pte_ptr(void *vaddr, uintptr_t pte_ptr);
+
+/*
+ * 获取页表页的上层页表项指针
+ *
+ * @param vaddr 页表页的虚拟地址
+ * @return 上层页表项的虚拟地址
+ */
+uintptr_t kheap_get_on_pte_ptr(void *vaddr);
+
 /**
  * 虚拟堆分配
  * 

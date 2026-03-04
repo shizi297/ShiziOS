@@ -114,6 +114,9 @@ static inline enum walk_state walk_pml4(uintptr_t *current_phys, pte_t **pte_ptr
         uintptr_t pdpt_phys = LINEAR_TO_PHYS(pdpt_page);
         mmu_set_pte(*pte_ptr, pdpt_phys >> 12, false, prot);
         
+        // 记录上级项指针
+        kheap_set_on_pte_ptr((void*)pdpt_page, (uintptr_t)*pte_ptr);
+        
         // 记录到out_blocks
         if (out_blocks) {
             out_blocks[0] = pdpt_page;
@@ -164,6 +167,9 @@ static inline enum walk_state walk_pdpt(uintptr_t *current_phys, pte_t **pte_ptr
         // 设置PDPTE
         uintptr_t pd_phys = LINEAR_TO_PHYS(pd_page);
         mmu_set_pte(*pte_ptr, pd_phys >> 12, false, prot);
+        
+        // 记录上级项指针
+        kheap_set_on_pte_ptr((void*)pd_page, (uintptr_t)*pte_ptr);
         
         // 记录到out_blocks
         if (out_blocks) {
@@ -229,6 +235,9 @@ static inline enum walk_state walk_pd(uintptr_t *current_phys, pte_t **pte_ptr, 
         // 设置PDE
         uintptr_t pt_phys = LINEAR_TO_PHYS(pt_page);
         mmu_set_pte(*pte_ptr, pt_phys >> 12, false, prot);
+        
+        // 记录上级项指针
+        kheap_set_on_pte_ptr((void*)pt_page, (uintptr_t)*pte_ptr);
         
         // 记录到out_blocks
         if (out_blocks) {
@@ -561,8 +570,13 @@ vmm_result_t mmu_add_map(
     if (result != VMM_OK) {
         // 错误回滚：逆序释放所有已记录的页表页
         for (uint64_t i = 0; i < blocks_index; i++) {
-            if (blocks_array[i] != 0) {
-                kheap_free((void*)blocks_array[i]);
+            uintptr_t block_addr = blocks_array[i];
+            if (block_addr != 0) {
+                uintptr_t parent_pte = kheap_get_on_pte_ptr((void*)block_addr);
+                if (parent_pte != 0) {
+                    mmu_clear_pte((pte_t*)parent_pte);
+                }
+                kheap_free((void*)block_addr);
             }
         }
         kheap_free(blocks_array);
@@ -638,8 +652,15 @@ vmm_result_t mmu_remove_map(page_table_blocks_struct *page_table_blocks) {
     
     // 遍历数组，释放页表页
     for (uint64_t i = 0; i < page_table_blocks->page_table_blocks_count; i++) {
-        if (page_table_blocks->page_table_blocks[i] != 0) {
-            kheap_free((void *)page_table_blocks->page_table_blocks[i]);
+        uintptr_t block_addr = page_table_blocks->page_table_blocks[i];
+        if (block_addr != 0) {
+            // 获取并清零上级项
+            uintptr_t parent_pte = kheap_get_on_pte_ptr((void*)block_addr);
+            if (parent_pte != 0) {
+                mmu_clear_pte((pte_t*)parent_pte);
+            }
+            // 释放页表页
+            kheap_free((void*)block_addr);
         }
     }
     kheap_free((void *)page_table_blocks->page_table_blocks);

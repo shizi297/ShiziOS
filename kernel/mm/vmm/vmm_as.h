@@ -9,6 +9,9 @@
 #include <mm/vmm/vmm_mmu.h>
 #include <mm/vmm/vmm_types.h>
 #include <spinlock.h>
+#include <list.h>
+#include <libtree.h>
+#include <shizi/string.h>
 
 /*
  * anon_vma_t
@@ -47,13 +50,17 @@ typedef struct vm_area {
     file_t *file;         
     device_t *device;  
     page_table_blocks_struct page_table_blocks; // 页表块信息
-    struct vm_area* prev;      
-    struct vm_area* next; 
+
+    // 链表节点，用于遍历所有vma节点
+    struct list_head list_node;
+    // 红黑树节点，用于找到其中的一个vma节点
+    struct rbtree_node rb_node;
 } vm_area_t;
 
 typedef struct vmm_as{
     uintptr_t pgd;
-    vm_area_t *vma_list;
+    struct list_head vma_list;
+    struct rbtree vma_tree;
     spinlock_t lock;
 } as_t;
 
@@ -72,6 +79,53 @@ typedef struct vma_result {
     uint64_t addr_count;
     vma_data_t vma_data[];
 } vma_result_t;
+
+/*
+ * VMA字段枚举
+ * 用于通用读写接口
+ */
+typedef enum vma_field {
+    VMA_FIELD_START,
+    VMA_FIELD_END,
+    VMA_FIELD_LINEAR,
+    VMA_FIELD_PROT,
+    VMA_FIELD_FLAGS,
+} vma_field_t;
+
+/*
+ * 读取VMA指定字段的值
+ *
+ * @param vma VMA指针
+ * @param field 要读取的字段
+ * @param out_data 输出缓冲区，必须指向正确类型的变量
+ *
+ * @return VMM_OK 成功
+ * @return VMM_INVALID_ARGUMENT 参数无效
+ */
+vmm_result_t vma_read(const vm_area_t *vma, vma_field_t field, void *out_data);
+
+/*
+ * 写入VMA指定字段的值（仅可写字段有效）
+ *
+ * @param vma VMA指针
+ * @param field 要写入的字段
+ * @param data 指向待写入数据的指针
+ *
+ * @return VMM_OK 成功
+ * @return VMM_INVALID_ARGUMENT 参数无效或字段不可写
+ */
+vmm_result_t vma_write(vm_area_t *vma, vma_field_t field, const void *data);
+
+/*
+ * 获取VMA的页表块指针
+ *
+ * @param vma VMA指针
+ *
+ * @return 页表块结构体指针
+ */
+static inline page_table_blocks_struct *vma_get_ptb(vm_area_t *vma) {
+    return &vma->page_table_blocks;
+}
 
 /*
  * 创建进程地址空间描述符
