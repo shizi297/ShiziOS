@@ -275,13 +275,78 @@ void vmm_destroy_as(as_t *as) {
  * @return 成功：进程地址空间的虚拟地址
  */
 as_t *vmm_copy_as(as_t *as) {
-    /*
-     * TODO :
-     * 使用mmu创建新的页表 
-     * 复制as，遍历vma
-     * 在新的as进行创建分配所有旧的vma对应的地址
-     * 复制旧的内存的数据
-     */
+    if (!as) return NULL;
+
+    // 创建新地址空间
+    as_t *new_as = vmm_create_as();
+    if (!new_as) return NULL;
+
+    // 获取原地址空间的所有VMA信息
+    vma_result_t *result;
+    if (vma_get(as, &result) != VMM_OK) {
+        vmm_destroy_as(new_as);
+        return NULL;
+    }
+
+    spin_lock(&new_as->lock);
+
+    // 遍历每个vma
+    for (uint64_t i = 0; i < result->addr_count; i++) {
+        vma_data_t *data = &result->vma_data[i];
+        uintptr_t start = data->start_addr;
+        uintptr_t end = data->end_addr;
+        size_t size = end - start;
+        void *new_linear = NULL;
+        uintptr_t paddr = 0;
+        page_table_blocks_struct ptb;
+
+        // 在新地址空间添加vma
+        vmm_result_t res = vma_add_nolock(new_as, start, end, data->prot, data->flags);
+        if (res != VMM_OK) goto fail;
+
+        // 如果原vma已分配物理内存，则复制
+        if (data->linear != 0) {
+            new_linear = kheap_alloc(size);
+            if (!new_linear) goto fail;
+
+            memcpy(new_linear, (void*)data->linear, size);
+            paddr = LINEAR_TO_PHYS((uintptr_t)new_linear);
+
+            uint64_t page_count = size / PAGE_SIZE;
+            res = mmu_add_map(new_as->pgd, start, paddr, page_count,
+                              data->prot, data->flags, &ptb);
+            if (res != VMM_OK) {
+                kheap_free(new_linear);
+                goto fail;
+            }
+
+            // 找到刚添加的vma
+            vm_area_t *vma = vma_find_nolock(new_as, start);
+            if (!vma) {
+                kheap_free(new_linear);
+                goto fail;
+            }
+
+            // 设置线性地址
+            if (vma_write(vma, VMA_FIELD_LINEAR, &new_linear) != VMM_OK) {
+                kheap_free(new_linear);
+                goto fail;
+            }
+
+            // 保存页表块信息
+            *vma_get_ptb(vma) = ptb;
+        }
+    }
+
+    spin_unlock(&new_as->lock);
+    kheap_free(result);
+    return new_as;
+
+fail:
+    // 错误时先释放锁，再销毁新地址空间
+    spin_unlock(&new_as->lock);
+    vmm_destroy_as(new_as);
+    kheap_free(result);
     return NULL;
 }
 
@@ -405,9 +470,6 @@ vmm_result_t vmm_map_anon(
             kheap_free((void *)alloc_addr);
             vma_remove_nolock(as, vma);
             spin_unlock(&as->lock);
-            if (out_addr != NULL) {
-                *out_addr = 0;
-            }
             return result;
         }
         // 线性地址已设置，无需额外操作

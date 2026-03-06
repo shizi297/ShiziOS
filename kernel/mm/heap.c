@@ -303,3 +303,16 @@ as_t *vheap_create_as(void) {
 void vheap_destroy_as(as_t *as) {
     vmm_destroy_as(as);
 }
+
+/*
+ * 复制进程地址空间
+ * 自动分配新的页表页与物理内存
+ *
+ * @param as 源地址空间
+ *
+ * @return 失败：NULL
+ * @return 成功：新的地址空间
+ */
+as_t *vheap_copy_as(as_t *as) {
+    return vmm_copy_as(as);
+}

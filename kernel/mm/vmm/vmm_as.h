@@ -64,11 +64,13 @@ typedef struct vmm_as{
     spinlock_t lock;
 } as_t;
 
-// vma中的数据
+// vma中的数据，用于返回给上层
 typedef struct vma_data {
     uintptr_t linear;
     uintptr_t start_addr;
     uintptr_t end_addr;
+    vm_prot_t prot;
+    uint8_t flags;
 } vma_data_t;
 
 /*

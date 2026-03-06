@@ -437,6 +437,8 @@ vmm_result_t vma_get_nolock(as_t *as, vma_result_t **result) {
         vma_result->vma_data[i].start_addr = pos->start;
         vma_result->vma_data[i].end_addr = pos->end;
         vma_result->vma_data[i].linear = pos->linear_addr;
+        vma_result->vma_data[i].prot = pos->prot;
+        vma_result->vma_data[i].flags = pos->flags;
         i++;
     }
 
