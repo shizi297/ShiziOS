@@ -111,7 +111,7 @@ static inline void tss_init(
         tss_ptr[current_tss] = tss_temp_addr[0];
 
         // 计算栈顶
-        uint64_t stack_top = (uint64_t)stack + (current_tss + 1) * KERNEL_START_SIZE;
+        uint64_t stack_top = (uint64_t)stack + (current_tss + 1) * KERNEL_START_SIZE - 32;
 
         // 设置内核栈
         tss_ptr[current_tss].rsp0 = stack_top;

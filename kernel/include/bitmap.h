@@ -95,6 +95,32 @@ static inline void bitmap_copy(bitmap_t *dst, const bitmap_t *src, uint32_t bits
     memcpy(dst, src, BITMAP_BYTES(bits));
 }
 
+/**
+ * 设置一段连续位为1
+ * 
+ * @param map   位图指针
+ * @param start 起始位索引
+ * @param count 连续位数
+ */
+static inline void bitmap_set_range(bitmap_t *map, uint32_t start, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        bitmap_set(map, start + i);
+    }
+}
+
+/**
+ * 清除一段连续位（置0）
+ * 
+ * @param map   位图指针
+ * @param start 起始位索引
+ * @param count 连续位数
+ */
+static inline void bitmap_clear_range(bitmap_t *map, uint32_t start, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        bitmap_clear(map, start + i);
+    }
+}
+
 // 用于字扫描的字类型
 typedef uint64_t bitmap_word_t;
 #define BITS_PER_WORD (sizeof(bitmap_word_t) * 8)

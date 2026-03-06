@@ -5,13 +5,11 @@
 
 #pragma once
 
-#define CACHE_LINE_SIZE 64
-
-
 #include "pmm.h"
 #include <stdint.h>
 #include <spinlock.h>
 #include <list.h>
+#include <stdbool.h>  
 
 typedef struct list_head free_list_t;
 
@@ -29,7 +27,7 @@ typedef struct {
 
     uint64_t start_pfn;         // 起始页帧号
     uint64_t end_pfn;           // 结束页帧号
-    free_area_t free_areas[MAX_ORDER]; 
+    free_area_t free_areas[MAX_ORDER];
 } zone_t;
 
 //内存块结构体，多个页组成，order大小与空闲链表相关
