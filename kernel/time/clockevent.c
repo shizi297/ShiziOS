@@ -3,7 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#include "clockevent.h"
+#include <time.h>
 #include <timecycle.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -13,7 +13,6 @@
 #include <smp.h>
 #include <list.h>
 #include <heap.h>
-#include <time.h>
 
 #define CLOCKEVENT_PANIC(str) \
     panic("[CLOCKEVENT] ERROR : " str "\n") 
@@ -45,11 +44,34 @@
     serial_putchar('"'); \
     serial_puts("]\n")
 
+// 时钟事件结构体
+typedef struct clockevent_struct {
+    const char *name;   // 设备名称
+
+    void (*shutdown)(void); // 停止
+    void (*set_oneshot)(void);  // 设置为单次中断模式
+    void (*set_periodic)(void); // 设置为周期模式
+
+    void (*set_value)(uint64_t value);   // 定时设置
+
+    uint64_t hz;    // 频率
+
+    uint32_t mult;  // 乘数
+    uint32_t shift; // 移位
+
+    // 反向
+    uint32_t mult_inv;
+    uint32_t shift_inv;
+    
+    void (*event_handler)(void);    // 回调
+
+    bool occupied;   // 设备是否被占用
+} clockevent_struct;
 
 typedef struct {
     clockevent_struct clockevent;
     struct list_head node;
-}clockevent_list_struct;
+} clockevent_list_struct;
 
 /*
  * clockevent链表头
@@ -59,9 +81,9 @@ typedef struct {
 typedef struct {
     uint64_t count;
     struct list_head head[];
-}clockevent_list_head;
+} clockevent_list_head;
 
-clockevent_list_head *clockevent_head = NULL;
+static clockevent_list_head *clockevent_head = NULL;
 
 // 时钟事件框架初始化
 void clockevent_init(void) {
@@ -82,222 +104,135 @@ void clockevent_init(void) {
 }
 
 /**
- * 注册回调函数到设备
- * 设备中断时调用
+ * 获取时钟事件设备句柄
  * 
- * @param event_handler 回调函数的函数指针
- * @param name 设备名称，当这个为NULL时，使用精度最高的设备
- * @param out_selected_name 当成功且name为NULL时，返回被选中的设备名称
+ * @param name 设备名称，为 NULL 时选择当前CPU上最高频率且未被占用的设备
  * 
- * @return 失败： false
- * @return 成功： true
+ * @return 成功：句柄
+ * @return 失败：NULL
  */
-bool event_handler_register(void (*event_handler)(void), char *name, const char **out_selected_name) {
-    // 获取当前逻辑cpuid
+clockevent_handle_t clockevent_get(const char *name) {
     uint64_t logical_id = get_logical_id();
     struct list_head *head = &clockevent_head->head[logical_id];
 
-    // 使用最高精度的时钟
-    if (!name) {
-        if (list_empty(head)) {
-            // 没有时钟设备
-            CLOCKEVENT_PANIC("no clock device");
-        }
+    if (name) {
         clockevent_list_struct *pos;
-        list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-            if (pos->clockevent.event_handler == NULL) {
-                pos->clockevent.event_handler = event_handler;
-                if (out_selected_name) {
-                    *out_selected_name = pos->clockevent.name;
-                }
-                return true;
+        list_for_each_entry(pos, head, node) {
+            if (strcmp(pos->clockevent.name, name))
+                return (clockevent_handle_t)pos;
+        }
+        return NULL;
+    } else {
+        clockevent_list_struct *best = NULL;
+        uint64_t best_hz = 0;
+        clockevent_list_struct *pos;
+        list_for_each_entry(pos, head, node) {
+            if (!pos->clockevent.occupied && pos->clockevent.hz > best_hz) {
+                best = pos;
+                best_hz = pos->clockevent.hz;
             }
         }
-        // 没有空闲设备
-        return false;
+        return (clockevent_handle_t)best;
     }
-
-    // 根据设备名称查找
-    clockevent_list_struct *pos = NULL;
-    list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-        if (strcmp(pos->clockevent.name, name)) {  
-            pos->clockevent.event_handler = event_handler;
-            if (out_selected_name) {
-                *out_selected_name = pos->clockevent.name;
-            }
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /**
- * 设置中断值到设备
+ * 设置时钟事件设备的中断处理函数
  * 
- * @param ns 纳秒(相对当前)
- * @param name 设备名称，当这个为NULL时，使用精度最高的设备
+ * @param handle 设备句柄
+ * @param handler 处理函数，若为 NULL 则清空调回函数
  * 
- * @return 失败： false
- * @return 成功： true
+ * @return 成功：true
+ * @return 失败：false
  */
-bool set_value_to_dev(uint64_t ns, char *name) {
-    // 获取当前逻辑cpuid
-    uint64_t logical_id = get_logical_id();
-    struct list_head *head = &clockevent_head->head[logical_id];
+bool clockevent_set_handler(clockevent_handle_t handle, void (*handler)(void)) {
+    clockevent_list_struct *dev = (clockevent_list_struct *)handle;
+    if (!dev) return false;
 
-    clockevent_list_struct *pos = NULL;
-
-    {
-        bool found = false;
-
-        // 使用最高精度的时钟
-        if (!name) {
-            // name为NULL不再支持，直接返回失败
-            return false;
-        } else {
-            // 根据设备名称查找
-            list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-                if (strcmp(pos->clockevent.name, name)) {
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if (!found) return false;
-    }
-
-    {
-        void (*set_value)(uint64_t value) = pos->clockevent.set_value;
-        uint32_t mult_inv = pos->clockevent.mult_inv;
-        uint32_t shift_inv = pos->clockevent.shift_inv;
-
-        /*
-        * 在当前内核下
-        * apic始终为TSC DEADLINE模式
-        * 需要写入tsc绝对值
-        * 所以这里让apic特殊处理
-        */
-        if (strcmp(pos->clockevent.name, "apic")) { 
-            /*
-            * 使用时钟源框架
-            * 读取tsc的值
-            * 与调用方传的值相加
-            * 转为设备值再写入
-            */
-            uint64_t current_ns = 0;
-            if (!clocksource_read(NULL, &current_ns)) {
-                CLOCKEVENT_PANIC("read clocksource error");
-            }
-            set_value(timecycle_ns_to_cycles(current_ns + ns, mult_inv, shift_inv));
-        } else {
-            set_value(timecycle_ns_to_cycles(ns, mult_inv, shift_inv));
-        }
+    dev->clockevent.event_handler = handler;
+    if (handler != NULL) {
+        dev->clockevent.occupied = true;
     }
     return true;
 }
 
 /**
- * 获取设备的事件处理函数
+ * 触发时钟事件设备的中断处理（由驱动在中断中调用）
  * 
- * @param name 设备名称，当这个为NULL时，使用精度最高的设备
- * @param event_handler 存储回调函数的函数指针
- * 
- * @return 失败： NULL
- * @return 成功： 回调函数的函数指针
+ * @param handle 设备句柄
  */
-void get_event_handler(char *name, void (**event_handler)(void)) {
-    // 获取当前逻辑cpuid
-    uint64_t logical_id = get_logical_id();
-    struct list_head *head = &clockevent_head->head[logical_id];
-
-    clockevent_list_struct *pos = NULL;
-
-    {
-        bool found = false;
-
-        // 使用最高精度的时钟
-        if (!name) {
-            // name为NULL不再支持，直接返回空
-            *event_handler = NULL;
-            return;
-        } else {
-            // 根据设备名称查找
-            list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-                if (strcmp(pos->clockevent.name, name)) { 
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if (!found) {
-            *event_handler = NULL;
-            return;
-        }
+void clockevent_handle_irq(clockevent_handle_t handle) {
+    clockevent_list_struct *dev = (clockevent_list_struct *)handle;
+    if (dev && dev->clockevent.event_handler) {
+        dev->clockevent.event_handler();
     }
-
-     *event_handler = pos->clockevent.event_handler;
 }
 
 /**
- * 设置设备的中断模式
+ * 设置下一次中断触发时间（相对当前时刻的纳秒数）
  * 
- * @param name 设备名称
- * @param mode 要设置的模式
+ * @param handle 设备句柄
+ * @param ns 相对纳秒数
  * 
  * @return 成功：true
  * @return 失败：false
  */
-bool clockevent_set_mode(const char *name, clockevent_mode_t mode) {
-    // 获取当前逻辑cpuid
-    uint64_t logical_id = get_logical_id();
-    struct list_head *head = &clockevent_head->head[logical_id];
+bool clockevent_set_next(clockevent_handle_t handle, uint64_t ns) {
+    clockevent_list_struct *dev = (clockevent_list_struct *)handle;
+    if (!dev || !dev->clockevent.set_value) return false;
 
-    clockevent_list_struct *pos = NULL;
+    uint64_t cycles = timecycle_ns_to_cycles(ns, dev->clockevent.mult_inv, dev->clockevent.shift_inv);
+    dev->clockevent.set_value(cycles);
+    return true;
+}
 
-    {
-        bool found = false;
+/**
+ * 设置时钟事件设备的工作模式
+ * 
+ * @param handle 设备句柄
+ * @param mode 模式
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool clockevent_set_mode(clockevent_handle_t handle, clockevent_mode_t mode) {
+    clockevent_list_struct *dev = (clockevent_list_struct *)handle;
+    if (!dev) return false;
 
-        // 使用最高精度的时钟
-        if (!name) {
-            // name为NULL不再支持，直接返回失败
-            return false;
-        } else {
-            // 根据设备名称查找
-            list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
-                if (strcmp(pos->clockevent.name, name)) {  
-                    found = true;
-                    break;
-                }
-            }
-        }
-
-        if (!found) {
-            return false;
-        }
-    }
-
-    // 根据模式调用对应的函数指针
-    clockevent_struct *ce = &pos->clockevent;
     switch (mode) {
         case CLOCKEVENT_MODE_SHUTDOWN:
-            if (ce->shutdown) ce->shutdown();
+            if (dev->clockevent.shutdown) dev->clockevent.shutdown();
             else return false;
             break;
         case CLOCKEVENT_MODE_ONESHOT:
-            if (ce->set_oneshot) ce->set_oneshot();
+            if (dev->clockevent.set_oneshot) dev->clockevent.set_oneshot();
             else return false;
             break;
         case CLOCKEVENT_MODE_PERIODIC:
-            if (ce->set_periodic) ce->set_periodic();
+            if (dev->clockevent.set_periodic) dev->clockevent.set_periodic();
             else return false;
             break;
         default:
             return false;
     }
     return true;
+}
+
+/**
+ * 释放时钟事件设备句柄
+ * 
+ * @param handle 设备句柄
+ */
+void clockevent_release(clockevent_handle_t handle) {
+    clockevent_list_struct *dev = (clockevent_list_struct *)handle;
+    if (!dev) return;
+
+    if (dev->clockevent.occupied) {
+        if (dev->clockevent.shutdown)
+            dev->clockevent.shutdown();
+        dev->clockevent.event_handler = NULL;
+        dev->clockevent.occupied = false;
+    }
 }
 
 /**
@@ -311,7 +246,7 @@ bool clockevent_set_mode(const char *name, clockevent_mode_t mode) {
  * @param hz 时钟频率
  */
 void clockevent_register(
-    char *name, 
+    const char *name,
     void (*shutdown)(void),
     void (*set_oneshot)(void),
     void (*set_periodic)(void),
@@ -336,6 +271,7 @@ void clockevent_register(
     current_list->clockevent.set_value = set_value;
     current_list->clockevent.hz = hz;
     current_list->clockevent.event_handler = NULL;
+    current_list->clockevent.occupied = false;
 
     // 获取转换参数
     timecycle_init_params(
@@ -358,7 +294,7 @@ void clockevent_register(
      */
     if (!list_empty(head)) {
         clockevent_list_struct *pos = NULL;
-        list_for_each_entry_t(pos, head, clockevent_list_struct, node) {
+        list_for_each_entry(pos, head, node) {
             if (pos->clockevent.hz < current_list->clockevent.hz) {
                 // 插入到 pos 节点之前
                 list_add_tail(&current_list->node, &pos->node);

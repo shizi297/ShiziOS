@@ -13,14 +13,11 @@
  * @param usec 等待的微秒数
  */
 void time_stall(uint8_t usec) {
-    uint64_t start_ns = 0;
-    if (!clocksource_read(NULL, &start_ns)) {
-        return;
-    }
-    uint64_t now = 0;
+    clocksource_handle_t cs = clocksource_get(NULL);
+    if (!cs) return;
+    uint64_t start_ns = clocksource_read(cs);
     uint64_t end_ns = start_ns + timecycle_usec_to_ns(usec);
-    while (clocksource_read(NULL, &now) && now < end_ns) {
-        // 忙等待直到达到指定时间
+    while (clocksource_read(cs) < end_ns) {
         cpu_pause();
     }
 }
@@ -31,14 +28,11 @@ void time_stall(uint8_t usec) {
  * @param msec 睡眠的毫秒数
  */
 void time_sleep(uint64_t msec) {
-    // 这里先使用忙等待实现睡眠
-    uint64_t start_ns = 0;
-    if (!clocksource_read(NULL, &start_ns)) {
-        return;
-    }
+    clocksource_handle_t cs = clocksource_get(NULL);
+    if (!cs) return;
+    uint64_t start_ns = clocksource_read(cs);
     uint64_t end_ns = start_ns + timecycle_msec_to_ns(msec);
-    uint64_t now = 0;
-    while (clocksource_read(NULL, &now) && now < end_ns) {
+    while (clocksource_read(cs) < end_ns) {
         cpu_pause();
     }
 }

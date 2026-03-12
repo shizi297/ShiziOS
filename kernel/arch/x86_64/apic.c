@@ -11,6 +11,7 @@
 #include <bootboot.h>
 #include <smp.h>
 #include <io.h>
+#include <heap.h>
 
 // 广播IPI的目标范围
 typedef enum {
@@ -137,23 +138,24 @@ static void apic_timer_set_value(uint64_t value) {
     apic_set_tsc_deadline(now + value);
 }
 
+// per-cpu 句柄数组
+static clockevent_handle_t *apic_ce_percpu = NULL;
+
 // 定时器中断处理函数
 static void apic_timer_irq(struct pt_regs *regs) {
-    void (*handler)(void);
-    get_event_handler("apic", &handler);
-    if (handler) {
-        handler();
+    uint32_t logical_id = get_logical_id();
+    if (apic_ce_percpu && apic_ce_percpu[logical_id]) {
+        clockevent_handle_irq(apic_ce_percpu[logical_id]);
     }
+    apic_eoi();
 }
 
 // 将当前cpu的apic定时器注册到时钟事件框架
 static bool apic_clockevent_register(void) {
-    uint64_t hz;
-
-    // 从时钟源获取 TSC 频率
-    if (!clocksource_get_dev_hz("tsc", &hz)) {
-        return false;
-    }
+    clocksource_handle_t tsc = clocksource_get("tsc");
+    if (!tsc) return false;
+    uint64_t hz = clocksource_get_hz(tsc);
+    if (hz == 0) return false;
 
     clockevent_register(
         "apic",
@@ -180,8 +182,23 @@ bool apic_init(void) {
         return false;
     }
 
-    // 如果是BSP，注册中断处理函数
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
+
+    // 如果是bp，分配 per_cpu 句柄数组
+    if (apic_get_id() == bootboot->bspid) {
+        uint16_t max_cpu = bootboot->numcores;
+        apic_ce_percpu = kheap_alloc(sizeof(clockevent_handle_t) * max_cpu);
+        if (!apic_ce_percpu) return false;
+        for (int i = 0; i < max_cpu; i++) {
+            apic_ce_percpu[i] = NULL;
+        }
+    }
+
+    // 获取当前cpu的句柄并保存
+    uint32_t logical_id = get_logical_id();
+    apic_ce_percpu[logical_id] = clockevent_get("apic");
+
+    // 如果是bp，注册中断处理函数
     if (apic_get_id() == bootboot->bspid) {
         smp_irq_register_handler(IRQ_APIC, (uint64_t)apic_timer_irq);
     }

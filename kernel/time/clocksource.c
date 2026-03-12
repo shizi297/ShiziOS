@@ -3,7 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
-#include "clocksource.h"
+#include <time.h>
 #include <timecycle.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -13,7 +13,6 @@
 #include <heap.h>
 #include <serial.h>
 #include <smp.h>
-#include <time.h>
 
 #define CLOCKSOURCE_PANIC(str) \
     panic("[CLOCKSOURCE] ERROR : " str "\n")
@@ -45,10 +44,25 @@
     serial_putchar('"'); \
     serial_puts("]\n")
 
+// 时钟源结构体
+typedef struct {
+    const char *name;   // 设备名称   
+    uint64_t (*read)(void); // 获取时钟的值
+
+    uint64_t hz;    // 频率
+
+    uint32_t mult;  // 乘数
+    uint32_t shift; // 移位
+
+    // 反向
+    uint32_t mult_inv;
+    uint32_t shift_inv;
+} clocksource_struct;
+
 typedef struct {
     clocksource_struct clocksource;
     struct list_head node;
-}clocksource_list_struct;
+} clocksource_list_struct;
 
 /*
  * clocksource链表头
@@ -58,9 +72,9 @@ typedef struct {
 typedef struct {
     uint64_t count;
     struct list_head head[];
-}clocksource_list_head;
+} clocksource_list_head;
 
-clocksource_list_head *clocksource_head = NULL;
+static clocksource_list_head *clocksource_head = NULL;
 
 // 时钟源框架初始化
 void clocksource_init(void) {
@@ -81,87 +95,65 @@ void clocksource_init(void) {
 }
 
 /**
- * 获取时钟源的值(返回ns)
+ * 获取时钟源设备句柄
  * 
- * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
- * @param value 用于接收时钟源值的指针
+ * @param name 设备名称，为 NULL 时选择当前CPU上最高频率的设备
  * 
- * @return 成功：true
- * @return 失败: false
+ * @return 成功：句柄
+ * @return 失败：NULL
  */
-bool clocksource_read(char *name, uint64_t *value) {
-    // 获取当前逻辑cpuid
+clocksource_handle_t clocksource_get(const char *name) {
     uint64_t logical_id = get_logical_id();
     struct list_head *head = &clocksource_head->head[logical_id];
 
-    // 使用最高精度的时钟
-    if (!name) {
-        if (list_empty(head)) {
-            // 没有时钟设备
-            CLOCKSOURCE_PANIC("no clock device");
+    if (name) {
+        clocksource_list_struct *pos;
+        list_for_each_entry(pos, head, node) {
+            if (strcmp(pos->clocksource.name, name))
+                return (clocksource_handle_t)pos;
         }
-        clocksource_list_struct *first = list_first_entry(head, clocksource_list_struct, node);
-        uint64_t dev_value = first->clocksource.read();
-        *value = timecycle_cycles_to_ns(
-            dev_value,
-            first->clocksource.mult,
-            first->clocksource.shift
-        );
-        return true;
-    }
-
-    // 根据设备名称查找
-    clocksource_list_struct *pos = NULL;
-    list_for_each_entry_t(pos, head, clocksource_list_struct, node) {
-        if (strcmp(pos->clocksource.name, name)) {
-            uint64_t dev_value = pos->clocksource.read();
-            *value = timecycle_cycles_to_ns(
-                dev_value, 
-                pos->clocksource.mult, 
-                pos->clocksource.shift
-            );
-            return true;
+        return NULL;
+    } else {
+        clocksource_list_struct *best = NULL;
+        uint64_t best_hz = 0;
+        clocksource_list_struct *pos;
+        list_for_each_entry(pos, head, node) {
+            if (pos->clocksource.hz > best_hz) {
+                best = pos;
+                best_hz = pos->clocksource.hz;
+            }
         }
+        return (clocksource_handle_t)best;
     }
-
-    return false;
 }
 
 /**
- * 获取时钟源设备的hz
+ * 读取时钟源当前值（返回纳秒）
  * 
- * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
- * @param value 用于接收时钟源hz的指针
+ * @param handle 设备句柄
  * 
- * @return 成功：true
- * @return 失败: false
+ * @return 成功：纳秒时间
+ * @return 失败：0
  */
-bool clocksource_get_dev_hz(char *name, uint64_t *hz) {
-    // 获取当前逻辑cpuid
-    uint64_t logical_id = get_logical_id();
-    struct list_head *head = &clocksource_head->head[logical_id];
+uint64_t clocksource_read(clocksource_handle_t handle) {
+    clocksource_list_struct *dev = (clocksource_list_struct *)handle;
+    if (!dev || !dev->clocksource.read) return 0;
 
-    // 使用最高精度的时钟
-    if (!name) {
-        if (list_empty(head)) {
-            // 没有时钟设备
-            CLOCKSOURCE_PANIC("no clock device");
-        }
-        clocksource_list_struct *first = list_first_entry(head, clocksource_list_struct, node);
-        *hz = first->clocksource.hz;
-        return true;
-    }
+    uint64_t cycles = dev->clocksource.read();
+    return timecycle_cycles_to_ns(cycles, dev->clocksource.mult, dev->clocksource.shift);
+}
 
-    // 根据设备名称查找
-    clocksource_list_struct *pos = NULL;
-    list_for_each_entry_t(pos, head, clocksource_list_struct, node) {
-        if (strcmp(pos->clocksource.name, name)) {
-            *hz = pos->clocksource.hz;
-            return true;
-        }
-    }
-
-    return false;
+/**
+ * 获取时钟源设备的频率（Hz）
+ * 
+ * @param handle 设备句柄
+ * 
+ * @return 成功：频率
+ * @return 失败：0
+ */
+uint64_t clocksource_get_hz(clocksource_handle_t handle) {
+    clocksource_list_struct *dev = (clocksource_list_struct *)handle;
+    return dev ? dev->clocksource.hz : 0;
 }
 
 /**
@@ -172,7 +164,7 @@ bool clocksource_get_dev_hz(char *name, uint64_t *hz) {
  * @param hz 时钟源频率
  */
 void clocksource_register(
-    char *name, 
+    const char *name,
     uint64_t (*read)(void),
     uint64_t hz
 ) {
@@ -198,7 +190,7 @@ void clocksource_register(
         &current_list->clocksource.mult,
         &current_list->clocksource.shift,
         &current_list->clocksource.mult_inv,
-        &current_list->clocksource.shift_inv  
+        &current_list->clocksource.shift_inv
     );
 
     // 获取当前逻辑cpuid
@@ -212,7 +204,7 @@ void clocksource_register(
      */
     if (!list_empty(head)) {
         clocksource_list_struct *pos = NULL;
-        list_for_each_entry_t(pos, head, clocksource_list_struct, node) {
+        list_for_each_entry(pos, head, node) {
             if (pos->clocksource.hz < current_list->clocksource.hz) {
                 // 插入到 pos 节点之前
                 list_add_tail(&current_list->node, &pos->node);

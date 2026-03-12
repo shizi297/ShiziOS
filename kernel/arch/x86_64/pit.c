@@ -26,6 +26,8 @@
 
 #define PIT_GSI 2
 
+static clockevent_handle_t pit_handle = NULL;
+
 // 停止时钟事件
 static void pit_shutdown(void) {
     // 屏蔽 IRQ_PIT 中断
@@ -61,26 +63,9 @@ static void pit_set_value(uint64_t value) {
 
 // 中断处理
 static void pit_irq(struct pt_regs *regs) {
-    void (*handler)(void);
-
-    // 获取 PIT 设备自己的事件处理函数
-    get_event_handler("pit", &handler);
-    if (handler) {
-        handler();
+    if (pit_handle) {
+        clockevent_handle_irq(pit_handle);
     }
-}
-
-// 读取当前计数值
-static uint64_t pit_read(void) {
-    uint16_t cnt;
-
-    // 锁存计数器0
-    outb(0x00, PIT_CONTROL);
-    cnt = inb(PIT_COUNTER0);
-    cnt |= (inb(PIT_COUNTER0) << 8);
-
-    // 转换为递增
-    return 65536 - cnt;
 }
 
 /**
@@ -116,13 +101,7 @@ bool pit_init(void) {
         pit_set_value,
         1193182                 
     );
-
-    // 注册时钟源设备
-    clocksource_register(
-        "pit",
-        pit_read,
-        1193182
-    );
+    pit_handle = clockevent_get("pit");
 
     // 注册到ioapic
     bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, apic_get_id(), IOAPIC_POLARITY);

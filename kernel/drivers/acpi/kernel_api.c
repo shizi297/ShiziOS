@@ -25,6 +25,16 @@
     serial_puts("\n")
 
 static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
+static clocksource_handle_t acpi_clocksource = NULL;
+
+// 获取当前纳秒，若句柄未初始化则尝试获取
+static inline uint64_t get_ns(void) {
+    if (!acpi_clocksource) {
+        acpi_clocksource = clocksource_get(NULL);
+        if (!acpi_clocksource) return 0;
+    }
+    return clocksource_read(acpi_clocksource);
+}
 
 /**
  * 获取rsdp物理地址
@@ -165,12 +175,7 @@ void uacpi_kernel_free(void *mem) {
  * @return 失败：0
  */
 uacpi_u64 uacpi_kernel_get_nanoseconds_since_boot(void) {
-    uacpi_u64 ns = 0;
-    bool is_success = clocksource_read(NULL, &ns);
-    if (!is_success) {
-        return 0;
-    }
-    return ns;
+    return get_ns();
 }
 
 /**
@@ -233,7 +238,8 @@ uacpi_status uacpi_kernel_acquire_mutex(uacpi_handle mutex, uacpi_u16 timeout) {
 
     uint64_t start_ns = 0;
     if (timeout != 0xFFFF) {
-        if (!clocksource_read(NULL, &start_ns)) {
+        start_ns = get_ns();
+        if (start_ns == 0) {
             return spin_trylock(lock) ? UACPI_STATUS_OK : UACPI_STATUS_TIMEOUT;
         }
     }
@@ -245,8 +251,8 @@ uacpi_status uacpi_kernel_acquire_mutex(uacpi_handle mutex, uacpi_u16 timeout) {
         cpu_pause();
 
         if (timeout != 0xFFFF) {
-            uint64_t now_ns;
-            if (!clocksource_read(NULL, &now_ns)) {
+            uint64_t now_ns = get_ns();
+            if (now_ns == 0) {
                 return UACPI_STATUS_TIMEOUT;
             }
             if (timecycle_ns_to_msec(now_ns - start_ns) >= timeout) {
@@ -299,9 +305,8 @@ void uacpi_kernel_free_event(uacpi_handle event) {
  */
 uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle event, uacpi_u16 timeout_ms) {
     _Atomic uint64_t *event_counter = (_Atomic uint64_t *)event;
-    uint64_t ns = 0;
-    bool start = clocksource_read(NULL, &ns);
-    if (!start) {
+    uint64_t ns = get_ns();
+    if (ns == 0) {
         return UACPI_FALSE;
     }
 
@@ -315,12 +320,10 @@ uacpi_bool uacpi_kernel_wait_for_event(uacpi_handle event, uacpi_u16 timeout_ms)
         }
 
         if (timeout_ms != 0xFFFF) {
-            uint64_t now = 0;
-            bool is_success = clocksource_read(NULL, &now);
-            if (!is_success) {
+            uint64_t now = get_ns();
+            if (now == 0) {
                 return UACPI_FALSE;
             }
-
             if (timecycle_ns_to_msec(now - ns) >= timeout_ms) {
                 return UACPI_FALSE;
             }

@@ -18,54 +18,69 @@ typedef enum {
     CLOCKEVENT_MODE_PERIODIC,   // 周期模式
 } clockevent_mode_t;
 
+/* 不透明句柄类型 */
+typedef struct clockevent_device* clockevent_handle_t;
+typedef struct clocksource_device* clocksource_handle_t;
+
 // 时钟事件框架初始化
 void clockevent_init(void);
 
 /**
- * 注册回调函数到设备
- * 设备中断时调用
+ * 获取时钟事件设备句柄
  * 
- * @param event_handler 回调函数的函数指针
- * @param name 设备名称，当这个为NULL时，使用精度最高的设备
- * @param out_selected_name 当成功且name为NULL时，返回被选中的设备名称
+ * @param name 设备名称，为 NULL 时选择当前CPU上最高频率且未被占用的设备
  * 
- * @return 失败： false
- * @return 成功： true
+ * @return 成功：句柄
+ * @return 失败：NULL
  */
-bool event_handler_register(void (*event_handler)(void), char *name, const char **out_selected_name);
+clockevent_handle_t clockevent_get(const char *name);
 
 /**
- * 设置中断值到设备
+ * 设置时钟事件设备的中断处理函数
  * 
- * @param ns 纳秒(相对当前)
- * @param name 设备名称，当这个为NULL时，使用精度最高的设备
- * 
- * @return 失败： false
- * @return 成功： true
- */
-bool set_value_to_dev(uint64_t ns, char *name);
-
-/**
- * 获取设备的事件处理函数
- * 
- * @param name 设备名称，当这个为NULL时，使用精度最高的设备
- * @param event_handler 存储回调函数的函数指针
- * 
- * @return 失败： NULL
- * @return 成功： 回调函数的函数指针
- */
-void get_event_handler(char *name, void (**event_handler)(void));
-
-/**
- * 设置设备的中断模式
- * 
- * @param name 设备名称
- * @param mode 要设置的模式
+ * @param handle 设备句柄
+ * @param handler 处理函数，若为 NULL 则清空调回函数
  * 
  * @return 成功：true
  * @return 失败：false
  */
-bool clockevent_set_mode(const char *name, clockevent_mode_t mode);
+bool clockevent_set_handler(clockevent_handle_t handle, void (*handler)(void));
+
+/**
+ * 触发时钟事件设备的中断处理（由驱动在中断中调用）
+ * 
+ * @param handle 设备句柄
+ */
+void clockevent_handle_irq(clockevent_handle_t handle);
+
+/**
+ * 设置下一次中断触发时间（相对当前时刻的纳秒数）
+ * 
+ * @param handle 设备句柄
+ * @param ns 相对纳秒数
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool clockevent_set_next(clockevent_handle_t handle, uint64_t ns);
+
+/**
+ * 设置时钟事件设备的工作模式
+ * 
+ * @param handle 设备句柄
+ * @param mode 模式
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool clockevent_set_mode(clockevent_handle_t handle, clockevent_mode_t mode);
+
+/**
+ * 释放时钟事件设备句柄
+ * 
+ * @param handle 设备句柄
+ */
+void clockevent_release(clockevent_handle_t handle);
 
 /**
  * 注册时钟到时钟事件框架
@@ -74,11 +89,11 @@ bool clockevent_set_mode(const char *name, clockevent_mode_t mode);
  * @param shutdown 停止的函数指针
  * @param set_oneshot 设置为单次中断模式的函数指针
  * @param set_periodic 设置为周期中断模式的函数指针
- * @param set_value 设置下一次中断的值的函数指针
+ * @param set_value 设置下一次中断的值的函数指针（设备单位）
  * @param hz 时钟频率
  */
 void clockevent_register(
-    char *name, 
+    const char *name,
     void (*shutdown)(void),
     void (*set_oneshot)(void),
     void (*set_periodic)(void),
@@ -90,25 +105,34 @@ void clockevent_register(
 void clocksource_init(void);
 
 /**
- * 获取时钟源的值(返回ns)
+ * 获取时钟源设备句柄
  * 
- * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
+ * @param name 设备名称，为 NULL 时选择当前CPU上最高频率的设备
  * 
- * @return 成功：true
- * @return 失败: false
+ * @return 成功：句柄
+ * @return 失败：NULL
  */
-bool clocksource_read(char *name, uint64_t *value);
+clocksource_handle_t clocksource_get(const char *name);
 
 /**
- * 获取时钟源设备的hz
+ * 读取时钟源当前值（返回纳秒）
  * 
- * @param name 时钟名称，当这个为NULL时，使用精度最高的设备
- * @param value 用于接收时钟源hz的指针
+ * @param handle 设备句柄
  * 
- * @return 成功：true
- * @return 失败: false
+ * @return 成功：纳秒时间
+ * @return 失败：0
  */
-bool clocksource_get_dev_hz(char *name, uint64_t *hz);
+uint64_t clocksource_read(clocksource_handle_t handle);
+
+/**
+ * 获取时钟源设备的频率（Hz）
+ * 
+ * @param handle 设备句柄
+ * 
+ * @return 成功：频率
+ * @return 失败：0
+ */
+uint64_t clocksource_get_hz(clocksource_handle_t handle);
 
 /**
  * 注册时钟到时钟源框架
@@ -118,7 +142,7 @@ bool clocksource_get_dev_hz(char *name, uint64_t *hz);
  * @param hz 时钟源频率
  */
 void clocksource_register(
-    char *name, 
+    const char *name,
     uint64_t (*read)(void),
     uint64_t hz
 );
