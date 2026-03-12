@@ -10,8 +10,6 @@
 
 struct sched_class;
 typedef struct task_struct task_struct;
-typedef struct fair_rq_struct fair_rq_struct;
-typedef struct rt_rq_struct rt_rq_struct;
 
 typedef struct _per_cpu {
     uint64_t (*timestamp)(void);    // 时间戳获取
@@ -21,10 +19,7 @@ typedef struct _per_cpu {
     uint16_t logical_id;
 
     // 调度器私有数据
-    union {
-        fair_rq_struct *fair_rq;
-        rt_rq_struct *rt_rq;
-    } sched_data;
+    void *rq;
 
 } __attribute__((aligned(64))) per_cpu;
 

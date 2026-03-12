@@ -10,6 +10,7 @@
 #include <processor.h>    
 #include <smp.h>   
 #include <ioapic.h>
+#include <apic.h>
 
 #define PIT_COUNTER0        0x40
 #define PIT_CONTROL         0x43
@@ -123,12 +124,8 @@ bool pit_init(void) {
         1193182
     );
 
-    // 禁用pic
-    outb(0xFF, 0xA1); 
-    outb(0xFF, 0x21); 
-
     // 注册到ioapic
-    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, get_apic_id(), IOAPIC_POLARITY);
+    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, apic_get_id(), IOAPIC_POLARITY);
     if (!is_success) return false;
 
     return true;

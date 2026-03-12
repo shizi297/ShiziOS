@@ -18,11 +18,6 @@
 
 #define INIT_TIME_SLICE_NS timecycle_msec_to_ns(20)
 
-static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
-static per_cpu_task_state_struct *per_cpu_task_state_ptr = NULL;
-
-INIT_BITMAP(pid_bitmap, PID_MAX);
-
 /*
  * 用于存储对应状态的任务
  * 运行/就绪调度器负责，这里不放
@@ -57,6 +52,11 @@ struct task_copy_arg {
     uint64_t tls;
 };
 
+static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
+static per_cpu_task_state_struct *per_cpu_task_state_ptr = NULL;
+
+INIT_BITMAP(pid_bitmap, PID_MAX);
+
 /**
  * pid与tgid分配
  * 
@@ -64,21 +64,20 @@ struct task_copy_arg {
  * @return 失败：-1
  */
 static pid_t pid_alloc(void) {
-    pid_t pid = (pid_t)bitmap_find(&pid_bitmap, PID_MAX, 0, 0);
+    pid_t pid = (pid_t)bitmap_find(pid_bitmap, PID_MAX, 0, 0);
     if (pid == PID_MAX) return -1;
 
     return pid;
 }
 
 /**
- * 复制任务的操作
+ * 复制任务
  * 
- * @param arg.flags 标志位
- * @param arg.user_stack 用户栈地址
- * @param arg.tls 是否设置tls，只在有TASK_SETTLS标志时有效
+ * @param arg 参数
  */
 task_struct *task_copy(struct task_copy_arg arg) {
     // TODO
+    return NULL;
 }
 
 // 任务管理数据初始化

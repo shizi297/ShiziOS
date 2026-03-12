@@ -20,7 +20,7 @@ struct sched_class {
     void (*enqueue)(void);  // 入队
     void (*dequeue)(void);  // 出队
     void (*pick_next)(void);    // 选择下一个任务
-    void (*set_priovoid); // 设置任务优先级
+    void (*set_prio)(void); // 设置任务优先级
     void (*init)(void); // 初始化调度器
 };
 
@@ -56,16 +56,15 @@ typedef struct task_struct {
 
     int prio;   // 任务的优先级，影响任务被调度的时长
 
-    signal_t signal;    // 信号组，用于标记信号
-    void (*sa[_NSIG])(int signal);   // 注册的信号处理函数
-
-    signal_t *common_signal;    // 对于整个线程组的信号
-    void (*common_sa[_NSIG])(int signal);   // 对于整个线程组的信号处理函数
+    struct signal *signal;  // 信号相关
 
     struct pt_regs *regs;    // 存储中断/异常/系统调用/信号处理信息
     struct thread_struct thread;   // 任务切换时保存的信息
 
     struct list_head zombie;    // 僵尸队列头
+    
+    struct list_head thread_group;  // 线程组节点
+    struct task_struct *group_leader;  // 指向主线程
 
     bool exit_signal;   // 进程终止时是否向父进程发送SIGCHLD信号
 }task_struct;

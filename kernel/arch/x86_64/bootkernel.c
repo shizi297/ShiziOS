@@ -62,14 +62,13 @@ void _start(uint64_t logical_id_raw) {
     // bootboot在加载内核前已经初始化串口，这里不初始化
 
     spin_lock(&boot_init_spin);
-
+    apic_boot_init();
     if (!boot_init) {
-        apic_boot_init();
+        boot_init = true;
     }
-    
     spin_unlock(&boot_init_spin);
 
-    apic_id = get_apic_id();
+    apic_id = apic_get_id();
 
     // 计算是否是BP CPU
     if (apic_id == bootboot->bspid) {

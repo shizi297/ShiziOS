@@ -5,10 +5,78 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <processor.h>
+#include <msr.h>
+#include <desc.h>
 #include <time.h>
 #include <bootboot.h>
 #include <smp.h>
+#include <io.h>
+
+// 广播IPI的目标范围
+typedef enum {
+    NO_ONESELF = 0x2,  // 所有核心，包括自身 
+    ONESELF = 0x3,  // 所有核心，排除自身 
+} apic_scope;
+
+// 为当前 CPU 启用 x2APIC 模式
+static void set_apic_x2apic(void) {
+    uint64_t msr_val = msr_read(MSR_IA32_APIC_BASE);
+
+    // 已经处于 x2APIC 模式，无需操作
+    if ((msr_val & (APIC_BASE_MSR_X2APIC | APIC_BASE_MSR_ENABLE))
+         == (APIC_BASE_MSR_X2APIC | APIC_BASE_MSR_ENABLE))
+        return;
+
+    msr_val |= APIC_BASE_MSR_X2APIC | APIC_BASE_MSR_ENABLE;
+    msr_write(MSR_IA32_APIC_BASE, msr_val);
+}
+
+/**
+ * 配置本地向量表 (LVT) 定时器条目
+ *
+ * @param vector 中断向量号
+ * @param mode 触发模式 
+ * @param mask 屏蔽位 (1=屏蔽，0=启用)
+ */
+static void apic_set_lvt_timer(uint32_t vector, uint32_t mode, uint32_t mask) {
+    uint64_t val = ((uint64_t)vector & 0xFF) | (((uint64_t)mode & 0x7) << 8) | (((uint64_t)mask & 0x1) << 16);
+    msr_write(X2APIC_MSR_LVT_TIMER, val);
+}
+
+/**
+ * 设置 TSC DEADLINE的触发时间
+ *
+ * @param tsc_value TSC截止值
+ */
+static void apic_set_tsc_deadline(uint64_t value) {
+    msr_write(MSR_IA32_TSC_DEADLINE, value);
+}
+
+/**
+ * 设置svr寄存器
+ *
+ * @param value 伪中断向量号
+ */
+static void apic_set_svr(uint8_t value) {
+    uint64_t svr =  msr_read(X2APIC_MSR_SVR);
+    svr = (svr & ~0xFF) | ((1 << 8)) | value;
+    msr_write(X2APIC_MSR_SVR, svr);
+}
+
+// 读取错误状态寄存器
+static uint32_t apic_read_esr(void) {
+    msr_write(X2APIC_MSR_ESR, 0);
+    return (uint32_t)msr_read(X2APIC_MSR_ESR);
+}
+
+/**
+ * 设置任务优先级 (TPR)
+ *
+ * @param priority 要设置的优先级值
+ */
+static void apic_set_tpr(uint8_t priority) {
+    msr_write(X2APIC_MSR_TPR, priority);
+}
 
 /**
  * 单播IPI发送接口
@@ -18,7 +86,8 @@
  * @param vector 中断向量号
  */
 void apic_send_ipi(uint32_t apic_id, uint32_t vector) {
-    processor_send_ipi(apic_id, vector);
+    uint64_t icr_val = ((uint64_t)apic_id << 32) | vector;
+    msr_write(X2APIC_MSR_ICR, icr_val);
 }
 
 /**
@@ -28,25 +97,29 @@ void apic_send_ipi(uint32_t apic_id, uint32_t vector) {
  * @param vector 中断向量号
  */
 void apic_send_ipi_all(uint32_t vector) {
-    processor_send_ipi_all(vector, NO_ONESELF);
+    uint64_t icr_val = ((uint64_t)ONESELF << 18) | (vector & 0xFF);
+    msr_write(X2APIC_MSR_ICR, icr_val);
 }
 
 // 用于通知apic当前中断已完成，需要在所有中断处理后面添加
 void apic_eoi(void) {
-    processor_eoi();
+    msr_write(X2APIC_MSR_EOI, 0);
 }
 
-// 设置apic的数值
-void set_apic_timer(uint64_t value) {
-    apic_set_tsc_deadline(value);
+// 获取当前CPU的APIC ID
+uint32_t apic_get_id(void) {
+    return (uint32_t)msr_read(X2APIC_MSR_APIC_ID);
 }
 
 // 早期初始化，用于启动x2apic模式，让系统可以使用一些东西
 void apic_boot_init(void) {
     // 设置为x2apic模式
     set_apic_x2apic();
-}
 
+    // 禁用PIC
+    outb(0xFF, 0xA1); 
+    outb(0xFF, 0x21); 
+}
 
 // 关闭apic定时器（屏蔽中断）
 static void apic_timer_shutdown(void) {
@@ -109,7 +182,7 @@ bool apic_init(void) {
 
     // 如果是BSP，注册中断处理函数
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
-    if (get_apic_id() == bootboot->bspid) {
+    if (apic_get_id() == bootboot->bspid) {
         smp_irq_register_handler(IRQ_APIC, (uint64_t)apic_timer_irq);
     }
 

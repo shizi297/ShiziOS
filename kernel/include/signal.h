@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 #define SIGHUP     1   // 终端挂断或控制进程终止
 #define SIGINT     2   // 来自键盘的中断 (Ctrl+C)
@@ -50,11 +51,9 @@
 #define SIG_IGN   ((void (*)(int))1)   // 忽略信号
 
 // 信号集类型
-#define _SIGSET_NUM_WORDS ((_NSIG + (8*sizeof(unsigned long)) - 1) / (8*sizeof(unsigned long)))
+#define _SIGSET_NUM_WORDS ((_NSIG + (8 * sizeof(unsigned long)) - 1) / (8 * sizeof(unsigned long)))
 
-typedef struct {
-    unsigned long __bits[_SIGSET_NUM_WORDS];
-} signal_t;
+struct signal;
 
 // 算出信号属于数组的那个元素
 #define _SIGSET_WORD(sig)  (((sig) - 1) / (8 * sizeof(unsigned long)))

@@ -1,7 +1,7 @@
 # 锁层级结构
 
-L1 zone.lock
-L2 mem_block.lock
+L1 mem_block.lock
+L2 zone.lock
 
 锁定规则：
 当需要获取多把锁时，每次获取锁前需要先获取等级高的锁。

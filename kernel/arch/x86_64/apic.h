@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /**
  * 单播IPI发送接口
@@ -32,3 +33,6 @@ void apic_boot_init(void);
 
 // 初始化apic
 bool apic_init(void);
+
+// 获取当前cpu的apicid
+uint32_t apic_get_id(void);

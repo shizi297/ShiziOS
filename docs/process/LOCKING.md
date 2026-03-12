@@ -1,7 +1,7 @@
 # Lock Hierarchy
 
-L1 zone.lock
-L2 mem_block.lock
+L1 mem_block.lock
+L2 zone.lock
 
 Locking Rules:
 Locks MUST be acquired in order from higher to lower hierarchy.
