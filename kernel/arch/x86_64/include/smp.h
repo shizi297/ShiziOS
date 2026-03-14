@@ -11,15 +11,15 @@
 struct sched_class;
 typedef struct task_struct task_struct;
 
-typedef struct _per_cpu {
+typedef struct {
     uint64_t (*timestamp)(void);    // 时间戳获取
     task_struct *current;
-    struct sched_class *sched_class;
 
+    // 当前cpuid
     uint16_t logical_id;
 
-    // 调度器私有数据
-    void *rq;
+    // 调度器头节点
+    void *sched;
 
 } __attribute__((aligned(64))) per_cpu;
 
@@ -39,6 +39,12 @@ void smp_data_init(
 
 // 获取cpu核心的逻辑id
 uint32_t get_logical_id(void);
+
+// 设置调度器头节点
+void smp_set_sched(void *sched);
+
+// 获取当前cpu的调度器头节点
+void *smp_get_sched(void);
 
 /*
  * 初始化所有核心

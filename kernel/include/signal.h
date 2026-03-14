@@ -7,6 +7,12 @@
 
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stdbool.h>
+#include <arch_processor.h>
+#include <task.h>
+
+struct signal_struct;
+typedef struct signal_t signal_t;
 
 #define SIGHUP     1   // 终端挂断或控制进程终止
 #define SIGINT     2   // 来自键盘的中断 (Ctrl+C)
@@ -50,41 +56,62 @@
 #define SIG_DFL   ((void (*)(int))0)   // 默认动作
 #define SIG_IGN   ((void (*)(int))1)   // 忽略信号
 
-// 信号集类型
-#define _SIGSET_NUM_WORDS ((_NSIG + (8 * sizeof(unsigned long)) - 1) / (8 * sizeof(unsigned long)))
+/**
+ * 发送信号
+ * 
+ * @param target 要发送的任务指针
+ * @param sig 要发送的信号集
+ * @param sig_num 要发送的信号
+ * @param has_private 要发送的信号是否为线程私有的
+ * @param force 是否强制发送
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool signal_send(struct task_struct *target, struct signal_struct *sig,
+                 int sig_num, bool has_private, bool force);
 
-struct signal;
+/**
+ * 复制或设置为共享信号处理
+ * 
+ * @param parent_sig 父进程的信号集
+ * @param new_sig 新的信号指针存放的地方
+ * @param share 共享还是复制
+ * 
+ * @return 成功：true 
+ * @return 失败：flase
+ */
+bool signal_copy(struct signal_struct *parent_sig, struct signal_struct **new_sig,
+                 bool share);
 
-// 算出信号属于数组的那个元素
-#define _SIGSET_WORD(sig)  (((sig) - 1) / (8 * sizeof(unsigned long)))
+/**
+ * 退出时的信号处理
+ * 
+ * @param task 要退出的任务
+ * @param sig 要退出的任务的信号集
+ * @param tell 是否向父进程发送 SIGCHLD
+ */
+void signal_exit(struct task_struct *task, struct signal_struct *sig,
+                 bool tell);
 
-// 算出信号在这个元素的那个bit位
-#define _SIGSET_BIT(sig)   (((sig) - 1) % (8 * sizeof(unsigned long)))
+/**
+ * 执行信号处理
+ * 
+ * @param task 要执行信号处理的任务
+ * @param regs 当前任务的用户态寄存器状态
+ */
+void signal_exec(struct task_struct *task, struct pt_regs *regs);
 
-// 清空信号集
-#define sigemptyset(set) do { \
-    int __i; \
-    for (__i = 0; __i < _SIGSET_NUM_WORDS; ++__i) \
-        (set)->__bits[__i] = 0; \
-} while(0)
-
-// 填充信号集（包含所有信号）
-#define sigfillset(set) do { \
-    int __i; \
-    for (__i = 0; __i < _SIGSET_NUM_WORDS - 1; ++__i) \
-        (set)->__bits[__i] = ~0UL; \
-    (set)->__bits[_SIGSET_NUM_WORDS - 1] = \
-        (1UL << (_NSIG % (8*sizeof(unsigned long)))) - 1; \
-} while(0)
-
-// 向信号集中添加信号
-#define sigaddset(set, sig) \
-    ((set)->__bits[_SIGSET_WORD(sig)] |= (1UL << _SIGSET_BIT(sig)))
-
-// 从信号集中删除信号
-#define sigdelset(set, sig) \
-    ((set)->__bits[_SIGSET_WORD(sig)] &= ~(1UL << _SIGSET_BIT(sig)))
-
-// 测试信号是否在信号集中
-#define sigismember(set, sig) \
-    ((set)->__bits[_SIGSET_WORD(sig)] & (1UL << _SIGSET_BIT(sig)))
+/***
+ * 信号堵塞操作
+ * 
+ * @param sig 信号堵塞集
+ * @param how 执行的操作
+ * @param set 设置的信号
+ * @param oldset 修改前的堵塞状态
+ * 
+ * @return 成功：true
+ * @return 失败：false
+ */
+bool signal_blocked_op(struct signal_struct *sig, int how,
+                       const signal_t *set, signal_t *oldset);

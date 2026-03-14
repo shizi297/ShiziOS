@@ -16,13 +16,19 @@ else()
     message(STATUS "No ccache found, using direct compiler: ${CMAKE_C_COMPILER}")
 endif()
 
-# 查找并启用 lld 链接器
-find_program(LLD_FOUND ld.lld)
-if(LLD_FOUND)
-    add_link_options("-fuse-ld=lld")
-    message(STATUS "Using lld linker: ${LLD_FOUND}")
+# 查找最快的链接器：优先 mold，其次 lld ，最后默认
+find_program(MOLD_FOUND NAMES mold ld.mold)
+if(MOLD_FOUND)
+    add_link_options("-fuse-ld=mold")
+    message(STATUS "Using mold linker (fastest, parallel by default): ${MOLD_FOUND}")
 else()
-    message(STATUS "No lld found, using default linker")
+    find_program(LLD_FOUND ld.lld)
+    if(LLD_FOUND)
+        add_link_options("-fuse-ld=lld")
+        message(STATUS "Using lld linker with multi-threading: ${LLD_FOUND}")
+    else()
+        message(STATUS "No mold or lld found, using default linker (GNU ld, no parallel)")
+    endif()
 endif()
 
 # 编译选项
@@ -42,16 +48,6 @@ include_directories(
     kernel/drivers/acpi/uacpi/include/
 )
 
-# 编译kernel目录下的文件
-file(GLOB KERNEL_C_SOURCES "kernel/*.c")
-file(GLOB KERNEL_ASM_SOURCES "kernel/*.asm" "kernel/*.S" "kernel/*.s")
-
-add_library(kernel_main STATIC ${KERNEL_C_SOURCES} ${KERNEL_ASM_SOURCES})
-
-if(KERNEL_ASM_SOURCES)
-    set_source_files_properties(${KERNEL_ASM_SOURCES} PROPERTIES LANGUAGE ASM_NASM)
-endif()
-
 # 添加模块子目录
 add_subdirectory(kernel/arch/x86_64)      # x86_64架构模块
 add_subdirectory(kernel/arch/x86_64/mm)   # x86_64架构特定内存管理
@@ -60,6 +56,8 @@ add_subdirectory(kernel/mm)               # 通用内存管理模块
 add_subdirectory(kernel/lib)               # 库模块
 add_subdirectory(kernel/time)              # 时间管理模块
 add_subdirectory(kernel/task)              # 任务管理模块
+add_subdirectory(kernel/init)              # 内核初始化模块
+add_subdirectory(kernel/ipc)               # IPC模块
 
 # 链接生成内核
 set(EMPTY_SOURCE ${CMAKE_BINARY_DIR}/empty.c)
@@ -70,7 +68,7 @@ add_executable(kernel.elf ${EMPTY_SOURCE})
 # 链接所有模块库
 target_link_libraries(kernel.elf
     "-Wl,--start-group"
-    kernel_main
+    kernel_init
     x86_64_arch
     x86_64_mm       
     kernel_drivers  
@@ -78,6 +76,7 @@ target_link_libraries(kernel.elf
     kernel_lib
     kernel_time     
     kernel_task
+    kernel_ipc
     "-Wl,--end-group"
 )
 
@@ -116,7 +115,7 @@ add_custom_target(ram-img
     WORKING_DIRECTORY /dev/shm/shizios
 )
 
-# 用内存的img内存运行qemu
+# 用内存的img运行qemu
 add_custom_target(ram-run
     DEPENDS ram-img
     COMMAND qemu-system-x86_64 

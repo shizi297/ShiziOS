@@ -12,7 +12,7 @@
 
 // 所有线程的内核栈大小
 #define KERNEL_START_SIZE 16384     // 内核栈数量
-#define PID_MAX ((1ULL << 22) - 1)  // PID的最大数量
+#define TASK_ID_MAX ((1ULL << 22) - 1)  // 任务管理ID的最大数量
 
 #define ARCH          ARCH_X86_64
 

@@ -176,6 +176,18 @@ uint32_t get_logical_id(void) {
     return per_cpu_ptr->logical_id;
 }
 
+// 设置调度器头节点
+void smp_set_sched(void *sched) {
+    per_cpu *per_cpu_ptr = get_gs_base();
+    per_cpu_ptr->sched = sched;
+}
+
+// 获取当前cpu的调度器头节点
+void *smp_get_sched(void) {
+    per_cpu *per_cpu_ptr = get_gs_base();
+    return per_cpu_ptr->sched;    
+}
+
 /*
  * 初始化所有核心
  *
