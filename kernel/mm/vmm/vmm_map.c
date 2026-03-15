@@ -130,8 +130,9 @@ vmm_result_t vmm_unmap_nolock(as_t *as, uintptr_t addr) {
     mmu_remove_map(ptb);
     
     // 释放线性地址
-    if (vma->linear_addr != 0) {
-        kheap_free((void *)vma->linear_addr);
+    uintptr_t linear;
+    if (vma_read(vma, VMA_FIELD_LINEAR, &linear) == VMM_OK && linear != 0) {
+        kheap_free((void *)linear);
     }
     
     // 根据映射大小选择TLB刷新策略
@@ -159,9 +160,9 @@ vmm_result_t vmm_unmap_nolock(as_t *as, uintptr_t addr) {
  * @return vmm_result_t
  */
 vmm_result_t vmm_unmap(as_t *as, uintptr_t addr) {
-    spin_lock(&as->lock);
+    as_get_lock(as);
     vmm_result_t result = vmm_unmap_nolock(as, addr);
-    spin_unlock(&as->lock);
+    as_remove_lock(as);
 
     return result;
 }
@@ -175,7 +176,7 @@ void vmm_switch_as(as_t *as) {
     if (as == NULL) {
         return;
     }
-    mmu_set_pgd(as->pgd);
+    mmu_set_pgd(as_get_pgd(as));
 }
 
 /**
@@ -219,50 +220,31 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
 }
 
 /*
+ * 增加as的引用计数
+ */
+void vmm_as_add_ref(as_t *as) {
+    as_add_ref(as);
+}
+
+/*
  * 销毁进程地址空间
  *
  * @param as 进程地址空间的虚拟地址
  */
 void vmm_destroy_as(as_t *as) {
-    /*
-     * 不需要刷新tlb
-     * 因为销毁进程地址空间
-     * 一般是进程退出
-     * 所以在调用这个函数的时候
-     * 已经切换到了内核地址空间
-     * 不会再访问这个地址空间的内容
-     */
-
     if (as == NULL) {
         return;
     }
 
-    spin_lock(&as->lock);
-
-    // 释放所有VMA及其映射
-    while (!list_empty(&as->vma_list)) {
-        vm_area_t *vma = list_first_entry(&as->vma_list, vm_area_t, list_node);
-        
-        // 释放页表页
-        page_table_blocks_struct *ptb = vma_get_ptb(vma);
-        mmu_remove_map(ptb);
-        
-        // 释放线性地址
-        if (vma->linear_addr != 0) {
-            kheap_free((void *)vma->linear_addr);
-        }
-        
-        // 删除当前头节点
-        vma_remove_nolock(as, vma);
+    int old = as_sub_ref(as);
+    if (old == 1) {
+        // 引用计数归零，真正销毁
+        as_get_lock(as);
+        as_cleanup(as);
+        as_remove_lock(as);
+        as_destroy(as);
     }
-
-    spin_unlock(&as->lock);
-
-    // 删除页全局目录
-    mmu_remove_pgd(as->pgd);
-
-    // 销毁地址空间结构体
-    as_destroy(as);
+    // 否则什么都不做
 }
 
 /**
@@ -288,7 +270,7 @@ as_t *vmm_copy_as(as_t *as) {
         return NULL;
     }
 
-    spin_lock(&new_as->lock);
+    as_get_lock(new_as);
 
     // 遍历每个vma
     for (uint64_t i = 0; i < result->addr_count; i++) {
@@ -313,7 +295,7 @@ as_t *vmm_copy_as(as_t *as) {
             paddr = LINEAR_TO_PHYS((uintptr_t)new_linear);
 
             uint64_t page_count = size / PAGE_SIZE;
-            res = mmu_add_map(new_as->pgd, start, paddr, page_count,
+            res = mmu_add_map(as_get_pgd(new_as), start, paddr, page_count,
                               data->prot, data->flags, &ptb);
             if (res != VMM_OK) {
                 kheap_free(new_linear);
@@ -338,13 +320,13 @@ as_t *vmm_copy_as(as_t *as) {
         }
     }
 
-    spin_unlock(&new_as->lock);
+    as_remove_lock(new_as);
     kheap_free(result);
     return new_as;
 
 fail:
     // 错误时先释放锁，再销毁新地址空间
-    spin_unlock(&new_as->lock);
+    as_remove_lock(new_as);
     vmm_destroy_as(new_as);
     kheap_free(result);
     return NULL;
@@ -386,13 +368,13 @@ vmm_result_t vmm_map_anon(
     
     uint64_t size = page * PAGE_SIZE;
     
-    spin_lock(&as->lock);
+    as_get_lock(as);
     
     // 如果addr为0，自动分配地址
     if (addr == 0) {
         addr = vmm_alloc_addr(as, size);
         if (addr == 0) {
-            spin_unlock(&as->lock);
+            as_remove_lock(as);
             if (out_addr != NULL) {
                 *out_addr = 0;
             }
@@ -402,7 +384,7 @@ vmm_result_t vmm_map_anon(
     } else {
         // 手动指定地址，需要检查一些参数
         if (addr < USER_START || addr + size > USER_STACK_TOP) {
-            spin_unlock(&as->lock);
+            as_remove_lock(as);
             if (out_addr != NULL) {
                 *out_addr = 0;
             }
@@ -411,7 +393,7 @@ vmm_result_t vmm_map_anon(
         
         // 检查地址是否页对齐
         if ((addr & (PAGE_SIZE - 1)) != 0) {
-            spin_unlock(&as->lock);
+            as_remove_lock(as);
             if (out_addr != NULL) {
                 *out_addr = 0;
             }
@@ -422,7 +404,7 @@ vmm_result_t vmm_map_anon(
     // 添加VMA
     vmm_result_t result = vma_add_nolock(as, addr, addr + size, prot, flags);
     if (result != VMM_OK) {
-        spin_unlock(&as->lock);
+        as_remove_lock(as);
         if (out_addr != NULL) {
             *out_addr = 0;
         }
@@ -432,7 +414,7 @@ vmm_result_t vmm_map_anon(
     // 查找刚添加的VMA
     vm_area_t *vma = vma_find_nolock(as, addr);
     if (vma == NULL) {
-        spin_unlock(&as->lock);
+        as_remove_lock(as);
         if (out_addr != NULL) {
             *out_addr = 0;
         }
@@ -445,7 +427,7 @@ vmm_result_t vmm_map_anon(
         if (alloc_addr == 0) {
             // 分配失败，移除VMA
             vma_remove_nolock(as, vma);
-            spin_unlock(&as->lock);
+            as_remove_lock(as);
             if (out_addr != NULL) {
                 *out_addr = 0;
             }
@@ -456,27 +438,27 @@ vmm_result_t vmm_map_anon(
         if (vma_write(vma, VMA_FIELD_LINEAR, &alloc_addr) != VMM_OK) {
             kheap_free((void *)alloc_addr);
             vma_remove_nolock(as, vma);
-            spin_unlock(&as->lock);
+            as_remove_lock(as);
             return VMM_INTERNAL_ERROR;
         }
         
         // 建立映射，传入page_table_blocks指针
         uintptr_t paddr_start = LINEAR_TO_PHYS(alloc_addr);
         page_table_blocks_struct *ptb = vma_get_ptb(vma);
-        result = mmu_add_map(as->pgd, addr, paddr_start, page, prot, flags, ptb);
+        result = mmu_add_map(as_get_pgd(as), addr, paddr_start, page, prot, flags, ptb);
         
         if (result != VMM_OK) {
             // 映射失败，释放线性地址并移除VMA
             kheap_free((void *)alloc_addr);
             vma_remove_nolock(as, vma);
-            spin_unlock(&as->lock);
+            as_remove_lock(as);
             return result;
         }
         // 线性地址已设置，无需额外操作
     } 
     // 不预分配，页表块数组为空，无需额外操作
     
-    spin_unlock(&as->lock);
+    as_remove_lock(as);
     
     // 返回实际分配的地址
     if (out_addr != NULL) {

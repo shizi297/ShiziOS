@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 // 虚拟内存权限标志
 typedef enum {

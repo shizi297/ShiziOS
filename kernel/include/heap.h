@@ -155,3 +155,6 @@ void vheap_destroy_as(as_t *as);
  * @return 成功：新的地址空间
  */
 as_t *vheap_copy_as(as_t *as);
+
+// 添加as的引用计数
+void vheap_as_add_ref(as_t *as);

@@ -316,3 +316,8 @@ void vheap_destroy_as(as_t *as) {
 as_t *vheap_copy_as(as_t *as) {
     return vmm_copy_as(as);
 }
+
+// 添加as的引用计数
+void vheap_as_add_ref(as_t *as) {
+    vmm_as_add_ref(as);
+}

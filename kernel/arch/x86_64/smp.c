@@ -16,6 +16,7 @@
 #include <tsc.h>
 #include <apic.h>
 #include <spinlock.h>
+#include <task.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
@@ -280,6 +281,7 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
+        if (!task_data_init()) SMP_PANIC("task init failed\n");
     }
 
     SMP_PRINT("smp init succeed\n");

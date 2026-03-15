@@ -10,6 +10,31 @@
 #include <libtree.h>
 #include <shizi/string.h>
 
+typedef struct vm_area {
+    uintptr_t start;      // 虚拟起始地址
+    uintptr_t end;        // 虚拟结束地址
+    uintptr_t linear_addr; // 映射区的线性虚拟地址（PHYS_TO_LINEAR(phys)），0 表示未预分配
+    vm_prot_t prot;       // 权限标志
+    uint8_t flags;      // 映射标志
+    anon_vma_t *anon_vma;  
+    file_t *file;         
+    device_t *device;  
+    page_table_blocks_struct page_table_blocks; // 页表块信息
+
+    // 链表节点，用于遍历所有vma节点
+    struct list_head list_node;
+    // 红黑树节点，用于找到其中的一个vma节点
+    struct rbtree_node rb_node;
+} vm_area_t;
+
+typedef struct vmm_as{
+    uintptr_t pgd;
+    struct list_head vma_list;
+    struct rbtree vma_tree;
+    atomic_int refcount;
+    spinlock_t lock;
+} as_t;
+
 // 字段信息表，用于通用读写
 static const struct {
     size_t offset;
@@ -133,6 +158,17 @@ vmm_result_t vma_write(vm_area_t *vma, vma_field_t field, const void *data) {
 }
 
 /*
+ * 获取VMA的页表块指针
+ *
+ * @param vma VMA指针
+ *
+ * @return 页表块结构体指针
+ */
+page_table_blocks_struct *vma_get_ptb(vm_area_t *vma) {
+    return &vma->page_table_blocks;
+}
+
+/*
  * 创建进程地址空间描述符
  *
  * @param pgd 页全局目录的顶层目录虚拟地址
@@ -149,6 +185,7 @@ as_t *as_create(uintptr_t pgd) {
     vaddr->pgd = pgd;
     INIT_LIST_HEAD(&vaddr->vma_list);
     rbtree_init(&vaddr->vma_tree, vma_rb_cmp, 0);
+    atomic_store(&vaddr->refcount, 1);
 
     return vaddr;
 }
@@ -268,9 +305,9 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
         return VMM_INVALID_ARGUMENT;
     }
     
-    spin_lock(&as->lock);
+    as_get_lock(as);
     vmm_result_t result = vma_add_nolock(as, start, end, prot, flags);
-    spin_unlock(&as->lock);
+    as_remove_lock(as);
     
     return result;
 }
@@ -312,9 +349,9 @@ vm_area_t* vma_find(as_t *as, uintptr_t addr) {
         return NULL;
     }
     
-    spin_lock(&as->lock);
+    as_get_lock(as);
     vm_area_t *result = vma_find_nolock(as, addr);
-    spin_unlock(&as->lock);
+    as_remove_lock(as);
     
     return result;
 }
@@ -382,9 +419,9 @@ vmm_result_t vma_remove(as_t *as, vm_area_t *vma) {
         return VMM_INVALID_ARGUMENT;
     }
     
-    spin_lock(&as->lock);
+    as_get_lock(as);
     vmm_result_t result = vma_remove_nolock(as, vma);
-    spin_unlock(&as->lock);
+    as_remove_lock(as);
     
     return result;
 }
@@ -397,9 +434,9 @@ vmm_result_t vma_remove(as_t *as, vm_area_t *vma) {
  * @return vmm_result_t
  */
 vmm_result_t vma_get(as_t *as, vma_result_t **result) {
-    spin_lock(&as->lock);
+    as_get_lock(as);
     vmm_result_t vma_get_result = vma_get_nolock(as, result);
-    spin_unlock(&as->lock);
+    as_remove_lock(as);
     return vma_get_result;
 }
 
@@ -463,4 +500,48 @@ vm_area_t *vma_find_end(as_t *as) {
     // 不加锁，由调用者负责
     struct rbtree_node *last_node = rbtree_last(&as->vma_tree);
     return last_node ? container_of(last_node, vm_area_t, rb_node) : NULL;
+}
+
+// 增加as的引用计数
+void as_add_ref(as_t *as) {
+    atomic_fetch_add(&as->refcount, 1);
+}
+
+// 减少as的引用计数，返回减少前的值
+int as_sub_ref(as_t *as) {
+    return atomic_fetch_sub(&as->refcount, 1);
+}
+
+// 获取当前as的引用计数
+int as_get_ref(as_t *as) {
+    return atomic_load(&as->refcount);
+}
+
+// 获取锁
+void as_get_lock(as_t *as) {
+    spin_lock(&as->lock);
+}
+
+// 释放锁
+void as_remove_lock(as_t *as) {
+    spin_unlock(&as->lock);
+}
+
+// 获取pgd
+uintptr_t as_get_pgd(as_t *as) {
+    return as->pgd;
+}
+
+// 清理地址空间内部资源，调用方需要有as锁
+void as_cleanup(as_t *as) {
+    // 释放所有VMA及其映射
+    while (!list_empty(&as->vma_list)) {
+        vm_area_t *vma = list_first_entry(&as->vma_list, vm_area_t, list_node);
+        if (vma->linear_addr != 0) {
+            kheap_free((void *)vma->linear_addr);
+        }
+        vma_remove_nolock(as, vma);
+    }
+    // 删除页全局目录
+    mmu_remove_pgd(as_get_pgd(as));
 }

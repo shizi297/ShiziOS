@@ -86,7 +86,7 @@ bool signal_send(struct task_struct *target, struct signal_struct *sig,
 /**
  * 复制或设置为共享信号处理
  * 
- * @param parent_sig 父进程的信号集
+ * @param parent_sig 父进程的信号结构体指针
  * @param new_sig 新的信号指针存放的地方
  * @param share 共享还是复制
  * 
@@ -95,15 +95,24 @@ bool signal_send(struct task_struct *target, struct signal_struct *sig,
  */
 bool signal_copy(struct signal_struct *parent_sig, struct signal_struct **new_sig,
                  bool share) {
-    // TODO: implement
+    // TODO
     return false;
+}
+
+/**
+ * 销毁信号
+ * 
+ * @param sig 信号结构体指针
+ */
+void signal_destroy(struct signal_struct *sig) {
+    // TODO
 }
 
 /**
  * 退出时的信号处理
  * 
  * @param task 要退出的任务
- * @param sig 要退出的任务的信号集
+ * @param sig 要退出的任务的信号结构体指针
  * @param tell 是否向父进程发送 SIGCHLD
  */
 void signal_exit(struct task_struct *task, struct signal_struct *sig,
@@ -124,7 +133,7 @@ void signal_exec(struct task_struct *task, struct pt_regs *regs) {
 /***
  * 信号堵塞操作
  * 
- * @param sig 信号堵塞集
+ * @param sig 信号结构体指针
  * @param how 执行的操作
  * @param set 设置的信号
  * @param oldset 修改前的堵塞状态

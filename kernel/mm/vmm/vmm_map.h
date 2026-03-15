@@ -71,6 +71,11 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count);
  */
 void vmm_destroy_as(as_t *as);
 
+/*
+ * 增加as的引用计数
+ */
+void vmm_as_add_ref(as_t *as);
+
 /**
  * 复制地址空间
  * 自动分配新的页表页与物理内存

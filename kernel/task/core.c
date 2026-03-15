@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <list.h>
+#include <task.h>
 #include <smp.h>
 #include <bootboot.h>
 #include <heap.h>
@@ -37,25 +38,6 @@ typedef struct {
     uint32_t count;
     task_state_struct state[];
 } per_cpu_task_state_struct; 
-
-// 任务标志，用于任务创建时指定行为
-typedef enum {
-    TASK_NONE       = 0,            // 无特殊标志
-    TASK_SIGCHLD    = 1 << 0,       // 子进程终止时向父进程发送 SIGCHLD
-    TASK_VM         = 1 << 1,       // 内存地址空间共享
-    TASK_FS         = 1 << 2,       // 文件系统上下文共享
-    TASK_FILES      = 1 << 3,       // 文件描述符表共享
-    TASK_SIGHAND    = 1 << 4,       // 信号处理表共享
-    TASK_THREAD     = 1 << 5,       // 将新任务加入同一线程组（tgid 相同）
-    TASK_SETTLS     = 1 << 6,       // 设置tls
-} task_flags;
-
-// copy函数的参数
-struct task_copy_arg {
-    task_flags flags;
-    uint64_t user_stack;
-    uint64_t tls;
-};
 
 // 任务状态
 typedef enum {
@@ -109,15 +91,16 @@ typedef struct task_struct {
 
     struct list_head sleep; // 睡眠队列节点
 
-    /**
-     * 指向父进程
-     * 如果为null
-     * 表示进程终止时不向父进程发送SIGCHLD信号
-     */
+    // 指向父进程
     struct task_struct *father;   
     
     struct list_head thread_group;  // 线程组节点
     struct task_struct *group_leader;  // 指向主线程
+
+    spinlock_t list_lock;
+
+    // 进程终止时是否向父进程发送SIGCHLD信号
+    bool sigchld;
 } task_struct;
 
 // 调度器接口，调度器通过注册让内核调度框架统一调用
@@ -137,6 +120,7 @@ INIT_BITMAP(id_bitmap, TASK_ID_MAX);
 static spinlock_t id_lock = SPIN_LOCK_INIT;
 dynarr_t *id_map;
 static struct sched_class *sched_class;
+static id_t kernel_id = 0;
 
 /**
  * id分配，可以用于任务管理的任何id
@@ -144,6 +128,7 @@ static struct sched_class *sched_class;
  * @return 成功：id
  * @return 失败：-1
  */
+__attribute__((optnone))
 static id_t id_alloc(void) {
     id_t id;
 
@@ -167,18 +152,172 @@ static void id_free(id_t id) {
 
     spin_lock(&id_lock);
     bitmap_clear(id_bitmap, id);
+    dynarr_set(id_map, id, NULL);
     spin_unlock(&id_lock);
 }
 
+// 分配调度器私有数据
+sched_data *sched_data_init(void) {
+    // TODO
+    return NULL;
+}
 
+/**
+ * 将子任务添加到父任务的 children 链表
+ * 
+ * @param parent 父任务
+ * @param child  子任务
+ */
+static void task_add_child(struct task_struct *parent, struct task_struct *child) {
+    spin_lock(&parent->list_lock);
+    list_add_tail(&child->sibling, &parent->children);
+    spin_unlock(&parent->list_lock);
+}
+
+/**
+ * 从父任务的 children 链表中移除子任务
+ * 
+ * @param parent 父任务
+ * @param child  子任务
+ */
+static void task_remove_child(struct task_struct *parent, struct task_struct *child) {
+    spin_lock(&parent->list_lock);
+    list_del(&child->sibling);
+    spin_unlock(&parent->list_lock);
+}
+
+/**
+ * 将线程添加到线程组 leader 的 thread_group 链表
+ * 
+ * @param leader 线程组主线程
+ * @param thread 要添加的线程
+ */
+static void thread_group_add(struct task_struct *leader, struct task_struct *thread) {
+    spin_lock(&leader->list_lock);
+    list_add_tail(&thread->thread_group, &leader->thread_group);
+    spin_unlock(&leader->list_lock);
+}
+
+/**
+ * 从线程组 leader 的 thread_group 链表中移除线程
+ * 
+ * @param leader 线程组主线程
+ * @param thread 要移除的线程
+ */
+static void thread_group_remove(struct task_struct *leader, struct task_struct *thread) {
+    spin_lock(&leader->list_lock);
+    list_del(&thread->thread_group);
+    spin_unlock(&leader->list_lock);
+}
 
 /**
  * 复制任务
  * 
- * @param arg 参数
+ * @param task 要复制的任务
+ * @param flags 标志位
+ * 
+ * @return 成功：task指针
+ * @return 失败：NULL
  */
-task_struct *task_copy(struct task_copy_arg arg) {
-    // TODO
+task_struct *task_copy(struct task_struct *task, task_flags flags) {
+    struct task_struct *new_task = NULL;
+    bool tgid_allocated = false;   // 标记是否为新进程分配了独立的tgid
+
+    // 分配任务结构体
+    new_task = (struct task_struct *)kheap_alloc(sizeof(struct task_struct));
+    if (!new_task) return NULL;
+    spinlock_init(&new_task->list_lock);   // 初始化锁
+
+    // 分配内核栈
+    new_task->stack = kheap_alloc(KERNEL_START_SIZE);
+    if (!new_task->stack) goto fail;
+
+    // 分配pid
+    new_task->pid = id_alloc();
+    if (new_task->pid == -1) goto fail;
+
+    // 设置tgid
+    if (flags & TASK_THREAD) {
+        new_task->tgid = task->tgid;               // 线程：共享父任务的tgid
+    } else {
+        new_task->tgid = id_alloc();                // 新进程：分配新的tgid
+        if (new_task->tgid == -1) goto fail;
+        tgid_allocated = true;
+    }
+
+    // 复制地址空间
+    if (flags & TASK_VM) {
+        new_task->as = task->as;                     // 共享地址空间
+        vheap_as_add_ref(new_task->as);
+    } else {
+        new_task->as = vheap_copy_as(task->as);      // 复制地址空间
+        if (!new_task->as) goto fail;
+    }
+
+    // TODO: 文件系统上下文（TASK_FS）和文件描述符表（TASK_FILES）处理
+
+    // 复制信号处理表
+    bool share_signal = (flags & TASK_SIGHAND) ? true : false;
+    if (!signal_copy(task->signal, &new_task->signal, share_signal)) goto fail;
+
+    // 分配调度器私有数据
+    new_task->sched = sched_data_init();
+    if (!new_task->sched) goto fail;
+
+    // 设置任务状态
+    new_task->state = TASK_RUNNING;
+    new_task->sigchld = (flags & TASK_SIGCHLD) ? true : false;
+
+    // 初始化链表
+    INIT_LIST_HEAD(&new_task->zombie);
+    INIT_LIST_HEAD(&new_task->sibling);
+    INIT_LIST_HEAD(&new_task->children);
+    INIT_LIST_HEAD(&new_task->sleep);
+    INIT_LIST_HEAD(&new_task->thread_group);
+
+    // 设置父子关系
+    new_task->father = task;
+    task_add_child(task, new_task);  
+
+    // 设置线程组关系
+    if (flags & TASK_THREAD) {
+        new_task->group_leader = task->group_leader;
+        thread_group_add(new_task->group_leader, new_task);   
+    } else {
+        new_task->group_leader = new_task;
+    }
+
+    // 加入调度队列
+    void *sched = smp_get_sched();
+    if (!sched) goto fail;
+    sched_class->enqueue(sched, new_task);
+
+    // 添加到映射表
+    dynarr_set(id_map, new_task->pid, &new_task);
+
+    return new_task;
+
+fail:
+    // 错误处理
+    if (new_task->group_leader && new_task->group_leader != new_task) {
+        thread_group_remove(new_task->group_leader, new_task);
+    }
+
+    if (new_task->father) {
+        task_remove_child(new_task->father, new_task);
+    }
+
+    if (new_task->sched) kheap_free(new_task->sched);
+    if (new_task->signal) signal_destroy(new_task->signal);
+    if (!(flags & TASK_VM) && new_task->as) {
+        vheap_destroy_as(new_task->as);
+    } 
+
+    if (tgid_allocated && new_task->tgid != -1) id_free(new_task->tgid);
+    if (new_task->pid != -1) id_free(new_task->pid);
+    if (new_task->stack) kheap_free(new_task->stack);
+
+    kheap_free(new_task);
     return NULL;
 }
 
@@ -193,6 +332,9 @@ bool task_data_init(void) {
     for (int i = 0; i < max_cpu;i++) {
         INIT_LIST_HEAD(&per_cpu_task_state_ptr->state[i].stopped);
     }
+
+    kernel_id = id_alloc();
+    if (kernel_id == -1) return false;
 
     // 创建id映射，用于找到对应id的task，最大容量为TASK_ID_MAX
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);

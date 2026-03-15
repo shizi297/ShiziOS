@@ -13,6 +13,9 @@
 #include <libtree.h>
 #include <shizi/string.h>
 
+typedef struct vm_area vm_area_t;
+typedef struct vmm_as as_t;
+
 /*
  * anon_vma_t
  * file_t device_t
@@ -39,30 +42,6 @@ typedef struct device {
     unsigned int type;      // 设备类型
     uint32_t refcount;      // 引用计数
 } device_t;
-
-typedef struct vm_area {
-    uintptr_t start;      // 虚拟起始地址
-    uintptr_t end;        // 虚拟结束地址
-    uintptr_t linear_addr; // 映射区的线性虚拟地址（PHYS_TO_LINEAR(phys)），0 表示未预分配
-    vm_prot_t prot;       // 权限标志
-    uint8_t flags;      // 映射标志
-    anon_vma_t *anon_vma;  
-    file_t *file;         
-    device_t *device;  
-    page_table_blocks_struct page_table_blocks; // 页表块信息
-
-    // 链表节点，用于遍历所有vma节点
-    struct list_head list_node;
-    // 红黑树节点，用于找到其中的一个vma节点
-    struct rbtree_node rb_node;
-} vm_area_t;
-
-typedef struct vmm_as{
-    uintptr_t pgd;
-    struct list_head vma_list;
-    struct rbtree vma_tree;
-    spinlock_t lock;
-} as_t;
 
 // vma中的数据，用于返回给上层
 typedef struct vma_data {
@@ -125,9 +104,7 @@ vmm_result_t vma_write(vm_area_t *vma, vma_field_t field, const void *data);
  *
  * @return 页表块结构体指针
  */
-static inline page_table_blocks_struct *vma_get_ptb(vm_area_t *vma) {
-    return &vma->page_table_blocks;
-}
+page_table_blocks_struct *vma_get_ptb(vm_area_t *vma);
 
 /*
  * 创建进程地址空间描述符
@@ -249,3 +226,24 @@ vmm_result_t vma_get_nolock(as_t *as, vma_result_t **result);
  * 用于计算空的内存地址
  */
 vm_area_t *vma_find_end(as_t *as);
+
+// 增加as的引用计数
+void as_add_ref(as_t *as);
+
+// 减少as的引用计数，返回减少前的值
+int as_sub_ref(as_t *as);
+
+// 获取当前as的引用计数
+int as_get_ref(as_t *as);
+
+// 获取锁
+void as_get_lock(as_t *as);
+
+// 释放锁
+void as_remove_lock(as_t *as);
+
+// 获取pgd
+uintptr_t as_get_pgd(as_t *as);
+
+// 清理地址空间内部资源，调用方需要as锁
+void as_cleanup(as_t *as);
