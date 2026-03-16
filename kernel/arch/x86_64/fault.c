@@ -160,5 +160,27 @@ void exc_ve(struct pt_regs *regs) {
 }
 
 void __stack_chk_fail(void) {
+    serial_puts("\n[PANIC] Stack smashing detected\n");
+
+    uint64_t *rbp;
+    asm volatile("mov %%rbp, %0" : "=r"(rbp));
+
+    for (int i = 0; i < 8 && rbp; i++) {
+        uint64_t ret_addr = *(rbp + 1);
+        serial_puts("  #");
+        serial_put_dec(i);
+        serial_puts(" at ");
+        serial_put_hex(ret_addr);
+        serial_puts("\n");
+
+        rbp = (uint64_t*)*rbp;
+    }
+
+    uint64_t rsp;
+    asm volatile("mov %%rsp, %0" : "=r"(rsp));
+    serial_puts("RSP: ");
+    serial_put_hex(rsp);
+    serial_puts("\n");
+
     panic("Stack smashing detected");
 }

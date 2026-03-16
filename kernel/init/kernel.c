@@ -5,19 +5,32 @@
 
 #include <mm/init.h>
 #include <smp.h>
-#include <processor.h>
+#include <arch_processor.h>
 #include <kernel.h>
 #include <serial.h>  
 #include <time.h>
+#include <config.h>
+
+__attribute__((section(".bss"), aligned(16))) 
+uint8_t bp_stack[INIT_STACK_BYTE];
 
 extern uint8_t cpu_ready_flag;
+static uint32_t bp_logical_id = 0;
+static uint32_t bp_apic_id = 0;
 
 __attribute__((noreturn))
 void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     serial_puts("[KERNEL]ShiziOS KERNEL v");
     serial_puts(KERNEL_VERSION);
     serial_puts("\n");
-    
+
+    bp_logical_id = logical_id;
+    bp_apic_id = bp_apic_id;
+
+    uint64_t bp_stack_top = (uint64_t)(bp_stack + INIT_STACK_BYTE);
+
+    processor_set_stack(bp_stack_top);
+
     memory_init();
 
     processor_init();
@@ -33,7 +46,7 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     // 设置标志位让ap启动
     cpu_ready_flag = 1;
 
-    smp_init(logical_id, apic_id);
+    smp_init(bp_logical_id, bp_apic_id);
 
     while (1) {
         cpu_pause();

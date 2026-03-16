@@ -17,6 +17,7 @@
 #include <apic.h>
 #include <spinlock.h>
 #include <task.h>
+#include <time.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
@@ -112,7 +113,7 @@ static inline void tss_init(
         tss_ptr[current_tss] = tss_temp_addr[0];
 
         // 计算栈顶
-        uint64_t stack_top = (uint64_t)stack + (current_tss + 1) * KERNEL_START_SIZE - 32;
+        uint64_t stack_top = (uint64_t)stack + (current_tss + 1) * KERNEL_START_SIZE - 128;
 
         // 设置内核栈
         tss_ptr[current_tss].rsp0 = stack_top;
@@ -171,24 +172,6 @@ void smp_data_init(
     SMP_PRINT("smp data init succeed\n");
 }
 
-// 获取cpu核心的逻辑id
-uint32_t get_logical_id(void) {
-    per_cpu *per_cpu_ptr = get_gs_base();
-    return per_cpu_ptr->logical_id;
-}
-
-// 设置调度器头节点
-void smp_set_sched(void *sched) {
-    per_cpu *per_cpu_ptr = get_gs_base();
-    per_cpu_ptr->sched = sched;
-}
-
-// 获取当前cpu的调度器头节点
-void *smp_get_sched(void) {
-    per_cpu *per_cpu_ptr = get_gs_base();
-    return per_cpu_ptr->sched;    
-}
-
 /*
  * 初始化所有核心
  *
@@ -197,24 +180,24 @@ void *smp_get_sched(void) {
  */
 __attribute__((noreturn))
 void smp_init(uint32_t logical_id, uint32_t apic_id) {
-    // 设置当前cpu的栈
-    uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
+    // 保存参数到寄存器中，让这些变量在切换栈的时候还能继续使用
+    register uint32_t reg_logical_id asm("rbx") = logical_id;
+    register uint32_t reg_apic_id asm("r12") = apic_id;
 
-    __asm__ volatile(
-        "movq %0, %%rsp\n"
-        "xorq %%rbp, %%rbp\n"
-        :
-        : "r"(new_stack_top), "D"(logical_id)
-        : "memory"
-    );
+    // 设置当前cpu的栈
+    uint64_t new_stack_top = tss_ptr[reg_logical_id].rsp0;
+
+    // 切换栈
+    processor_set_stack(new_stack_top);
+
 
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
-    logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id] = apic_id;
+    logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[reg_logical_id] = reg_apic_id;
 
     // 计算当前CPU在数组中的偏移
-    uint64_t gdt_offset = logical_id * GDT_ENTRY_COUNT;
-    uint64_t idt_offset = logical_id * IDT_ENTRY_COUNT;
+    uint64_t gdt_offset = reg_logical_id * GDT_ENTRY_COUNT;
+    uint64_t idt_offset = reg_logical_id * IDT_ENTRY_COUNT;
 
     // 加载GDT
     struct {
@@ -260,10 +243,10 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     __asm__ volatile("ltr %w0" : : "r"(tss_selector));
 
     // 设置per_cpu的逻辑cpuid
-    per_cpu_ptr[logical_id].logical_id = logical_id;
+    per_cpu_ptr[reg_logical_id].logical_id = reg_logical_id;
 
     // 设置当前cpu的gs到per_cpu
-    set_gs_base((uint64_t)&per_cpu_ptr[logical_id]);
+    set_gs_base((uint64_t)&per_cpu_ptr[reg_logical_id]);
 
     // 开启中断
     irq_on();
@@ -277,12 +260,16 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     spin_unlock(&init_print_lock);
 
     // 如果是bp，执行特定初始化
-    if (logical_id == bootboot->bspid) {
+    if (reg_logical_id == bootboot->bspid) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
         if (!task_data_init()) SMP_PANIC("task init failed\n");
     }
+
+    // 写入per_cpu用于获取时间戳
+    uint64_t (*ts)(void) = &clocksource_default_read;
+    smp_set_timestamp(ts);
 
     SMP_PRINT("smp init succeed\n");
 
@@ -334,4 +321,9 @@ void smp_irq_unregister_handler(uint8_t vector) {
 
     // 恢复默认值
     irq_table[vector] = 0;
+}
+
+// 获取当前cpu的内核tls
+per_cpu *smp_get_kernel_tls(void) {
+    return get_gs_base();
 }

@@ -135,6 +135,14 @@ uint64_t clocksource_read(clocksource_handle_t handle);
 uint64_t clocksource_get_hz(clocksource_handle_t handle);
 
 /**
+ * 获取当前CPU默认时钟源的纳秒读数
+ * 
+ * @return 成功：当前纳秒值
+ * @return 失败：0（表示无可用时钟源）
+ */
+uint64_t clocksource_default_read(void);
+
+/**
  * 注册时钟到时钟源框架
  * 
  * @param name 时钟名称
@@ -167,3 +175,17 @@ void time_stall(uint8_t usec);
  * @param msec 睡眠的毫秒数
  */
 void time_sleep(uint64_t msec);
+
+/**
+ * 更新最后一次记录的时间
+ * 
+ * @param now 最后一次的时间
+ */
+void time_update(uint64_t now);
+
+/**
+ * 获取最后一次与上一次时间的差值（ns）
+ * 
+ * @return 纳秒
+ */
+uint64_t time_delta(void);

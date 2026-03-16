@@ -157,6 +157,18 @@ uint64_t clocksource_get_hz(clocksource_handle_t handle) {
 }
 
 /**
+ * 获取当前CPU默认时钟源的纳秒读数
+ * 
+ * @return 成功：当前纳秒值
+ * @return 失败：0（表示无可用时钟源）
+ */
+uint64_t clocksource_default_read(void) {
+    clocksource_handle_t handle = clocksource_get(NULL);
+    if (!handle) return 0;
+    return clocksource_read(handle);
+}
+
+/**
  * 注册时钟到时钟源框架
  * 
  * @param name 时钟名称

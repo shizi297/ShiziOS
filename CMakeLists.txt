@@ -4,8 +4,6 @@ project(ShiziOS)
 # 工具链配置
 set(CMAKE_C_COMPILER clang)
 set(CMAKE_C_COMPILER_TARGET x86_64-elf)
-set(CMAKE_ASM_NASM_COMPILER nasm)
-enable_language(ASM_NASM)
 
 # 查找并启用 ccache
 find_program(CCACHE_FOUND ccache)
@@ -16,24 +14,42 @@ else()
     message(STATUS "No ccache found, using direct compiler: ${CMAKE_C_COMPILER}")
 endif()
 
-# 查找最快的链接器：优先 mold，其次 lld ，最后默认
-find_program(MOLD_FOUND NAMES mold ld.mold)
-if(MOLD_FOUND)
-    add_link_options("-fuse-ld=mold")
-    message(STATUS "Using mold linker (fastest, parallel by default): ${MOLD_FOUND}")
+# 查找最快的链接器：优先 lld，否则默认
+find_program(LLD_FOUND ld.lld)
+if(LLD_FOUND)
+    add_link_options("-fuse-ld=lld")
+    message(STATUS "Using lld linker with multi-threading: ${LLD_FOUND}")
 else()
-    find_program(LLD_FOUND ld.lld)
-    if(LLD_FOUND)
-        add_link_options("-fuse-ld=lld")
-        message(STATUS "Using lld linker with multi-threading: ${LLD_FOUND}")
-    else()
-        message(STATUS "No mold or lld found, using default linker (GNU ld, no parallel)")
-    endif()
+    message(STATUS "No lld found, using default linker")
 endif()
 
-# 编译选项
-set(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -fstack-protector-strong -fno-pic -mno-red-zone -mcmodel=kernel -O2 -mgeneral-regs-only")
-set(CMAKE_ASM_NASM_FLAGS "-f elf64")
+# 启用链接时优化 (LTO)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+
+# 获取 CPU 核心数以加速链接（仅对 lld 有效）
+include(ProcessorCount)
+ProcessorCount(CPU_CORES)
+if(NOT CPU_CORES)
+  set(CPU_CORES 8)
+endif()
+if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+  add_link_options(-Wl,--threads=${CPU_CORES})
+endif()
+
+# 基础编译选项（所有模式共用）
+set(BASE_FLAGS "-std=gnu11 -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel -O2 -mgeneral-regs-only")
+
+# 调试模式选项
+option(DEBUG "Enable debug mode" OFF)
+
+if(DEBUG)
+    set(EXTRA_FLAGS "-fstack-protector-all -g -fstack-check -fno-omit-frame-pointer -DDEBUG")
+else()
+    set(EXTRA_FLAGS "-fstack-protector-strong")
+endif()
+
+set(CMAKE_C_FLAGS "${BASE_FLAGS} ${EXTRA_FLAGS}")
+
 set(CMAKE_EXE_LINKER_FLAGS "-nostdlib -static -T ${CMAKE_SOURCE_DIR}/linker.ld")
 
 # 全局路径
@@ -87,6 +103,7 @@ add_custom_target(img
     COMMAND cp ${CMAKE_BINARY_DIR}/kernel.elf initrd_root/sys/core
     COMMAND cp ${CMAKE_SOURCE_DIR}/config/CONFIG initrd_root/sys/config
     COMMAND ${CMAKE_SOURCE_DIR}/disk/mkbootimg ${CMAKE_SOURCE_DIR}/config/ShiziOS.json ${CMAKE_SOURCE_DIR}/disk/shizios.img
+    COMMAND rm -rf initrd_root
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
@@ -112,6 +129,7 @@ add_custom_target(ram-img
     COMMAND cp ${CMAKE_BINARY_DIR}/kernel.elf /dev/shm/shizios/initrd_root/sys/core
     COMMAND cp ${CMAKE_SOURCE_DIR}/config/CONFIG /dev/shm/shizios/initrd_root/sys/config
     COMMAND ${CMAKE_SOURCE_DIR}/disk/mkbootimg ${CMAKE_SOURCE_DIR}/config/ShiziOS.json /dev/shm/shizios/shizios.img
+    COMMAND rm -rf /dev/shm/shizios/initrd_root
     WORKING_DIRECTORY /dev/shm/shizios
 )
 

@@ -17,6 +17,10 @@
 #include <bitmap.h>
 #include <libtree.h>
 #include <dynarr.h>
+#include <serial.h>
+
+#define TASK_PRINT(str) \
+    serial_puts("[TASK]" str)
 
 #define INIT_TIME_SLICE_NS timecycle_msec_to_ns(20)
 
@@ -82,7 +86,7 @@ typedef struct task_struct {
     struct signal_struct *signal;  // 信号相关
 
     struct pt_regs *regs;    // 存储中断/异常/系统调用/信号处理信息
-    struct thread_struct thread;   // 任务切换时保存的信息
+    struct thread_struct *thread;   // 任务切换时保存的信息
 
     struct list_head zombie;    // 僵尸队列头
 
@@ -208,6 +212,14 @@ static void thread_group_remove(struct task_struct *leader, struct task_struct *
     spin_lock(&leader->list_lock);
     list_del(&thread->thread_group);
     spin_unlock(&leader->list_lock);
+}
+
+// 更新当前任务的时间
+void task_add_current_tick(uint64_t tick) {
+    task_struct *current = smp_get_task_current();
+    if (!current || !current->sched || !sched_class || !sched_class->update_tick)
+        return;
+    sched_class->update_tick(current->sched, current, tick);
 }
 
 /**
@@ -340,6 +352,8 @@ bool task_data_init(void) {
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
     if (!id_map) return false;
 
+    TASK_PRINT("task data init success\n");
+
     return true;
 }
 
@@ -347,6 +361,8 @@ bool task_data_init(void) {
 bool task_init(void) {
     void *sched = sched_class->init();
     smp_set_sched(sched);
+
+    TASK_PRINT("task init success\n");
 
     return true;
 }

@@ -77,7 +77,7 @@ static void calculate_max_pfn(void) {
 
 static void alloc_bitmap_init(void){
     // 计算创建位图所需的页数
-    size_t alloc_bitmap_size = ((max_pfn + 1) + (PAGE_SIZE * 8 - 1)) / (PAGE_SIZE * 8);
+    size_t alloc_bitmap_size = BITMAP_BYTES(max_pfn + 1);
     
     void* alloc_bitmap = boot_alloc(alloc_bitmap_size);
     

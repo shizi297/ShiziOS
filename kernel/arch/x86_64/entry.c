@@ -7,6 +7,9 @@
 #include <processor.h>
 #include <serial.h>
 #include <apic.h>
+#include <time.h>
+#include <task.h>
+#include <smp.h>
 
 #define IRQ_PRINT(str) \
     serial_puts("[IRQ] " str "\n")
@@ -25,28 +28,44 @@ void syscall_entry(void) {
  * @param regs 发生时的寄存器状态
  */
 void irq_entry(struct pt_regs *regs) {
-    uint64_t vector = regs->vector;
-    uint64_t error_code = regs->error_code;
+    // 获取时间
+    uint64_t now = smp_get_timestamp();
+    
+    /**
+     * 更新时间
+     * 更新后时间段为上次内核态出口到此次内核态入口
+     * 即用户态运行时间
+     */
+    time_update(now);
 
-    // 判断是异常还是普通中断
-    bool is_vector = false;
-    if (vector < 32) is_vector = true;
+    // 把用户态的时间计入任务
+    uint64_t user_delta = time_delta();
+    task_add_current_tick(user_delta);   
+
+    uint64_t vector = regs->vector;
+    bool is_vector = (vector < 32);
 
     if (irq_table[vector]) {
-        // 调用对应的处理程序
         void (*irq)(struct pt_regs *regs) = (void (*)(struct pt_regs *regs))irq_table[vector];
         irq(regs);
     } else {
-        // 没有中断处理程序
         if (is_vector) {
-            // 处理器异常
             panic("CPU ERROR");
         } else {
-            // 未注册的中断
             IRQ_WARN("NO HANDLER FOR VECTOR");
         }
     }
 
-    // 发送EOI，通知APIC中断处理已完成，对于异常不需要发送EOI
-    if (!is_vector) apic_eoi();
-}   
+    if (is_vector) {
+        // 异常处理完成，累加当前任务时间
+        now = smp_get_timestamp();
+        time_update(now);
+        uint64_t kernel_delta = time_delta();
+        task_add_current_tick(kernel_delta);
+    } else {
+        // 外部中断结束，只更新时间戳，不累加
+        now = smp_get_timestamp();
+        time_update(now);
+        apic_eoi();
+    }
+}

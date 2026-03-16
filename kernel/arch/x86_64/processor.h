@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <fault.h>
+#include <arch_processor.h>
 
 // CR4寄存器位掩码定义
 #define CR4_VME          (1ULL <<  0)  // 虚拟8086模式扩展
@@ -102,11 +103,6 @@ struct thread_struct {
 
     struct fpu_state fpu_state;
 };
-
-// CPU暂停,用于优化等待循环，防止过度占用执行资源
-static inline void cpu_pause(void) {
-    __asm__ volatile("pause");
-}
 
 // 设置gs寄存器
 static inline void set_gs_base(uint64_t base) {
@@ -242,15 +238,3 @@ static inline void fpu_restore(struct fpu_state *state) {
         : "memory"
     );
 }
-
-// 获取gdt模版的虚拟地址
-uint64_t *get_gdt_temp(void);
-
-// 获取idt模版的虚拟地址
-struct idt_gate* get_idt_temp(void);
-
-// 获取tss模版的虚拟地址
-struct tss* get_tss_temp(void);
-
-// 初始化所有模版
-void processor_init(void);

@@ -24,6 +24,9 @@ typedef enum {
     TASK_THREAD     = 1 << 5,       // 将新任务加入同一线程组（tgid 相同）
 } task_flags;
 
+// 更新当前任务的时间
+void task_add_current_tick(uint64_t tick);
+
 /**
  * 复制任务
  * 

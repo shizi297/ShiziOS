@@ -6,7 +6,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <processor.h>
+#include <task.h>
+#include <arch_processor.h>
 
 struct sched_class;
 typedef struct task_struct task_struct;
@@ -20,6 +21,13 @@ typedef struct {
 
     // 调度器头节点
     void *sched;
+
+    // 时间戳记录字段
+    uint64_t last_ns;
+    uint64_t current_ns;
+
+    // 当前cpu的运行任务数量（包含idle）
+    uint64_t nr_running;
 
 } __attribute__((aligned(64))) per_cpu;
 
@@ -36,15 +44,6 @@ void smp_data_init(
     struct idt_gate *idt_temp_addr, 
     struct tss *tss_temp_addr
 );
-
-// 获取cpu核心的逻辑id
-uint32_t get_logical_id(void);
-
-// 设置调度器头节点
-void smp_set_sched(void *sched);
-
-// 获取当前cpu的调度器头节点
-void *smp_get_sched(void);
 
 /*
  * 初始化所有核心
@@ -73,3 +72,84 @@ bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr);
  * @param vector 中断向量号
  */
 void smp_irq_unregister_handler(uint8_t vector);
+
+// 获取当前cpu的内核tls
+per_cpu *smp_get_kernel_tls(void);
+
+// 获取cpu核心的逻辑id
+static inline uint32_t get_logical_id(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->logical_id;
+}
+
+// 设置调度器头节点
+static inline void smp_set_sched(void *sched) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->sched = sched;
+}
+
+// 获取当前cpu的调度器头节点
+static inline void *smp_get_sched(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->sched;    
+}
+
+// 设置当前cpu的上一次记录时间
+static inline void smp_set_last_ns(uint64_t ns) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->last_ns = ns;
+}
+
+// 获取当前cpu的上一次记录时间
+static inline uint64_t smp_get_last_ns(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->last_ns;
+}
+
+// 设置当前cpu的当前记录时间
+static inline void smp_set_current_ns(uint64_t ns) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->current_ns = ns;
+}
+
+// 获取当前cpu的当前记录时间
+static inline uint64_t smp_get_current_ns(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->current_ns;
+}
+
+// 获取当前cpu的运行时间 
+static inline uint64_t smp_get_timestamp(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->timestamp();
+}
+
+// 设置当前cpu的时间戳获取函数
+static inline void smp_set_timestamp(uint64_t (*ts)(void)) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->timestamp = ts;
+}
+
+// 设置当前cpu的运行任务数量
+static inline void smp_set_nr_running(uint64_t set) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->nr_running = set;
+}
+
+// 获取指定cpu核心的运行任务数量
+static inline uint64_t smp_get_nr_running(uint64_t logicalid) {
+    extern per_cpu *per_cpu_ptr;
+    return per_cpu_ptr[logicalid].nr_running;
+}
+
+// 设置当前cpu的运行的任务结构体
+static inline void smp_set_task_current(task_struct *task) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->current = task;
+}
+
+// 获取当前cpu运行的任务结构体
+static inline task_struct *smp_get_task_current(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->current;
+}

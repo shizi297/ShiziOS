@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <msr.h>
-#include <desc.h>
+#include <processor.h>
 #include <time.h>
 #include <bootboot.h>
 #include <smp.h>
