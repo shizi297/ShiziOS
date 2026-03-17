@@ -50,6 +50,8 @@ volatile uint8_t cpu_ready_flag = 0;
 bool boot_init = false;
 spinlock_t boot_init_spin = SPIN_LOCK_INIT;
 
+uint32_t xsaves_size = 0;
+
 // logical_id_raw是bootboot引导传的当前逻辑cpuid
 __attribute__((noreturn))
 void _start(uint64_t logical_id_raw) {
@@ -98,6 +100,8 @@ void _start(uint64_t logical_id_raw) {
     if (!cpuid_fsgsbase()) {
         CPU_NOT_SUPPORT;
     }
+
+    xsaves_size = cpuid_xsaves_size();
 
     set_cr4();
     

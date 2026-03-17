@@ -12,6 +12,30 @@ static gdte gdt_temp[GDT_ENTRY_COUNT];
 static struct idt_gate idt_temp[IDT_ENTRY_COUNT];
 static struct tss tss_temp = {0};
 
+uint64_t irq_table[256] = {
+    [EXC_DE] = (uint64_t)exc_de,
+    [EXC_DB] = (uint64_t)exc_db,
+    [EXC_NMI] = (uint64_t)exc_nmi,
+    [EXC_BP] = (uint64_t)exc_bp,
+    [EXC_OF] = (uint64_t)exc_of,
+    [EXC_BR] = (uint64_t)exc_br,
+    [EXC_UD] = (uint64_t)exc_ud,
+    [EXC_NM] = (uint64_t)exc_nm,
+    [EXC_DF] = (uint64_t)exc_df,
+    [EXC_CSO] = (uint64_t)exc_cso,
+    [EXC_TS] = (uint64_t)exc_ts,
+    [EXC_NP] = (uint64_t)exc_np,
+    [EXC_SS] = (uint64_t)exc_ss,
+    [EXC_GP] = (uint64_t)exc_gp,
+    [EXC_PF] = (uint64_t)exc_pf,
+    [EXC_SPUR] = 0, // 伪中断不需要处理函数
+    [EXC_MF] = (uint64_t)exc_mf,
+    [EXC_AC] = (uint64_t)exc_ac,
+    [EXC_MC] = (uint64_t)exc_mc,
+    [EXC_XM] = (uint64_t)exc_xm,
+    [EXC_VE] = (uint64_t)exc_ve,
+};
+
 /*
  * GDT模版初始化
  * 后续被复制到per_cpu中
@@ -87,33 +111,128 @@ struct tss* get_tss_temp(void) {
     return &tss_temp;
 }
 
+/**
+ * 任务切换
+ * 
+ * @param prev 当前任务的 thread_struct 指针
+ * @param next 下一个任务的 thread_struct 指针
+ * 
+ * 此函数不会保存/恢复fpu状态
+ * fpu由上层调用者负责
+ */
+__attribute__((naked, noinline))
+void switch_to(struct thread_struct *prev, struct thread_struct *next) {
+    __asm__ volatile (
+        // 保存 prev 的寄存器到 prev->thread
+        "movq %%rbx,  %c[thr_rbx](%%rdi)\n\t"
+        "movq %%rbp,  %c[thr_rbp](%%rdi)\n\t"
+        "movq %%r12,  %c[thr_r12](%%rdi)\n\t"
+        "movq %%r13,  %c[thr_r13](%%rdi)\n\t"
+        "movq %%r14,  %c[thr_r14](%%rdi)\n\t"
+        "movq %%r15,  %c[thr_r15](%%rdi)\n\t"
+        "movq %%rsp,  %c[thr_rsp](%%rdi)\n\t"
+
+        // 保存返回地址
+        "movq (%%rsp), %%rax\n\t"
+        "movq %%rax,  %c[thr_rip](%%rdi)\n\t"
+
+        // 保存 fs_base
+        "rdfsbase %%rax\n\t"
+        "movq %%rax,  %c[thr_fs](%%rdi)\n\t"
+
+        // 保存 cr3
+        "movq %%cr3, %%rax\n\t"
+        "movq %%rax,  %c[thr_cr3](%%rdi)\n\t"
+
+        // 加载 next 的寄存器
+        "movq %c[thr_rsp](%%rsi), %%rsp\n\t"
+        "movq %c[thr_rbx](%%rsi), %%rbx\n\t"
+        "movq %c[thr_rbp](%%rsi), %%rbp\n\t"
+        "movq %c[thr_r12](%%rsi), %%r12\n\t"
+        "movq %c[thr_r13](%%rsi), %%r13\n\t"
+        "movq %c[thr_r14](%%rsi), %%r14\n\t"
+        "movq %c[thr_r15](%%rsi), %%r15\n\t"
+
+        // 恢复 fs_base
+        "movq %c[thr_fs](%%rsi), %%rax\n\t"
+        "wrfsbase %%rax\n\t"
+
+        // 加载页表
+        "movq %c[thr_cr3](%%rsi), %%rax\n\t"
+        "movq %%rax, %%cr3\n\t"
+
+        // 跳转到 next->rip
+        "pushq %c[thr_rip](%%rsi)\n\t"
+        "ret\n"
+        :
+        : [thr_rip]  "i" (THR_RIP),
+          [thr_cr3]  "i" (THR_CR3),
+          [thr_rsp]  "i" (THR_RSP),
+          [thr_fs]   "i" (THR_FS),
+          [thr_rbx]  "i" (THR_RBX),
+          [thr_rbp]  "i" (THR_RBP),
+          [thr_r12]  "i" (THR_R12),
+          [thr_r13]  "i" (THR_R13),
+          [thr_r14]  "i" (THR_R14),
+          [thr_r15]  "i" (THR_R15)
+        : "rax", "memory"
+    );
+}
+
+/**
+ * 保存fpu信息
+ * 
+ * @param state fpu信息结构体
+ */
+void fpu_save(struct thread_struct *thread) {
+    struct fpu_state *state = &thread->fpu_state;
+    uint32_t lmask = 0xffffffff;
+    uint32_t hmask = 0xffffffff;
+    __asm__ volatile (
+        "xsaves %0"
+        : "+m" (*(char *)state->xsaves)
+        : "a" (lmask), "d" (hmask)
+        : "memory"
+    );
+}
+
+/**
+ * 恢复fpu状态
+ * 
+ * @param state fpu信息结构体
+ */
+void fpu_restore(struct thread_struct *thread) {
+    struct fpu_state *state = &thread->fpu_state;
+    uint32_t lmask = 0xffffffff;
+    uint32_t hmask = 0xffffffff;
+    __asm__ volatile (
+        "xrstors %0"
+        : : "m" (*(char *)state->xsaves), "a" (lmask), "d" (hmask)
+        : "memory"
+    );
+}
+
+// 为任务分配thread_struct结构体
+struct thread_struct *thread_struct_init(void) {
+    struct thread_struct *thread = (struct thread_struct *)kheap_alloc(sizeof(struct thread_struct));
+    if (!thread) goto fail;
+    void *fpu = kheap_alloc(xsaves_size);
+    if (!fpu) goto fail;
+
+    thread->fpu_state.size = xsaves_size;
+    thread->fpu_state.xsaves = fpu;
+
+    return thread;
+
+    fail:
+        if (fpu) kheap_free(fpu);
+        if (thread) kheap_free(thread);
+        return NULL;
+}
+
 // 初始化所有模版
 void processor_init(void) {
     gdt_temp_init();
     idt_temp_init();
     tss_temp_init();
 }
-
-uint64_t irq_table[256] = {
-    [EXC_DE] = (uint64_t)exc_de,
-    [EXC_DB] = (uint64_t)exc_db,
-    [EXC_NMI] = (uint64_t)exc_nmi,
-    [EXC_BP] = (uint64_t)exc_bp,
-    [EXC_OF] = (uint64_t)exc_of,
-    [EXC_BR] = (uint64_t)exc_br,
-    [EXC_UD] = (uint64_t)exc_ud,
-    [EXC_NM] = (uint64_t)exc_nm,
-    [EXC_DF] = (uint64_t)exc_df,
-    [EXC_CSO] = (uint64_t)exc_cso,
-    [EXC_TS] = (uint64_t)exc_ts,
-    [EXC_NP] = (uint64_t)exc_np,
-    [EXC_SS] = (uint64_t)exc_ss,
-    [EXC_GP] = (uint64_t)exc_gp,
-    [EXC_PF] = (uint64_t)exc_pf,
-    [EXC_SPUR] = 0, // 伪中断不需要处理函数
-    [EXC_MF] = (uint64_t)exc_mf,
-    [EXC_AC] = (uint64_t)exc_ac,
-    [EXC_MC] = (uint64_t)exc_mc,
-    [EXC_XM] = (uint64_t)exc_xm,
-    [EXC_VE] = (uint64_t)exc_ve,
-};

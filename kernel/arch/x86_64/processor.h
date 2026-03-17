@@ -12,6 +12,9 @@
 #include <stddef.h>
 #include <fault.h>
 #include <arch_processor.h>
+#include <heap.h>
+
+extern uint32_t xsaves_size;
 
 // CR4寄存器位掩码定义
 #define CR4_VME          (1ULL <<  0)  // 虚拟8086模式扩展
@@ -95,14 +98,32 @@ struct fpu_state {
 
 // 任务切换时保存的信息
 struct thread_struct {
-    uint64_t rsp;   // 内核栈指针
-    uint64_t rip;   // 返回地址/指令指针
-    uint64_t cr3;   // 页表基址
+    uint64_t rip;           // 存储返回地址
+    uint64_t cr3;           // 页表基址
+    uint64_t rsp;           // 内核栈指针
+    uint64_t fs_base;       // 用户态 TLS
 
-    uint64_t fs_base;   // 用户态tls
+    // 被调用者保存的寄存器
+    uint64_t rbx;
+    uint64_t rbp;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
 
-    struct fpu_state fpu_state;
+    struct fpu_state fpu_state; 
 };
+
+#define THR_RIP   offsetof(struct thread_struct, rip)
+#define THR_CR3   offsetof(struct thread_struct, cr3)
+#define THR_RSP   offsetof(struct thread_struct, rsp)
+#define THR_FS    offsetof(struct thread_struct, fs_base)
+#define THR_RBX   offsetof(struct thread_struct, rbx)
+#define THR_RBP   offsetof(struct thread_struct, rbp)
+#define THR_R12   offsetof(struct thread_struct, r12)
+#define THR_R13   offsetof(struct thread_struct, r13)
+#define THR_R14   offsetof(struct thread_struct, r14)
+#define THR_R15   offsetof(struct thread_struct, r15)
 
 // 设置gs寄存器
 static inline void set_gs_base(uint64_t base) {
@@ -134,6 +155,13 @@ static inline bool cpuid_fsgsbase(void) {
                      : "a"(7), "c"(0));
     
     return (ebx & (1 << 0)) != 0;
+}
+
+// 获取xsaves指令需要的最大内存大小
+static inline uint32_t cpuid_xsaves_size(void) {
+    uint32_t ebx;
+    asm volatile("cpuid" : "=b"(ebx) : "a"(0x0D), "c"(0) : "edx", "memory");
+    return ebx;
 }
 
 // 写入CR4(使用CR4_CONFIG)
@@ -186,16 +214,6 @@ static inline void write_cpu_flags(uint64_t flags) {
     );
 }
 
-// 禁止中断
-static inline void irq_off(void) {
-    __asm__ volatile("cli" ::: "memory");
-}
-
-// 开启中断
-static inline void irq_on(void) {
-    __asm__ volatile("sti" ::: "memory");
-}
-
 // 读取tsc设备值
 static inline uint64_t rdtsc(void) {
     uint32_t lo, hi;
@@ -206,35 +224,4 @@ static inline uint64_t rdtsc(void) {
 // 内存屏障
 static inline void barrier(void) {
     __asm__ volatile ("" ::: "memory");
-}
-
-/**
- * 保存fpu信息
- * 
- * @param state fpu信息结构体
- */
-static inline void fpu_save(struct fpu_state *state) {
-    uint32_t lmask = 0xffffffff;
-    uint32_t hmask = 0xffffffff;
-    __asm__ volatile (
-        "xsaves %0"
-        : "+m" (*(char *)state->xsaves)
-        : "a" (lmask), "d" (hmask)
-        : "memory"
-    );
-}
-
-/**
- * 恢复fpu状态
- * 
- * @param state fpu信息结构体
- */
-static inline void fpu_restore(struct fpu_state *state) {
-    uint32_t lmask = 0xffffffff;
-    uint32_t hmask = 0xffffffff;
-    __asm__ volatile (
-        "xrstors %0"
-        : : "m" (*(char *)state->xsaves), "a" (lmask), "d" (hmask)
-        : "memory"
-    );
 }

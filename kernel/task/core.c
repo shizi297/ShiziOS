@@ -333,6 +333,35 @@ fail:
     return NULL;
 }
 
+// 重新调度任务
+void task_sched(void) {
+    irq_off();
+
+    task_struct *prev = smp_get_task_current();
+    if (!prev) goto out;
+
+    task_struct *next = sched_class->pick_next(smp_get_sched());
+    if (!next) goto out;
+
+    // 如果是同一个任务，不需要切换
+    if (prev == next) goto out;
+
+    // 保存fpu状态
+    fpu_save(prev->thread);
+
+    // 更新当前cpu运行的任务
+    smp_set_task_current(next);
+
+    // 切换上下文
+    switch_to(prev->thread, next->thread);
+
+    // 使用当前任务的fpu
+    fpu_restore(next->thread);
+
+    out:
+        irq_on();
+}
+
 // 任务管理数据初始化
 bool task_data_init(void) {
     uint32_t max_cpu = bootboot->numcores;
