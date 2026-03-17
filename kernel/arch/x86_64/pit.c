@@ -75,6 +75,9 @@ static void pit_irq(struct pt_regs *regs) {
  * @return 失败：false
  */
 bool pit_init(void) {
+    // 屏蔽中断，防止干扰系统初始化
+    pit_shutdown();
+
     // 确保 PIT 归零
     outb(PIT_CTRL_ONESHOT, PIT_CONTROL);   // 设置为模式0
     outb(0x01, PIT_COUNTER0);               // 写入 1
@@ -104,7 +107,7 @@ bool pit_init(void) {
     pit_handle = clockevent_get("pit");
 
     // 注册到ioapic
-    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, apic_get_id(), IOAPIC_POLARITY);
+    bool is_success = ioapic_register_gsi(PIT_GSI, IRQ_PIT, apic_get_id(), IOAPIC_POLARITY | IOAPIC_MASK);
     if (!is_success) return false;
 
     return true;
