@@ -24,6 +24,9 @@ void vmm_init(void);
  */
 as_t *vmm_create_as(void);
 
+// 获取内核地址空间
+as_t *vmm_get_kernel_as(void);
+
 /*
  * 释放内存
  * 

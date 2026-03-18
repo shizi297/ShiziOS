@@ -10,7 +10,6 @@
 #include <arch_processor.h>
 
 struct sched_class;
-typedef struct task_struct task_struct;
 
 typedef struct {
     uint64_t (*timestamp)(void);    // 时间戳获取
@@ -19,8 +18,11 @@ typedef struct {
     // 当前cpuid
     uint16_t logical_id;
 
-    // 调度器头节点
-    void *sched;
+    // 调度器私有数据
+    per_cpu_sched *sched;
+
+    // 当前cpu的idle任务
+    task_struct *idle;
 
     // 时间戳记录字段
     uint64_t last_ns;
@@ -82,13 +84,13 @@ static inline uint32_t get_logical_id(void) {
     return per_cpu_ptr->logical_id;
 }
 
-// 设置调度器头节点
+// 设置调度器私有数据
 static inline void smp_set_sched(void *sched) {
     per_cpu *per_cpu_ptr = smp_get_kernel_tls();
     per_cpu_ptr->sched = sched;
 }
 
-// 获取当前cpu的调度器头节点
+// 获取当前cpu的调度器私有数据
 static inline void *smp_get_sched(void) {
     per_cpu *per_cpu_ptr = smp_get_kernel_tls();
     return per_cpu_ptr->sched;    
@@ -152,4 +154,16 @@ static inline void smp_set_task_current(task_struct *task) {
 static inline task_struct *smp_get_task_current(void) {
     per_cpu *per_cpu_ptr = smp_get_kernel_tls();
     return per_cpu_ptr->current;
+}
+
+// 设置当前cpu的idle任务
+static inline void smp_set_idle(task_struct *idle) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->idle = idle;
+}
+
+// 获取当前cpu的idle任务
+static inline task_struct *smp_get_idle(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->idle;
 }

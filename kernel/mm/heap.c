@@ -321,3 +321,8 @@ as_t *vheap_copy_as(as_t *as) {
 void vheap_as_add_ref(as_t *as) {
     vmm_as_add_ref(as);
 }
+
+// 获取内核地址空间
+as_t *vheap_get_kernel_as(void) {
+    return vmm_get_kernel_as();
+}

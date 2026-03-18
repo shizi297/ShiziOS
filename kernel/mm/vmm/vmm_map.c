@@ -11,13 +11,26 @@
 #include <mm/vmm/vmm_mmu.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <serial.h>
+ 
+#define VMM_PANIC(str) \
+    panic("[VMM] ERROR : ")
 
 static uintptr_t mmio_addr = MMIO_MAP;
 static spinlock_t mmio_map_lock = SPIN_LOCK_INIT;
+static as_t *kernel_as = NULL;
 
 // 初始化
 void vmm_init(void) {
     mmu_init();
+    uintptr_t kernel_pgd_phys = mmu_get_kernel_pgd();
+    kernel_as = as_create(kernel_pgd_phys);
+    if (!kernel_as) VMM_PANIC("Failed to create kernel address space");
+}
+
+// 获取内核地址空间
+as_t *vmm_get_kernel_as(void) {
+    return kernel_as;
 }
 
 /*

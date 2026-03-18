@@ -31,17 +31,22 @@ struct idt_gate;
 
 // CPU暂停,用于优化等待循环，防止过度占用执行资源
 static inline void cpu_pause(void) {
-    __asm__ volatile("pause");
+    asm volatile("pause");
+}
+
+// 停止cpu运行
+static inline void cpu_halt(void) {
+    asm volatile("hlt");
 }
 
 // 禁止中断
 static inline void irq_off(void) {
-    __asm__ volatile("cli" ::: "memory");
+    asm volatile("cli" ::: "memory");
 }
 
 // 开启中断
 static inline void irq_on(void) {
-    __asm__ volatile("sti" ::: "memory");
+    asm volatile("sti" ::: "memory");
 }
 
 // 获取gdt模版的虚拟地址
@@ -78,8 +83,20 @@ void fpu_save(struct thread_struct *thread);
  */
 void fpu_restore(struct thread_struct *thread);
 
+// 设置任务thread为内核线程并初始化
+void thread_struct_to_kernel_init(
+    struct thread_struct *thread,
+    void *stack_top, 
+    void *pgd,
+    void (*func)(void *), 
+    void *arg
+);
+
 // 为任务分配thread_struct结构体
-struct thread_struct *thread_struct_init(void);
+struct thread_struct *thread_struct_create(void);
+
+// 销毁thread_struct结构体
+void thread_struct_destroy(struct thread_struct *thread);
 
 // 初始化所有模版
 void processor_init(void);

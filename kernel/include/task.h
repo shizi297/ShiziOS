@@ -11,6 +11,7 @@
 #include <arch_processor.h>
 
 struct task_struct;
+typedef struct per_cpu_sched per_cpu_sched;
 typedef struct task_struct task_struct;
 
 // 任务标志，用于任务创建时指定行为
@@ -37,6 +38,9 @@ void task_add_current_tick(uint64_t tick);
  * @return 失败：NULL
  */
 task_struct *task_copy(struct task_struct *task, task_flags flags);
+
+// 重新调度任务
+void task_sched(void);
 
 // 任务管理数据初始化
 bool task_data_init(void);

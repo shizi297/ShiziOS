@@ -7,7 +7,8 @@
 
 .altmacro
 
-.extern irq_entry_c
+.extern irq_entry
+.extern task_exit
 
 /*
  * 为每个中断向量生成独立入口点
@@ -142,3 +143,13 @@ common_interrupt:
 
     addq $16, %rsp
     iretq
+
+/* 内核统一入口，rbx为内核线程入口，rbp为参数 */
+.section .text
+.globl ret_from_kernel_thread
+.type ret_from_kernel_thread, @function
+.align 8
+ret_from_kernel_thread:
+    movq  %rbp, %rdi
+    call *%rbx
+    jmp task_exit

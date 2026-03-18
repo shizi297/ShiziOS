@@ -327,3 +327,8 @@ void smp_irq_unregister_handler(uint8_t vector) {
 per_cpu *smp_get_kernel_tls(void) {
     return get_gs_base();
 }
+
+// 更新架构相关的状态，用于切换上下文后
+void smp_arch_update_state(void *stack) {
+
+}

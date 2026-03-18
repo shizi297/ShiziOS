@@ -8,6 +8,8 @@
 
 extern uint64_t irq_entry_table[256];
 
+extern void ret_from_kernel_thread(void);
+
 static gdte gdt_temp[GDT_ENTRY_COUNT];
 static struct idt_gate idt_temp[IDT_ENTRY_COUNT];
 static struct tss tss_temp = {0};
@@ -213,7 +215,7 @@ void fpu_restore(struct thread_struct *thread) {
 }
 
 // 为任务分配thread_struct结构体
-struct thread_struct *thread_struct_init(void) {
+struct thread_struct *thread_struct_create(void) {
     struct thread_struct *thread = (struct thread_struct *)kheap_alloc(sizeof(struct thread_struct));
     if (!thread) goto fail;
     void *fpu = kheap_alloc(xsaves_size);
@@ -228,6 +230,27 @@ struct thread_struct *thread_struct_init(void) {
         if (fpu) kheap_free(fpu);
         if (thread) kheap_free(thread);
         return NULL;
+}
+
+// 销毁thread_struct结构体
+void thread_struct_destroy(struct thread_struct *thread) {
+    kheap_free(thread->fpu_state.xsaves);
+    kheap_free(thread);
+}
+
+// 设置任务thread为内核线程并初始化
+void thread_struct_to_kernel_init(
+    struct thread_struct *thread,
+    void *stack_top, 
+    void *pgd,
+    void (*func)(void *), 
+    void *arg
+) {
+    thread->cr3 = (uint64_t)pgd;
+    thread->rsp = (uint64_t)stack_top;
+    thread->rbp = (uint64_t)arg;
+    thread->rbx = (uint64_t)func;
+    thread->rip = (uint64_t)ret_from_kernel_thread;
 }
 
 // 初始化所有模版

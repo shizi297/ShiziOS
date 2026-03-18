@@ -158,3 +158,6 @@ as_t *vheap_copy_as(as_t *as);
 
 // 添加as的引用计数
 void vheap_as_add_ref(as_t *as);
+
+// 获取内核地址空间
+as_t *vheap_get_kernel_as(void);
