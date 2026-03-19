@@ -7,6 +7,7 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <arch_processor.h>
 
 // 自旋锁结构
 typedef struct {
@@ -25,7 +26,7 @@ static inline void spinlock_init(spinlock_t *lock) {
 static inline void spin_lock(spinlock_t *lock) {
     while (atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire)) {
         // 锁被占用时暂停指令，减少CPU占用
-        __asm__ __volatile__ ("pause");
+        cpu_pause();
     }
 }
 

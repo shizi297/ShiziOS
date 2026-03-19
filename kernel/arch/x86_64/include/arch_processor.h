@@ -58,6 +58,9 @@ struct idt_gate* get_idt_temp(void);
 // 获取tss模版的虚拟地址
 struct tss* get_tss_temp(void);
 
+// 早期任务切换
+void processor_boot_switch(struct thread_struct *thread);
+
 /**
  * 任务切换
  * 

@@ -13,6 +13,7 @@
 // 用于线程id与线程组id
 typedef int task_id; 
 typedef task_id id_t;
+typedef void (*sched_func_t)(void);
 
 // 任务状态
 typedef enum {

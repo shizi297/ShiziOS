@@ -18,6 +18,7 @@
 #include <spinlock.h>
 #include <task.h>
 #include <time.h>
+#include <stdatomic.h>
 
 #define SMP_PRINT(str) \
     serial_puts("[SMP] " str)
@@ -32,6 +33,8 @@ struct tss *tss_ptr = NULL;
 struct logicalid_to_apicid_struct *logicalid_to_apicid_struct_ptr = 0;
 
 per_cpu *per_cpu_ptr = NULL;
+
+atomic_bool bp_init = false;
 
 /**
  * 存放逻辑cpuid对应的apicid
@@ -190,7 +193,6 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     // 切换栈
     processor_set_stack(new_stack_top);
 
-
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
     logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[reg_logical_id] = reg_apic_id;
@@ -265,6 +267,14 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
         if (!task_data_init()) SMP_PANIC("task init failed\n");
+
+        // 通知ap继续执行
+        atomic_store_explicit(&bp_init, true, memory_order_relaxed);
+    } else {
+        // 等待bp完成初始化
+        while (!atomic_load_explicit(&bp_init, memory_order_acquire)) {
+            cpu_pause();  
+        }
     }
 
     // 写入per_cpu用于获取时间戳
@@ -272,6 +282,10 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     smp_set_timestamp(ts);
 
     SMP_PRINT("smp init succeed\n");
+
+    task_init();
+
+    SMP_PANIC("system error\n");
 
     while (1) {
         cpu_pause();

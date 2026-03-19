@@ -6,10 +6,12 @@
 #include <stdint.h>
 #include <bootboot.h>
 #include <stdbool.h>
-#include <serial.h>
 #include <spinlock.h>
 #include <processor.h>
 #include <apic.h>
+
+#define SERIAL_FILE_INIT
+#include <serial.h>
 
 #define BOOTKERNEL_PRINT(str) \
     serial_puts("[BOOTKERNEL] " str)

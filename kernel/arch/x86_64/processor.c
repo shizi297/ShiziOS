@@ -113,6 +113,19 @@ struct tss* get_tss_temp(void) {
     return &tss_temp;
 }
 
+// 早期任务切换
+void processor_boot_switch(struct thread_struct *thread) {
+    __asm__ volatile(
+        "movq %0, %%rsp\n\t"
+        "movq %1, %%rbx\n\t"
+        "movq %2, %%rbp\n\t"
+        "pushq %3\n\t"
+        "ret\n"
+        : : "r"(thread->rsp), "r"(thread->rbx), "r"(thread->rbp), "r"(thread->rip)
+        : "memory"
+    );
+}
+
 /**
  * 任务切换
  * 

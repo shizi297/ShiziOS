@@ -151,5 +151,6 @@ common_interrupt:
 .align 8
 ret_from_kernel_thread:
     movq  %rbp, %rdi
+    sti
     call *%rbx
     jmp task_exit
