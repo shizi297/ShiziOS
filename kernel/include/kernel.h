@@ -7,6 +7,6 @@
 
 #include <stdint.h>
 
-#define KERNEL_VERSION "0.01"
+#define KERNEL_VERSION "0.1.0"
 #define KERNEL_NAME "ShiziOS KERNEL"
 
