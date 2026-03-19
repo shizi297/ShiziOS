@@ -326,3 +326,8 @@ void vheap_as_add_ref(as_t *as) {
 as_t *vheap_get_kernel_as(void) {
     return vmm_get_kernel_as();
 }
+
+// 获取内核的页全局目录
+uintptr_t vheap_get_kernel_pgd(void) {
+    return vmm_get_kernel_pgd();
+}

@@ -20,6 +20,9 @@
 #include <dynarr.h>
 #include <serial.h>
 
+#define TASK_PANIC(str) \
+    panic("[TASK] ERROR : " str)
+
 #define TASK_PRINT(str) \
     serial_puts("[TASK]" str)
 
@@ -45,9 +48,9 @@ static per_cpu_task_state_struct *per_cpu_task_state_ptr = NULL;
 
 INIT_BITMAP(id_bitmap, TASK_ID_MAX);
 static spinlock_t id_lock = SPIN_LOCK_INIT;
-dynarr_t *id_map;
+static dynarr_t *id_map;
 static struct sched_class *sched_class;
-static id_t kernel_id = 0;
+static task_struct *idle = NULL;
 
 /**
  * id分配，可以用于任务管理的任何id
@@ -130,13 +133,18 @@ static void thread_group_remove(struct task_struct *leader, struct task_struct *
 }
 
 // idle任务
-static void task_idle(void) {
+static void task_idle(void *arg) {
     while (1) cpu_halt();
 }
 
-// 设置idle任务
-static inline void task_set_idle(void) {
-    // TODO
+// 创建idle任务
+static inline task_struct *task_create_idle(void) {
+    return task_create_kernel_thread(task_idle, NULL);
+}
+
+// 时钟中断的回调
+static void task_clock_event_handle(void) {
+    return;
 }
 
 // 更新当前任务的时间
@@ -249,9 +257,102 @@ fail:
     return NULL;
 }
 
+/**
+ * 创建内核线程
+ * 
+ * @param func 线程入口函数
+ * @param arg  传递给线程的参数
+ * * 
+ * @return 成功：任务结构体指针
+ * @return 失败：NULL
+ */
+task_struct *task_create_kernel_thread(void (*func)(void *), void *arg) {
+    task_struct *task = NULL;
+    void *stack = NULL;
+    struct thread_struct *thread = NULL;
+    id_t pid = -1;
+
+    // 分配任务结构体
+    task = (task_struct *)kheap_alloc(sizeof(task_struct));
+    if (!task) goto fail;
+    spinlock_init(&task->list_lock);
+
+    // 分配内核栈
+    stack = kheap_alloc(KERNEL_START_SIZE);
+    if (!stack) goto fail;
+    task->stack = stack;
+
+    // 分配线程上下文
+    thread = thread_struct_create();
+    if (!thread) goto fail;
+    task->thread = thread;
+
+    // 分配pid
+    pid = id_alloc();
+    if (pid == -1) goto fail;
+    task->pid = pid;
+
+    // 设置 tgid
+    task->tgid = pid;
+
+    // 设置地址空间（内核线程共享内核地址空间）
+    task->as = vheap_get_kernel_as();
+
+    // 获取内核页表物理地址
+    uintptr_t kernel_pgd = vheap_get_kernel_pgd();
+
+    // 初始化线程上下文
+    void *stack_top = (void *)((uintptr_t)stack + KERNEL_START_SIZE);
+    thread_struct_to_kernel_init(thread, stack_top, (void *)kernel_pgd, func, arg);
+
+    // 初始化调度器私有数据
+    if (sched_class && sched_class->sched_init) sched_class->sched_init(task);
+
+    // 设置任务状态
+    task->state = TASK_RUNNING;
+    task->sigchld = false;
+
+    // 初始化链表
+    INIT_LIST_HEAD(&task->zombie);
+    INIT_LIST_HEAD(&task->sibling);
+    INIT_LIST_HEAD(&task->children);
+    INIT_LIST_HEAD(&task->sleep);
+    INIT_LIST_HEAD(&task->thread_group);
+
+    // 设置父子关系（无父进程）
+    task->father = NULL;
+
+    // 设置线程组关系（自己为主线程）
+    task->group_leader = task;
+
+    // 加入调度队列
+    if (sched_class && sched_class->enqueue) sched_class->enqueue(task);
+
+    // 添加到 id 映射表
+    dynarr_set(id_map, pid, &task);
+
+    return task;
+
+fail:
+    // 错误处理
+    if (thread) thread_struct_destroy(thread);
+    if (stack) kheap_free(stack);
+    if (task) {
+        if (pid != -1) id_free(pid);
+        kheap_free(task);
+    }
+    return NULL;
+}
+
 // 任务退出
 void task_exit(void) {
     // TODO
+}
+
+// 设置下一次中断
+void task_set_next_timer(void) {
+    // 调度器内部根据已经运行的exec_ns是否为0而决定是否设置下一次中断
+    sched_class->set_next_timer(smp_get_task_current());
 }
 
 // 重新调度任务
@@ -292,15 +393,13 @@ bool task_data_init(void) {
     if (!per_cpu_task_state_ptr) return false;
 
     // 初始化链表节点
-    for (int i = 0; i < max_cpu; i++)
-        INIT_LIST_HEAD(&per_cpu_task_state_ptr->state[i].stopped);
-
-    kernel_id = id_alloc();
-    if (kernel_id == -1) return false;
+    for (int i = 0; i < max_cpu; i++) INIT_LIST_HEAD(&per_cpu_task_state_ptr->state[i].stopped);
 
     // 创建id映射，用于找到对应id的task，最大容量为TASK_ID_MAX
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
     if (!id_map) return false;
+
+    idle = task_create_idle();
 
     TASK_PRINT("task data init success\n");
 
@@ -308,10 +407,24 @@ bool task_data_init(void) {
 }
 
 // 任务管理初始化
-bool task_init(void) {
+void task_init(void) {
     if (sched_class && sched_class->init) sched_class->init();
+
+    if (!idle) goto error; 
+    smp_set_idle(idle);
+
+    clockevent_handle_t clockevent = clockevent_get(NULL);
+    if (!clockevent) goto error;
+
+    smp_set_clockevent(clockevent);
+    clockevent_set_handler(clockevent, task_clock_event_handle);
 
     TASK_PRINT("task init success\n");
 
-    return true;
+    task_sched();
+    task_set_next_timer();
+
+    // 不应该返回，如果返回说明代码错误
+    error:
+        TASK_PANIC("system error");
 }

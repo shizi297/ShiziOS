@@ -33,6 +33,11 @@ as_t *vmm_get_kernel_as(void) {
     return kernel_as;
 }
 
+// 获取内核的页全局目录
+uintptr_t vmm_get_kernel_pgd(void) {
+    return mmu_get_kernel_pgd();
+}
+
 /*
  * 创建一个新的进程地址空间
  * 自动分配页全局目录

@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <task.h>
 #include <arch_processor.h>
+#include <time.h>
 
 struct sched_class;
 
@@ -30,6 +31,12 @@ typedef struct {
 
     // 当前cpu的运行任务数量（包含idle）
     uint64_t nr_running;
+
+    // 时钟事件句柄
+    clockevent_handle_t clockevent;
+
+    // 用于在中断返回时判断是否需要重新调度
+    bool need_sched;
 
 } __attribute__((aligned(64))) per_cpu;
 
@@ -166,4 +173,34 @@ static inline void smp_set_idle(task_struct *idle) {
 static inline task_struct *smp_get_idle(void) {
     per_cpu *per_cpu_ptr = smp_get_kernel_tls();
     return per_cpu_ptr->idle;
+}
+
+// 设置重新调度
+static inline void smp_set_need_sched(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->need_sched = true;
+}
+
+// 设置不需要重新调度
+static inline void smp_set_no_sched(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->need_sched = false;
+}
+
+// 判断是否需要重新调度
+static inline bool smp_check_need_sched(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->need_sched;
+}
+
+// 设置时钟事件句柄
+static inline void smp_set_clockevent(clockevent_handle_t clockevent) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    per_cpu_ptr->clockevent = clockevent;
+}
+
+// 获取时钟事件句柄
+static inline clockevent_handle_t smp_get_clockevent(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->clockevent;
 }

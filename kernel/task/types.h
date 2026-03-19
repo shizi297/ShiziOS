@@ -87,5 +87,6 @@ struct sched_class {
     void (*set_prio)(struct task_struct *task, int prio);   // 设置优先级
     void (*update_tick)(struct task_struct *task, uint64_t ns); // 更新时间片
     void (*sched_init)(struct task_struct *task);    // 初始化嵌入的 sched_data
+    void (*set_next_timer)(struct task_struct *task);   // 设置中断
     void (*init)(void); // 初始化
 };

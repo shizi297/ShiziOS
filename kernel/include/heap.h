@@ -161,3 +161,6 @@ void vheap_as_add_ref(as_t *as);
 
 // 获取内核地址空间
 as_t *vheap_get_kernel_as(void);
+
+// 获取内核的页全局目录
+uintptr_t vheap_get_kernel_pgd(void);

@@ -27,6 +27,9 @@ as_t *vmm_create_as(void);
 // 获取内核地址空间
 as_t *vmm_get_kernel_as(void);
 
+// 获取内核的页全局目录
+uintptr_t vmm_get_kernel_pgd(void);
+
 /*
  * 释放内存
  * 

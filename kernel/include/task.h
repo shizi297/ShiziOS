@@ -39,6 +39,23 @@ void task_add_current_tick(uint64_t tick);
  */
 task_struct *task_copy(struct task_struct *task, task_flags flags);
 
+/**
+ * 创建内核线程
+ * 
+ * @param func 线程入口函数
+ * @param arg  传递给线程的参数
+ * * 
+ * @return 成功：任务结构体指针
+ * @return 失败：NULL
+ */
+task_struct *task_create_kernel_thread(void (*func)(void *), void *arg);
+
+// 任务退出
+void task_exit(void);
+
+// 设置下一次中断
+void task_set_next_timer(void);
+
 // 重新调度任务
 void task_sched(void);
 
@@ -46,4 +63,4 @@ void task_sched(void);
 bool task_data_init(void);
 
 // 任务管理初始化
-bool task_init(void);
+void task_init(void);
