@@ -247,6 +247,9 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     // 设置per_cpu的逻辑cpuid
     per_cpu_ptr[reg_logical_id].logical_id = reg_logical_id;
 
+    // 初始化canary
+    per_cpu_ptr[reg_logical_id].cancry = 0x28;
+
     // 设置当前cpu的gs到per_cpu
     set_gs_base((uint64_t)&per_cpu_ptr[reg_logical_id]);
 

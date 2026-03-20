@@ -40,17 +40,41 @@ static void set_apic_x2apic(void) {
  * @param mask 屏蔽位 (1=屏蔽，0=启用)
  */
 static void apic_set_lvt_timer(uint32_t vector, uint32_t mode, uint32_t mask) {
-    uint64_t val = ((uint64_t)vector & 0xFF) | (((uint64_t)mode & 0x7) << 8) | (((uint64_t)mask & 0x1) << 16);
+    uint64_t val = ((uint64_t)vector & 0xFF) | (((uint64_t)mode & 0x7) << 17) | (((uint64_t)mask & 0x1) << 16);
     msr_write(X2APIC_MSR_LVT_TIMER, val);
 }
 
-/**
- * 设置 TSC DEADLINE的触发时间
- *
- * @param tsc_value TSC截止值
- */
-static void apic_set_tsc_deadline(uint64_t value) {
-    msr_write(MSR_IA32_TSC_DEADLINE, value);
+// TSC deadline 模式相关
+static void apic_tsc_deadline_set_value(uint64_t value) {
+    uint64_t now = rdtsc();
+    msr_write(MSR_IA32_TSC_DEADLINE, now + value);
+}
+
+static void apic_tsc_deadline_set_oneshot(void) {
+    apic_set_lvt_timer(IRQ_APIC, 2, 0);
+}
+
+static void apic_tsc_deadline_shutdown(void) {
+    apic_set_lvt_timer(IRQ_APIC, 2, 1);
+}
+
+// 传统 APIC 定时器模式
+#define APIC_BUS_FREQ 100000000  // 总线频率,100MHZ
+
+static void apic_legacy_set_value(uint64_t cycles) {
+    msr_write(X2APIC_MSR_TIMER_INITCNT, cycles);
+}
+
+static void apic_legacy_set_oneshot(void) {
+    apic_set_lvt_timer(IRQ_APIC, 0, 0);
+}
+
+static void apic_legacy_set_periodic(void) {
+    apic_set_lvt_timer(IRQ_APIC, 1, 0);
+}
+
+static void apic_legacy_shutdown(void) {
+    apic_set_lvt_timer(IRQ_APIC, 0, 1);
 }
 
 /**
@@ -122,63 +146,35 @@ void apic_boot_init(void) {
     outb(0xFF, 0x21); 
 }
 
-// 关闭apic定时器（屏蔽中断）
-static void apic_timer_shutdown(void) {
-    apic_set_lvt_timer(IRQ_APIC, APIC_TSC_DEADLINE, 1);
-}
-
-// 设置为单次模式（取消屏蔽）
-static void apic_timer_set_oneshot(void) {
-    apic_set_lvt_timer(IRQ_APIC, APIC_TSC_DEADLINE, 0);
-}
-
-// 设置下一次中断的计数值
-static void apic_timer_set_value(uint64_t value) {
-    uint64_t now = rdtsc();
-    apic_set_tsc_deadline(now + value);
-}
-
 // per-cpu 句柄数组
 static clockevent_handle_t *apic_ce_percpu = NULL;
 
 // 定时器中断处理函数
 static void apic_timer_irq(struct pt_regs *regs) {
+    serial_puts("[APIC] timer IRQ\n");
     uint32_t logical_id = get_logical_id();
     if (apic_ce_percpu && apic_ce_percpu[logical_id]) {
         clockevent_handle_irq(apic_ce_percpu[logical_id]);
     }
-    apic_eoi();
 }
 
 // 将当前cpu的apic定时器注册到时钟事件框架
-static bool apic_clockevent_register(void) {
-    clocksource_handle_t tsc = clocksource_get("tsc");
-    if (!tsc) return false;
-    uint64_t hz = clocksource_get_hz(tsc);
-    if (hz == 0) return false;
-
+static bool apic_clockevent_register_legacy(void) {
     clockevent_register(
         "apic",
-        apic_timer_shutdown,
-        apic_timer_set_oneshot,
-        NULL,                       // 不支持周期模式
-        apic_timer_set_value,
-        hz
+        apic_legacy_shutdown,
+        apic_legacy_set_oneshot,
+        apic_legacy_set_periodic,
+        apic_legacy_set_value,
+        APIC_BUS_FREQ
     );
-
     return true;
 }
 
 // 初始化apic
 bool apic_init(void) {
-    // 设置为TSC DEADLINE模式，中断号为IRQ_APIC
-    apic_set_lvt_timer(IRQ_APIC, APIC_TSC_DEADLINE, 0);
-
-    // 设置svr，让系统可以接收外部中断
-    apic_set_svr(EXC_SPUR); 
-
     // 注册当前cpu的apic定时器到时钟事件框架
-    if(!apic_clockevent_register()) {
+    if(!apic_clockevent_register_legacy()) {
         return false;
     }
 

@@ -138,12 +138,22 @@ static void thread_group_remove(struct task_struct *leader, struct task_struct *
 
 // idle任务
 static void task_idle(void *arg) {
-    uint32_t cpu_id = get_logical_id();  // 获取当前的cpuid
+    uint64_t count = 0;
+    uint32_t cpu_id = get_logical_id();
     serial_puts("[IDLE] CPU ");
     serial_put_dec(cpu_id);
     serial_puts("\n");
     while (1) {
-        cpu_pause();
+        count++;
+        if ((count % 50) == 0) {
+            serial_puts("[IDLE] CPU ");
+            serial_put_dec(cpu_id);
+            serial_puts("\n");
+            serial_puts("[IDLE] count : ");
+            serial_put_dec(count);
+            serial_puts("\n");
+        }
+        cpu_halt();
     }
 }
 
@@ -370,7 +380,6 @@ void task_exit(void) {
 
 // 设置下一次中断
 void task_set_next_timer(void) {
-    // 调度器内部根据已经运行的exec_ns是否为0而决定是否设置下一次中断
     sched_class_ptr->set_next_timer(smp_get_task_current());
 }
 
@@ -418,9 +427,9 @@ bool task_data_init(void) {
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
     if (!id_map) return false;
 
-    idle = task_create_idle();
-
     sched_func();
+
+    idle = task_create_idle();
 
     TASK_PRINT("task data init success\n");
 
@@ -429,16 +438,17 @@ bool task_data_init(void) {
 
 // 任务管理初始化
 void task_init(void) {
-    if (sched_class_ptr && sched_class_ptr->init) sched_class_ptr->init();
-
     if (!idle) goto error; 
     smp_set_idle(idle);
+
+    if (sched_class_ptr && sched_class_ptr->init) sched_class_ptr->init();
 
     clockevent_handle_t clockevent = clockevent_get(NULL);
     if (!clockevent) goto error;
 
     smp_set_clockevent(clockevent);
     clockevent_set_handler(clockevent, task_clock_event_handle);
+    clockevent_set_mode(clockevent, CLOCKEVENT_MODE_ONESHOT);
 
     TASK_PRINT("task init success\n");
 

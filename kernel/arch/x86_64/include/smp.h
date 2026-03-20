@@ -10,20 +10,24 @@
 #include <arch_processor.h>
 #include <time.h>
 
+#define ALIGN8 __attribute__((aligned(8)))
+
 struct sched_class;
 
 typedef struct {
-    uint64_t (*timestamp)(void);    // 时间戳获取
-    task_struct *current;
-
-    // 当前cpuid
-    uint16_t logical_id;
+    ALIGN8 uint64_t (*timestamp)(void);    // 时间戳获取
+    ALIGN8 task_struct *current;
 
     // 调度器私有数据
-    per_cpu_sched *sched;
+    ALIGN8 per_cpu_sched *sched;
+
+    // 当前cpuid
+    ALIGN8 uint16_t logical_id;
 
     // 当前cpu的idle任务
-    task_struct *idle;
+    ALIGN8 task_struct *idle;
+
+    ALIGN8 uint64_t cancry;
 
     // 时间戳记录字段
     uint64_t last_ns;
