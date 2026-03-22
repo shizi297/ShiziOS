@@ -144,54 +144,9 @@ static inline const bitmap_word_t *bitmap_to_words(const bitmap_t *map) {
 static inline uint32_t bitmap_find(const bitmap_t *map, uint32_t bits, uint32_t start, bool find_value) {
     if (start >= bits) return bits;
 
-    const bitmap_word_t *words = bitmap_to_words(map);
-    uint32_t nwords = bits / BITS_PER_WORD;
-    uint32_t tail_bits = bits % BITS_PER_WORD;
-    uint32_t word_idx = start / BITS_PER_WORD;
-    uint32_t offset = start % BITS_PER_WORD;
-
-    // 掩码：find_value为1时掩码为0，为0时掩码为全1
-    bitmap_word_t xor_mask = find_value ? 0 : ~(bitmap_word_t)0;
-
-    // 处理起始字
-    if (word_idx < nwords || (word_idx == nwords && tail_bits != 0)) {
-        uint32_t bits_in_this_word = (word_idx == nwords) ? tail_bits : BITS_PER_WORD;
-        if (offset < bits_in_this_word) {
-            bitmap_word_t word = words[word_idx];
-            bitmap_word_t mask = ((bitmap_word_t)1 << bits_in_this_word) - 1;
-            word &= mask;
-            bitmap_word_t effective = word ^ xor_mask;
-            
-            // 屏蔽 offset 之前的低位，使其不影响查找
-            effective &= ~(((bitmap_word_t)1 << offset) - 1);
-            if (effective) {
-                uint32_t pos = word_idx * BITS_PER_WORD + __builtin_ctzll(effective);
-                if (pos < bits) return pos;
-            }
-        }
-        word_idx++;
+    for (uint32_t i = start; i < bits; i++) {
+        if (bitmap_check(map, i) == find_value)
+            return i;
     }
-
-    // 扫描剩余完整字
-    for (uint32_t i = word_idx; i < nwords; i++) {
-        bitmap_word_t effective = words[i] ^ xor_mask;
-        if (effective) {
-            uint32_t pos = i * BITS_PER_WORD + __builtin_ctzll(effective);
-            if (pos < bits) return pos;
-        }
-    }
-
-    // 处理最后一个部分字
-    if (tail_bits && word_idx <= nwords) {
-        bitmap_word_t word = words[nwords];
-        bitmap_word_t mask = ((bitmap_word_t)1 << tail_bits) - 1;
-        word &= mask;
-        bitmap_word_t effective = word ^ xor_mask;
-        if (effective) {
-            uint32_t pos = nwords * BITS_PER_WORD + __builtin_ctzll(effective);
-            if (pos < bits) return pos;
-        }
-    }
-
     return bits;
 }

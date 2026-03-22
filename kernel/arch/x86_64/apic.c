@@ -151,7 +151,6 @@ static clockevent_handle_t *apic_ce_percpu = NULL;
 
 // 定时器中断处理函数
 static void apic_timer_irq(struct pt_regs *regs) {
-    serial_puts("[APIC] timer IRQ\n");
     uint32_t logical_id = get_logical_id();
     if (apic_ce_percpu && apic_ce_percpu[logical_id]) {
         clockevent_handle_irq(apic_ce_percpu[logical_id]);
