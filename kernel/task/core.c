@@ -51,7 +51,6 @@ static per_cpu_task_state_struct *per_cpu_task_state_ptr = NULL;
 INIT_BITMAP(id_bitmap, TASK_ID_MAX);
 static spinlock_t id_lock = SPIN_LOCK_INIT;
 static dynarr_t *id_map;
-static task_struct *idle = NULL;
 
 struct sched_class sched_class = {0};
 struct sched_class *sched_class_ptr = &sched_class;
@@ -145,7 +144,7 @@ static void task_idle(void *arg) {
     serial_puts("\n");
     while (1) {
         count++;
-        if ((count % 50) == 0) {
+        if ((count % 500) == 0) {
             serial_puts("[IDLE] CPU ");
             serial_put_dec(cpu_id);
             serial_puts("\n");
@@ -164,7 +163,7 @@ static inline task_struct *task_create_idle(void) {
 
 // 时钟中断的回调
 static void task_clock_event_handle(void) {
-    return;
+    smp_set_need_sched();
 }
 
 // 早期调度任务
@@ -172,6 +171,8 @@ static void task_boot_sched(void) {
     task_struct *task = sched_class.pick_next();
     if (!task) return;
     
+    smp_set_task_current(task);
+
     irq_off();
     processor_boot_switch(task->thread);
 }
@@ -387,30 +388,39 @@ void task_set_next_timer(void) {
 void task_sched(void) {
     irq_off();
 
-    task_struct *prev = smp_get_task_current();
-    if (!prev) goto out;
+    struct task_struct *prev = smp_get_task_current();
+    if (!prev) {
+        goto out;
+    }
 
-    task_struct *next = NULL;
-    if (sched_class_ptr && sched_class_ptr->pick_next) next = sched_class_ptr->pick_next();
-    if (!next) goto out;
+    if (prev->state == TASK_RUNNING && prev != smp_get_idle()) {
+        sched_class_ptr->enqueue(prev);
+    }
 
-    // 如果是同一个任务，不需要切换
-    if (prev == next) goto out;
+    struct task_struct *next = sched_class_ptr->pick_next();
+    if (!next) {
+        goto out;
+    }
 
-    // 保存fpu状态
+    if (prev == next) {
+        prev->sched.exec_ns = 0;
+        task_set_next_timer();
+        goto out;
+    }
+
     fpu_save(prev->thread);
-
-    // 更新当前cpu运行的任务
     smp_set_task_current(next);
-
-    // 切换上下文
-    switch_to(prev->thread, next->thread);
-
-    // 使用当前任务的fpu
     fpu_restore(next->thread);
 
-    out:
-        irq_on();
+    irq_on();
+
+    // 设置下一次中断
+    task_set_next_timer();
+
+    switch_to(prev->thread, next->thread);
+
+out:
+    irq_on();
 }
 
 // 任务管理数据初始化
@@ -429,8 +439,6 @@ bool task_data_init(void) {
 
     sched_func();
 
-    idle = task_create_idle();
-
     TASK_PRINT("task data init success\n");
 
     return true;
@@ -438,6 +446,8 @@ bool task_data_init(void) {
 
 // 任务管理初始化
 void task_init(void) {
+    task_struct *idle = task_create_idle();
+
     if (!idle) goto error; 
     smp_set_idle(idle);
 

@@ -23,8 +23,20 @@ else()
     message(STATUS "No lld found, using default linker")
 endif()
 
-# 启用链接时优化 (LTO)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+# 构建选项
+option(OPTIMIZE "Enable optimization (LTO and -O2)" ON)          # 优化开关
+option(DEBUG    "Enable debug mode" OFF)                         # 调试开关
+option(STACK    "Enable stronger stack protection (-fstack-protector-all)" OFF)  # 栈保护强度
+set(QEMU "" CACHE STRING "Additional QEMU arguments (space-separated)")    # QEMU 额外参数
+
+# 根据 OPTIMIZE 设置优化级别和 LTO
+if(OPTIMIZE)
+    set(OPT_LEVEL "-O2")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+    set(OPT_LEVEL "-O0")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
+endif()
 
 # 获取 CPU 核心数以加速链接（仅对 lld 有效）
 include(ProcessorCount)
@@ -37,19 +49,24 @@ if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
 endif()
 
 # 基础编译选项（所有模式共用）
-set(BASE_FLAGS "-std=gnu11 -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel -O2 -mgeneral-regs-only")
+set(BASE_FLAGS "-std=gnu11 -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel -mgeneral-regs-only -fno-omit-frame-pointer")
 
-# 调试模式选项
-option(DEBUG "Enable debug mode" OFF)
-
-if(DEBUG)
-    set(EXTRA_FLAGS "-fstack-protector-all -g -fstack-check -fno-omit-frame-pointer -DDEBUG")
+# 栈保护标志
+if(STACK)
+    set(STACK_PROTECTOR_FLAGS "-fstack-protector-all")
 else()
-    set(EXTRA_FLAGS "-fstack-protector-strong")
+    set(STACK_PROTECTOR_FLAGS "-fstack-protector-strong")
 endif()
 
-set(CMAKE_C_FLAGS "${BASE_FLAGS} ${EXTRA_FLAGS}")
+# 调试标志
+if(DEBUG)
+    set(EXTRA_FLAGS "-g -fstack-check -DDEBUG ${STACK_PROTECTOR_FLAGS}")
+else()
+    set(EXTRA_FLAGS "${STACK_PROTECTOR_FLAGS}")
+endif()
 
+# 最终编译标志
+set(CMAKE_C_FLAGS "${BASE_FLAGS} ${OPT_LEVEL} ${EXTRA_FLAGS}")
 set(CMAKE_EXE_LINKER_FLAGS "-nostdlib -static -T ${CMAKE_SOURCE_DIR}/linker.ld")
 
 # 全局路径
@@ -96,6 +113,13 @@ target_link_libraries(kernel.elf
     "-Wl,--end-group"
 )
 
+# 解析 QEMU 参数
+if(QEMU)
+    separate_arguments(QEMU_LIST UNIX_COMMAND "${QEMU}")
+else()
+    set(QEMU_LIST "")
+endif()
+
 # 生成磁盘镜像
 add_custom_target(img
     DEPENDS kernel.elf
@@ -119,6 +143,7 @@ add_custom_target(run
         -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 
         -serial stdio
+        ${QEMU_LIST}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
@@ -145,6 +170,8 @@ add_custom_target(ram-run
         -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 
         -serial stdio
+        ${QEMU_LIST}
+    WORKING_DIRECTORY /dev/shm/shizios
 )
 
 # 输出目录配置

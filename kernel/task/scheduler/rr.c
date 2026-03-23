@@ -23,12 +23,21 @@ extern struct sched_class *sched_class_ptr;
 // 入队
 void rr_enqueue(struct task_struct *task) {
     per_cpu_sched *pcpu_sched = smp_get_sched();
+
+    // 确保节点处于干净状态（防止残留指针）
+    INIT_LIST_HEAD(&task->sched.list);
+
+    // 重置时间片相关字段，保证下次运行时获得完整时间片
+    task->sched.time_slice_ns = timecycle_msec_to_ns(TIME_SLICE_MS);
+    task->sched.exec_ns = 0;
+    task->sched.exec_start_ns = 0;
+
     list_add_tail(&task->sched.list, &pcpu_sched->run_queue);
 }
 
 // 出队
 void rr_dequeue(struct task_struct *task) {
-    list_del(&task->sched.list);
+    list_del_init(&task->sched.list);
 }
 
 // 选择下一个任务
@@ -38,10 +47,19 @@ struct task_struct *rr_pick_next(void) {
     // 如果没有任务返回idle
     if (list_empty(&pcpu_sched->run_queue)) return smp_get_idle();
 
-    // 把队列头移动到队列尾部，返回新的队列头作为任务
-    struct list_head *head = pcpu_sched->run_queue.next;
-    list_move_tail(head, &pcpu_sched->run_queue);
-    return list_entry(head, task_struct, sched.list);
+    // 取出队头任务，并将其从就绪队列中移除
+    struct task_struct *next = list_first_entry(
+        &pcpu_sched->run_queue,
+        struct task_struct,
+        sched.list
+    );
+    list_del_init(&next->sched.list);
+
+    // 重置时间片计数器，确保新任务开始运行时定时器能被设置
+    next->sched.exec_ns = 0;
+    next->sched.exec_start_ns = 0;
+
+    return next;
 }
 
 // 更新优先级
@@ -93,13 +111,18 @@ void rr_set_next_timer(struct task_struct *task) {
      * 新任务的exec_ns为0
      * 所以自然会被重新设置为新任务的
      */
-    if (!task->sched.exec_ns) clockevent_set_next(clockevent, task->sched.time_slice_ns);
+    if (!task->sched.exec_ns) {
+        clockevent_set_next(clockevent, task->sched.time_slice_ns); 
+    }
 }
 
 // 初始化
 void rr_init(void) {
     per_cpu_sched *sched = (per_cpu_sched *)kheap_alloc(sizeof(per_cpu_sched));
-    smp_set_sched(sched);   
+
+    rr_sched_init(smp_get_idle());
+
+    smp_set_sched(sched);
     INIT_LIST_HEAD(&sched->run_queue);
 }
 

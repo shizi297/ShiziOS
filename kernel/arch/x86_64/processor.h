@@ -13,6 +13,7 @@
 #include <fault.h>
 #include <arch_processor.h>
 #include <heap.h>
+#include <msr.h>
 
 extern uint32_t xsaves_size;
 
@@ -162,6 +163,37 @@ static inline uint32_t cpuid_xsaves_size(void) {
     uint32_t ebx;
     asm volatile("cpuid" : "=b"(ebx) : "a"(0x0D), "c"(0) : "edx", "memory");
     return ebx;
+}
+
+/**
+ * 初始化xsave
+ *
+ * @return 成功: true
+ * @return 不支持 : false
+ */
+static inline bool processor_xsave_init(void) {
+    uint32_t eax, ebx, ecx, edx;
+    uint32_t dummy;
+
+    // 检测是否支持 XSAVE
+    asm volatile("cpuid" : "=a"(eax), "=b"(dummy), "=c"(ecx), "=d"(dummy) : "a"(1), "c"(0) : "memory");
+    if (!(ecx & (1 << 26))) {
+        xsaves_size = 0;
+        return false;
+    }
+
+    // 获取XCR0支持的掩码
+    asm volatile("cpuid" : "=a"(eax), "=b"(dummy), "=c"(dummy), "=d"(edx) : "a"(0xD), "c"(0) : "memory");
+    uint64_t xcr0_mask = ((uint64_t)edx << 32) | eax;
+
+    if (xcr0_mask) {
+        asm volatile("xsetbv" : : "a"(xcr0_mask), "d"(xcr0_mask >> 32), "c"(0) : "memory");
+    }
+
+    // 获取保存占用大小
+    asm volatile("cpuid" : "=b"(xsaves_size) : "a"(0xD), "c"(0) : "edx", "memory");
+
+    return true;
 }
 
 // 写入CR4(使用CR4_CONFIG)

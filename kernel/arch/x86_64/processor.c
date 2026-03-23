@@ -204,7 +204,7 @@ void fpu_save(struct thread_struct *thread) {
     uint32_t lmask = 0xffffffff;
     uint32_t hmask = 0xffffffff;
     __asm__ volatile (
-        "xsaves %0"
+        "xsave %0"
         : "+m" (*(char *)state->xsaves)
         : "a" (lmask), "d" (hmask)
         : "memory"
@@ -221,7 +221,7 @@ void fpu_restore(struct thread_struct *thread) {
     uint32_t lmask = 0xffffffff;
     uint32_t hmask = 0xffffffff;
     __asm__ volatile (
-        "xrstors %0"
+        "xrstor %0"
         : : "m" (*(char *)state->xsaves), "a" (lmask), "d" (hmask)
         : "memory"
     );

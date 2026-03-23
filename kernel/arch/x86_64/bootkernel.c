@@ -103,9 +103,9 @@ void _start(uint64_t logical_id_raw) {
         CPU_NOT_SUPPORT;
     }
 
-    xsaves_size = cpuid_xsaves_size();
-
     set_cr4();
+    
+    if(!processor_xsave_init()) CPU_NOT_SUPPORT;
     
     // BP CPU执行内核初始化
     if (bpcpu_logical_flag) {

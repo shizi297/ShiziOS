@@ -60,11 +60,6 @@ void irq_entry(struct pt_regs *regs) {
     now = smp_get_timestamp();
     time_update(now);
 
-    if (smp_check_need_sched()) task_sched();
-
-    // 设置下一次中断
-    task_set_next_timer();
-
     if (is_vector) {
         // 异常处理完成，累加当前任务时间
         uint64_t kernel_delta = time_delta();
@@ -73,4 +68,6 @@ void irq_entry(struct pt_regs *regs) {
         // 外部中断结束，只更新时间戳，不累加
         apic_eoi();
     }
+
+    if (smp_check_need_sched()) task_sched();
 }
