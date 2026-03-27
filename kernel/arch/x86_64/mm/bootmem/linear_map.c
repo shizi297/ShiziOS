@@ -36,13 +36,13 @@ static uint64_t find_memory(uint64_t size) {
         }
     }
     
-    panic("[linear_map] ERROR: No memory found\n");
+    printp("[linear_map] ERROR: No memory found\n");
 }
 
 /* 记录分配 */
 static void record(uint64_t start_phys) {
     if (temp_map.count >= TEMP_RECORD_MAX) {
-        panic("[linear_map] ERROR: Record full\n");
+        printp("[linear_map] ERROR: Record full\n");
     }
     
     temp_map.start_pfn[temp_map.count] = start_phys >> 12;
@@ -52,7 +52,7 @@ static void record(uint64_t start_phys) {
 /* 页分配器 */
 static uint64_t physical_alloc_page(void) {
     if (memory_base == 0) {
-        panic("[linear_map] ERROR: No memory base\n");
+        printp("[linear_map] ERROR: No memory base\n");
     }
     
     uint64_t alloc_addr;
@@ -64,7 +64,7 @@ static uint64_t physical_alloc_page(void) {
     }
     
     if (alloc_addr + 4096 > memory_base + 2 * 1024 * 1024) {
-        panic("[linear_map] ERROR: 2MB full\n");
+        printp("[linear_map] ERROR: 2MB full\n");
     }
     
     /* 清空页面 */
@@ -83,14 +83,12 @@ static uint64_t physical_alloc_page(void) {
  * 用1GB大页
  */
 void linear_map_setup(void) {
-    serial_puts("[linear_map] Setting up mapping\n");
+    printk("[linear_map] Setting up mapping\n");
     
     memory_base = find_memory(2 * 1024 * 1024);
     if (!memory_base) return;
     
-    serial_puts("[linear_map] Found: ");
-    serial_put_hex(memory_base);
-    serial_puts("\n");
+    printk("[linear_map] Found: %#lx\n", memory_base);
     
     uint64_t* pml4 = get_pml4();
     uint64_t pml4_idx = PML4_INDEX(LINEAR_MAP_START);
@@ -120,7 +118,7 @@ void linear_map_setup(void) {
     /* 刷新TLB */
     __asm__ __volatile__("mov %%cr3, %%rax\nmov %%rax, %%cr3" : : : "rax", "memory");
     
-    serial_puts("[linear_map] Mapping done\n");
+    printk("[linear_map] Mapping done\n");
 }
 
 /* 获取分配记录 */

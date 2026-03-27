@@ -25,7 +25,6 @@ static inline void spinlock_init(spinlock_t *lock) {
 // 获取锁
 static inline void spin_lock(spinlock_t *lock) {
     while (atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire)) {
-        // 锁被占用时暂停指令，减少CPU占用
         cpu_pause();
     }
 }
@@ -38,4 +37,17 @@ static inline void spin_unlock(spinlock_t *lock) {
 // 尝试获取锁，返回结果
 static inline bool spin_trylock(spinlock_t *lock) {
     return !atomic_flag_test_and_set_explicit(&lock->flag, memory_order_acquire);
+}
+
+// 获取锁并保存中断状态（关闭中断）
+static inline void spin_lock_irqsave(spinlock_t *lock, uint64_t *flags) {
+    *flags = get_cpu_flags();
+    irq_off();
+    spin_lock(lock);
+}
+
+// 释放锁并恢复中断状态
+static inline void spin_unlock_irqrestore(spinlock_t *lock, uint64_t flags) {
+    spin_unlock(lock);
+    write_cpu_flags(flags);
 }

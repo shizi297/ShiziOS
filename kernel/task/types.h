@@ -13,7 +13,12 @@
 // 用于线程id与线程组id
 typedef int task_id; 
 typedef task_id id_t;
+
 typedef void (*sched_func_t)(void);
+typedef void (*task_test_func_t)(void);
+
+// 测试函数
+extern task_test_func_t task_test;
 
 // 任务状态
 typedef enum {
@@ -84,6 +89,7 @@ typedef struct task_struct {
 struct sched_class {
     void (*enqueue)(struct task_struct *task);  // 入队
     void (*dequeue)(struct task_struct *task);  // 出队
+    struct task_struct *(*dequeue_tail)(void);  // 让最后一个任务出队
     struct task_struct *(*pick_next)(void); // 选择下一个任务
     void (*set_prio)(struct task_struct *task, int prio);   // 设置优先级
     void (*update_tick)(struct task_struct *task, uint64_t ns); // 更新时间片

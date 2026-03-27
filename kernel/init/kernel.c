@@ -20,9 +20,7 @@ static uint32_t bp_apic_id = 0;
 
 __attribute__((noreturn))
 void kernel_main(uint32_t logical_id, uint32_t apic_id) {
-    serial_puts("[KERNEL]ShiziOS KERNEL v");
-    serial_puts(KERNEL_VERSION);
-    serial_puts("\n");
+    printk("[KERNEL]ShiziOS KERNEL v%s\n", KERNEL_VERSION);
 
     bp_logical_id = logical_id;
     bp_apic_id = bp_apic_id;

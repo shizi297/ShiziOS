@@ -214,38 +214,6 @@ static inline void set_cr4(void) {
     __asm__ volatile("mov %0, %%cr4" : : "r"(new_cr4));
 }
 
-/**
- * 获取当前cpu标志值
- * 
- * @return 当前cpu标志值
- */
-static inline uint64_t get_cpu_flags(void) {
-    uint64_t flags;
-    __asm__ volatile(
-        "pushfq\n\t"        
-        "pop %0"            
-        : "=r" (flags)     
-        :
-        : "memory"          
-    );
-    return flags;
-}
-
-/**
- * 设置CPU标志寄存器
- * 
- * @param flags 要设置的标志值
- */
-static inline void write_cpu_flags(uint64_t flags) {
-    __asm__ volatile(
-        "push %0\n\t"       
-        "popfq"            
-        :
-        : "r" (flags)       
-        : "memory", "cc"    
-    );
-}
-
 // 读取tsc设备值
 static inline uint64_t rdtsc(void) {
     uint32_t lo, hi;

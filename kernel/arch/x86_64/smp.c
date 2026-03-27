@@ -19,12 +19,13 @@
 #include <task.h>
 #include <time.h>
 #include <stdatomic.h>
+#include <apic.h>
 
-#define SMP_PRINT(str) \
-    serial_puts("[SMP] " str)
+#define SMP_PRINT(fmt, ...) \
+    printk("[SMP] " fmt, ##__VA_ARGS__)
 
-#define SMP_PANIC(str) \
-    panic("[SMP] ERROR: " str); 
+#define SMP_PANIC(fmt, ...) \
+    printp("[SMP] ERROR: " fmt, ##__VA_ARGS__)
 
 gdte *gdt_ptr = NULL;
 struct idt_gate *idt_ptr = NULL;
@@ -46,6 +47,11 @@ struct logicalid_to_apicid_struct {
     uint16_t count;
     uint16_t logicalid_to_apicid_arr[];
 };
+
+// 获取逻辑cpuid的apicid
+static inline uint32_t smp_get_apicid(uint64_t logical_id) {
+    return logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id];
+}
 
 /*
  * 初始化gdt
@@ -150,12 +156,12 @@ void smp_data_init(
         idt_ptr = kheap_alloc(idt_size);
         tss_ptr = kheap_alloc(tss_size);
         
-        if (!gdt_ptr || !idt_ptr || !tss_ptr) SMP_PANIC("memory allocation failed");
+        if (!gdt_ptr || !idt_ptr || !tss_ptr) SMP_PANIC("memory allocation failed\n");
     }
     // 给每个cpu分配内核栈
     void *kernel_stack = kheap_alloc(KERNEL_START_SIZE * max_cpu_count);
     
-    if (!kernel_stack) SMP_PANIC("memory allocation failed");
+    if (!kernel_stack) SMP_PANIC("memory allocation failed\n");
 
     tss_init(tss_temp_addr, tss_ptr, kernel_stack, max_cpu_count);
     idt_init(idt_temp_addr, idt_ptr, max_cpu_count);
@@ -163,12 +169,12 @@ void smp_data_init(
 
     // 分配per_cpu
     per_cpu_ptr = kheap_alloc(sizeof(per_cpu) * max_cpu_count);
-    if (!per_cpu_ptr) SMP_PANIC("memory allocation failed");
+    if (!per_cpu_ptr) SMP_PANIC("memory allocation failed\n");
 
     // 分配逻辑cpuid映射apicid结构体
     uint16_t logicalid_to_apicid_struct_size = sizeof(uint16_t) + (sizeof(uint16_t) * max_cpu_count);
     logicalid_to_apicid_struct_ptr = kheap_alloc(logicalid_to_apicid_struct_size);
-    if (!logicalid_to_apicid_struct_ptr) SMP_PANIC("memory allocation failed");
+    if (!logicalid_to_apicid_struct_ptr) SMP_PANIC("memory allocation failed\n");
 
     logicalid_to_apicid_struct_ptr->count = max_cpu_count;
 
@@ -249,6 +255,8 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
 
     // 初始化canary
     per_cpu_ptr[reg_logical_id].cancry = 0x28;
+
+    INIT_LIST_HEAD(&per_cpu_ptr[reg_logical_id].migration);
 
     // 设置当前cpu的gs到per_cpu
     set_gs_base((uint64_t)&per_cpu_ptr[reg_logical_id]);
@@ -345,7 +353,13 @@ per_cpu *smp_get_kernel_tls(void) {
     return get_gs_base();
 }
 
-// 更新架构相关的状态，用于切换上下文后
-void smp_arch_update_state(void *stack) {
+// 向目标cpu发送中断
+void smp_send_irq(uint64_t logical_id, uint8_t vector) {
+    uint32_t apicid = smp_get_apicid(logical_id);
+    apic_send_ipi(apicid, vector);
+}
 
+// 更新架构相关的状态，用于切换上下文前
+void smp_arch_update_state(void *stack) {
+    // TODO 
 }

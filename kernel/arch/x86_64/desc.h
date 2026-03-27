@@ -94,7 +94,7 @@ extern uint64_t irq_table[256];
 // 中断号
 #define IRQ_APIC    33
 #define IRQ_PIT     34
-#define IRQ_RES1    35
+// IRQ_MIGRATION    35
 #define IRQ_RES2    36
 #define IRQ_RES3    37
 #define IRQ_RES4    38

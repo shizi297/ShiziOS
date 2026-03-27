@@ -12,8 +12,8 @@
 #include <config.h>
 #include <acpi.h>
 
-#define ACPI_PRINT(str) \
-    serial_puts("[ACPI] " str)
+#define ACPI_PRINT(fmt, ...) \
+    printk("[ACPI] " fmt, ##__VA_ARGS__)
 
 typedef enum {
     ACPI_TABLE_RSDP,

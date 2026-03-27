@@ -13,8 +13,8 @@
 #include <stddef.h>
 #include <serial.h>
  
-#define VMM_PANIC(str) \
-    panic("[VMM] ERROR : ")
+#define VMM_PANIC(fmt, ...) \
+    printp("[VMM] ERROR : " fmt, ##__VA_ARGS__)
 
 static uintptr_t mmio_addr = MMIO_MAP;
 static spinlock_t mmio_map_lock = SPIN_LOCK_INIT;
@@ -25,7 +25,7 @@ void vmm_init(void) {
     mmu_init();
     uintptr_t kernel_pgd_phys = mmu_get_kernel_pgd();
     kernel_as = as_create(kernel_pgd_phys);
-    if (!kernel_as) VMM_PANIC("Failed to create kernel address space");
+    if (!kernel_as) VMM_PANIC("Failed to create kernel address space\n");
 }
 
 // 获取内核地址空间
@@ -485,17 +485,3 @@ vmm_result_t vmm_map_anon(
     
     return VMM_OK;
 }
-
-/*
- * 映射文件到内存
- * 暂时不支持
- * 
- * vmm_result_t vmm_map_file(){}
- */
-
-/*
- * 映射设备内存
- * 暂时不支持
- * 
- * vmm_result_t vmm_map_device(){}
- */

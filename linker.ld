@@ -25,6 +25,7 @@ SECTIONS
 
     .data : {
         *(.data .data.*)
+        PROVIDE(task_test = 0);
     } :all
 
     .bss : {  

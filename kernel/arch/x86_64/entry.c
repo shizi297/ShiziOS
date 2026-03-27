@@ -11,11 +11,11 @@
 #include <task.h>
 #include <smp.h>
 
-#define IRQ_PRINT(str) \
-    serial_puts("[IRQ] " str "\n")
+#define IRQ_PRINT(fmt, ...) \
+    printk("[IRQ] " fmt, ##__VA_ARGS__)
 
-#define IRQ_WARN(str) \
-    serial_puts("[IRQ] WARNING : " str "\n")
+#define IRQ_WARN(fmt, ...) \
+    printk("[IRQ] WARNING : " fmt, ##__VA_ARGS__)
 
 // 系统调用入口
 void syscall_entry(void) {
@@ -50,9 +50,9 @@ void irq_entry(struct pt_regs *regs) {
         irq(regs);
     } else {
         if (is_vector) {
-            panic("CPU ERROR");
+            printp("CPU ERROR\n");
         } else {
-            IRQ_WARN("NO HANDLER FOR VECTOR");
+            IRQ_WARN("NO HANDLER FOR VECTOR\n");
         }
     }
 

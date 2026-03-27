@@ -14,35 +14,14 @@
 #include <list.h>
 #include <heap.h>
 
-#define CLOCKEVENT_PANIC(str) \
-    panic("[CLOCKEVENT] ERROR : " str "\n") 
-
-// 以json格式输出注册信息
 #define CLOCKEVENT_INFO(name, hz) \
-    serial_puts("[CLOCKEVENT] register clockevent : ["); \
-    serial_puts("“name” = "); \
-    serial_putchar('"'); \
-    serial_puts(name); \
-    serial_putchar('"'); \
-    serial_puts(", "); \
-    serial_puts("“hz” = "); \
-    serial_putchar('"'); \
-    serial_put_dec(hz); \
-    serial_putchar('"'); \
-    serial_puts("]\n")
+    printk("[CLOCKEVENT] register clockevent : [\"name\" = \"%s\", \"hz\" = \"%llu\"]\n", name, hz)
 
 #define CLOCKEVENT_FAIL(name, hz) \
-    serial_puts("[CLOCKEVENT] register clockevent fail : ["); \
-    serial_puts("“name” = "); \
-    serial_putchar('"'); \
-    serial_puts(name); \
-    serial_putchar('"'); \
-    serial_puts(", "); \
-    serial_puts("“hz” = "); \
-    serial_putchar('"'); \
-    serial_put_dec(hz); \
-    serial_putchar('"'); \
-    serial_puts("]\n")
+    printk("[CLOCKEVENT] register clockevent fail : [\"name\" = \"%s\", \"hz\" = \"%llu\"]\n", name, hz)
+
+#define CLOCKEVENT_PANIC(fmt, ...) \
+    printp("[CLOCKEVENT] ERROR: " fmt, ##__VA_ARGS__)
 
 // 时钟事件结构体
 typedef struct clockevent_struct {
@@ -93,7 +72,7 @@ void clockevent_init(void) {
     uint64_t size = sizeof(uint64_t) + sizeof(struct list_head) * cpu_count;
     clockevent_head = (clockevent_list_head *)kheap_alloc(size);
     if (!clockevent_head) {
-        CLOCKEVENT_PANIC("memory alloc error");
+        CLOCKEVENT_PANIC("memory alloc error\n");
     }
 
     clockevent_head->count = cpu_count;

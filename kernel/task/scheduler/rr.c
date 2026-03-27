@@ -33,11 +33,13 @@ void rr_enqueue(struct task_struct *task) {
     task->sched.exec_start_ns = 0;
 
     list_add_tail(&task->sched.list, &pcpu_sched->run_queue);
+    smp_set_nr_running(smp_get_nr_running() + 1);
 }
 
 // 出队
 void rr_dequeue(struct task_struct *task) {
     list_del_init(&task->sched.list);
+    smp_set_nr_running(smp_get_nr_running() - 1);
 }
 
 // 选择下一个任务
@@ -54,12 +56,28 @@ struct task_struct *rr_pick_next(void) {
         sched.list
     );
     list_del_init(&next->sched.list);
+    smp_set_nr_running(smp_get_nr_running() - 1);
 
     // 重置时间片计数器，确保新任务开始运行时定时器能被设置
     next->sched.exec_ns = 0;
     next->sched.exec_start_ns = 0;
 
     return next;
+}
+
+// 让最后一个任务出队
+static struct task_struct *rr_dequeue_tail(void) {
+    per_cpu_sched *pcpu_sched = smp_get_sched();
+    if (list_empty(&pcpu_sched->run_queue)) {
+        return NULL;
+    }
+
+    // 取队尾
+    struct list_head *tail = pcpu_sched->run_queue.prev;
+    struct task_struct *task = list_entry(tail, struct task_struct, sched.list);
+    list_del_init(tail);
+    smp_set_nr_running(smp_get_nr_running() - 1);
+    return task;
 }
 
 // 更新优先级
@@ -132,6 +150,7 @@ void rr_register(void) {
     sched_class_ptr->enqueue = rr_enqueue;
     sched_class_ptr->init = rr_init;
     sched_class_ptr->pick_next = rr_pick_next;
+    sched_class_ptr->dequeue_tail = rr_dequeue_tail;
     sched_class_ptr->sched_init = rr_sched_init;
     sched_class_ptr->set_next_timer = rr_set_next_timer;
     sched_class_ptr->set_prio = rr_set_prio;

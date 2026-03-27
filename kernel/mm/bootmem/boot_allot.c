@@ -32,13 +32,13 @@ static void set_bitmap_region(uint64_t start_pfn, uint64_t count, int used)
 
 void boot_alloc_init(void)
 {
-    serial_puts("[boot_alloc] Initializing\n");
+    printk("[boot_alloc] Initializing\n");
     
     // 通过临时记录结构体分配位图内存
     temp_linear_map_t* temp_map = linear_map_get_temp();
     
     if (temp_map->count == 0) {
-        panic("[boot_alloc] Error: linear map must be initialized first\n");
+        printp("[boot_alloc] Error: linear map must be initialized first\n");
     }
     
     // 计算需要的页数
@@ -49,7 +49,7 @@ void boot_alloc_init(void)
     // 记录位图页面
     for (size_t i = 0; i < bitmap_pages; i++) {
         if (temp_map->count >= TEMP_RECORD_MAX) {
-            panic("[boot_alloc] Error: temporary record full\n");
+            printp("[boot_alloc] Error: temporary record full\n");
         }
         temp_map->start_pfn[temp_map->count++] = (bitmap_phys >> 12) + i;
     }
@@ -110,9 +110,7 @@ void boot_alloc_init(void)
         }
     }
     
-    serial_puts("[boot_alloc] Ready: ");
-    serial_put_dec(free_pages);
-    serial_puts(" free pages\n");
+    printk("[boot_alloc] Ready: %lu free pages\n", free_pages);
 }
 
 void* boot_alloc(size_t pages)
@@ -138,9 +136,7 @@ void* boot_alloc(size_t pages)
     }
     
     if (consecutive < pages) {
-        serial_puts("[boot_alloc] Allocation failed: ");
-        serial_put_dec(pages);
-        serial_puts(" pages\n");
+        printk("[boot_alloc] Allocation failed: %lu pages\n", pages);
         return NULL;
     }
     
@@ -155,11 +151,7 @@ void* boot_alloc(size_t pages)
 
 void boot_alloc_info(void)
 {
-    serial_puts("[boot_alloc] Memory: ");
-    serial_put_dec(free_pages);
-    serial_puts("/");
-    serial_put_dec(total_pages);
-    serial_puts(" pages free\n");
+    printk("[boot_alloc] Memory: %lu/%lu pages free\n", free_pages, total_pages);
 }
 
 void* boot_alloc_get_bitmap(void)

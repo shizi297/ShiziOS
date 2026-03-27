@@ -13,8 +13,11 @@
 #include <list.h>
 #include <bitmap.h>
 
-#define PMM_PANIC(str) panic("[PMM] ERROR: " str)
-#define PMM_PRINT(str) serial_puts("[PMM] " str)
+#define PMM_PRINT(fmt, ...) \
+    printk("[PMM] " fmt, ##__VA_ARGS__)
+
+#define PMM_PANIC(fmt, ...) \
+    printp("[PMM] ERROR: " fmt, ##__VA_ARGS__)
 
 static zone_t zones[3];
 
@@ -38,7 +41,7 @@ static mem_block_array_t* mem_block = NULL;
 
 static inline void check_pfn_valid(uint64_t pfn) {
     if (pfn > max_pfn) {
-        PMM_PANIC("invalid pfn");
+        PMM_PANIC("invalid pfn\n");
     }
 }
 
@@ -170,7 +173,7 @@ static void *bitmap_alloc(uint64_t pages) {
         }
     }
     
-    PMM_PANIC("Cannot allocate required memory for system initialization");
+    PMM_PANIC("Cannot allocate required memory for system initialization\n");
     return NULL;
 }
 
@@ -431,16 +434,10 @@ static void print_zone_info(void) {
     uint64_t total_mb = total_memory / (1024 * 1024);
     
     if (total_memory > (4ULL * 1024 * 1024 * 1024)) {
-        serial_puts(", DMA32: 16MB-4GB, NORMAL: 4GB-");
-        serial_put_dec(total_mb);
-        serial_puts("MB");
+        printk(", DMA32: 16MB-4GB, NORMAL: 4GB-%luMB\n", total_mb);
     } else {
-        serial_puts(", DMA32: 16MB-");
-        serial_put_dec(total_mb);
-        serial_puts("MB");
+        printk(", DMA32: 16MB-%luMB\n", total_mb);
     }
-    
-    serial_puts("\n");
 }
 
 //计算总空闲内存
@@ -843,9 +840,7 @@ void pmm_init(void) {
     PMM_PRINT("Initializing physical memory manager\n");
     
     calculate_max_pfn();  
-    serial_puts("[PMM] Physical memory: ");
-    serial_put_dec((max_pfn + 1) * PAGE_SIZE / (1024 * 1024));
-    serial_puts("MB detected\n");
+    printk("[PMM] Physical memory: %luMB detected\n", (max_pfn + 1) * PAGE_SIZE / (1024 * 1024));
     
     alloc_bitmap_init();
     
@@ -861,7 +856,5 @@ void pmm_init(void) {
     
     uint64_t total_free_pages = calculate_total_free_pages();
     
-    serial_puts("[PMM] Buddy system initialized: ");
-    serial_put_dec(total_free_pages * PAGE_SIZE / (1024 * 1024));
-    serial_puts("MB free\n");
+    printk("[PMM] Buddy system initialized: %luMB free\n", total_free_pages * PAGE_SIZE / (1024 * 1024));
 }

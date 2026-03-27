@@ -27,6 +27,7 @@ endif()
 option(OPTIMIZE "Enable optimization (LTO and -O2)" ON)          # 优化开关
 option(DEBUG    "Enable debug mode" OFF)                         # 调试开关
 option(STACK    "Enable stronger stack protection (-fstack-protector-all)" OFF)  # 栈保护强度
+option(TEST     "Enable test module" OFF)                        # 测试模块开关
 set(QEMU "" CACHE STRING "Additional QEMU arguments (space-separated)")    # QEMU 额外参数
 
 # 根据 OPTIMIZE 设置优化级别和 LTO
@@ -92,6 +93,11 @@ add_subdirectory(kernel/task)              # 任务管理模块
 add_subdirectory(kernel/init)              # 内核初始化模块
 add_subdirectory(kernel/ipc)               # IPC模块
 
+# 测试模块
+if(TEST)
+    add_subdirectory(kernel/test)          # 测试模块
+endif()
+
 # 链接生成内核
 set(EMPTY_SOURCE ${CMAKE_BINARY_DIR}/empty.c)
 file(WRITE ${EMPTY_SOURCE} "// Empty source file for linking libraries\n")
@@ -99,8 +105,7 @@ file(WRITE ${EMPTY_SOURCE} "// Empty source file for linking libraries\n")
 add_executable(kernel.elf ${EMPTY_SOURCE})
 
 # 链接所有模块库
-target_link_libraries(kernel.elf
-    "-Wl,--start-group"
+set(LINK_LIBS
     kernel_init
     x86_64_arch
     x86_64_mm       
@@ -110,15 +115,17 @@ target_link_libraries(kernel.elf
     kernel_time     
     kernel_task
     kernel_ipc
-    "-Wl,--end-group"
 )
 
-# 解析 QEMU 参数
-if(QEMU)
-    separate_arguments(QEMU_LIST UNIX_COMMAND "${QEMU}")
-else()
-    set(QEMU_LIST "")
+if(TEST)
+    list(APPEND LINK_LIBS kernel_test)
 endif()
+
+target_link_libraries(kernel.elf
+    "-Wl,--start-group"
+    ${LINK_LIBS}
+    "-Wl,--end-group"
+)
 
 # 生成磁盘镜像
 add_custom_target(img
@@ -131,6 +138,21 @@ add_custom_target(img
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# 解析 QEMU 参数列表
+separate_arguments(QEMU_LIST UNIX_COMMAND "${QEMU}")
+set(USER_SMP_SPECIFIED FALSE)
+foreach(arg ${QEMU_LIST})
+    if("${arg}" STREQUAL "-smp")
+        set(USER_SMP_SPECIFIED TRUE)
+        break()
+    endif()
+endforeach()
+if(NOT USER_SMP_SPECIFIED)
+    set(DEFAULT_SMP "-smp 2")
+else()
+    set(DEFAULT_SMP "")
+endif()
+
 # 运行QEMU
 add_custom_target(run
     DEPENDS img
@@ -138,7 +160,7 @@ add_custom_target(run
         -bios /usr/share/ovmf/OVMF.fd 
         -drive file=${CMAKE_SOURCE_DIR}/disk/shizios.img,format=raw,if=virtio 
         -m 2G 
-        -smp 2 
+        ${DEFAULT_SMP}
         -cpu max,tsc-frequency=2400000000
         -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 
@@ -165,7 +187,7 @@ add_custom_target(ram-run
         -bios /usr/share/ovmf/OVMF.fd 
         -drive file=/dev/shm/shizios/shizios.img,format=raw,if=virtio 
         -m 2G 
-        -smp 2 
+        ${DEFAULT_SMP}
         -cpu max,tsc-frequency=2400000000
         -device virtio-gpu-pci,xres=1280,yres=720 
         -net none 

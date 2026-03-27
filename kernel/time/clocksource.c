@@ -14,35 +14,14 @@
 #include <serial.h>
 #include <smp.h>
 
-#define CLOCKSOURCE_PANIC(str) \
-    panic("[CLOCKSOURCE] ERROR : " str "\n")
-
-// 以json格式输出注册信息
 #define CLOCKSOURCE_INFO(name, hz) \
-    serial_puts("[CLOCKSOURCE] register clocksource : ["); \
-    serial_puts("“name” = "); \
-    serial_putchar('"'); \
-    serial_puts(name); \
-    serial_putchar('"'); \
-    serial_puts(", "); \
-    serial_puts("“hz” = "); \
-    serial_putchar('"'); \
-    serial_put_dec(hz); \
-    serial_putchar('"'); \
-    serial_puts("]\n")
+    printk("[CLOCKSOURCE] register clocksource : [\"name\" = \"%s\", \"hz\" = \"%llu\"]\n", name, hz)
 
 #define CLOCKSOURCE_FAIL(name, hz) \
-    serial_puts("[CLOCKSOURCE] register clocksource fail : ["); \
-    serial_puts("“name” = "); \
-    serial_putchar('"'); \
-    serial_puts(name); \
-    serial_putchar('"'); \
-    serial_puts(", "); \
-    serial_puts("“hz” = "); \
-    serial_putchar('"'); \
-    serial_put_dec(hz); \
-    serial_putchar('"'); \
-    serial_puts("]\n")
+    printk("[CLOCKSOURCE] register clocksource fail : [\"name\" = \"%s\", \"hz\" = \"%llu\"]\n", name, hz)
+
+#define CLOCKSOURCE_PANIC(fmt, ...) \
+    printp("[CLOCKSOURCE] ERROR: " fmt, ##__VA_ARGS__)
 
 // 时钟源结构体
 typedef struct {
@@ -84,7 +63,7 @@ void clocksource_init(void) {
     uint64_t size = sizeof(uint64_t) + sizeof(struct list_head) * cpu_count;
     clocksource_head = (clocksource_list_head *)kheap_alloc(size);
     if (!clocksource_head) {
-        CLOCKSOURCE_PANIC("memory alloc error");
+        CLOCKSOURCE_PANIC("memory alloc error\n");
     }
 
     clocksource_head->count = cpu_count;

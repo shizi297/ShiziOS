@@ -19,12 +19,13 @@
 #include <libtree.h>
 #include <dynarr.h>
 #include <serial.h>
+#include <stdatomic.h>
 
-#define TASK_PANIC(str) \
-    panic("[TASK] ERROR : " str)
+#define TASK_PRINT(fmt, ...) \
+    printk("[TASK]" fmt, ##__VA_ARGS__)
 
-#define TASK_PRINT(str) \
-    serial_puts("[TASK]" str)
+#define TASK_PANIC(fmt, ...) \
+    printp("[TASK] ERROR : " fmt, ##__VA_ARGS__)
 
 #define INIT_TIME_SLICE_NS timecycle_msec_to_ns(20)
 
@@ -43,6 +44,28 @@ typedef struct {
     task_state_struct state[];
 } per_cpu_task_state_struct; 
 
+typedef struct {
+    /*
+     * 高32位为发送者cpuid
+     * 低1位表示是否在执行迁移操作(活跃状态)
+     */
+    atomic_uint_least64_t state;    
+} migration_info;
+
+// 打包状态
+#define MIG_STATE_PACK(sender, active) ((uint64_t)(sender) << 1) | ((active) ? 1 : 0)
+
+// 获取发送者cpuid
+#define MIG_STATE_SENDER(state) ((uint32_t)((state)) >> 1)
+
+// 获取目标cpu的活跃状态
+#define MIG_STATE_ACTIVE(state) ((state) & 1)
+
+typedef struct {
+    uint32_t cpu_count;
+    migration_info infos[];
+} migration_struct;
+
 extern sched_func_t sched_func;
 
 static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
@@ -51,6 +74,7 @@ static per_cpu_task_state_struct *per_cpu_task_state_ptr = NULL;
 INIT_BITMAP(id_bitmap, TASK_ID_MAX);
 static spinlock_t id_lock = SPIN_LOCK_INIT;
 static dynarr_t *id_map;
+static migration_struct *migration_ptr = NULL; 
 
 struct sched_class sched_class = {0};
 struct sched_class *sched_class_ptr = &sched_class;
@@ -139,18 +163,12 @@ static void thread_group_remove(struct task_struct *leader, struct task_struct *
 static void task_idle(void *arg) {
     uint64_t count = 0;
     uint32_t cpu_id = get_logical_id();
-    serial_puts("[IDLE] CPU ");
-    serial_put_dec(cpu_id);
-    serial_puts("\n");
+    printk("[IDLE] CPU %d\n", cpu_id);
     while (1) {
         count++;
         if ((count % 500) == 0) {
-            serial_puts("[IDLE] CPU ");
-            serial_put_dec(cpu_id);
-            serial_puts("\n");
-            serial_puts("[IDLE] count : ");
-            serial_put_dec(count);
-            serial_puts("\n");
+            printk("[IDLE] CPU %d\n", cpu_id);
+            printk("[IDLE] count : %lu\n", count);
         }
         cpu_halt();
     }
@@ -175,6 +193,169 @@ static void task_boot_sched(void) {
 
     irq_off();
     processor_boot_switch(task->thread);
+}
+
+// 尝试迁移任务到当前cpu,调用时需要关中断
+static void task_try_migration(void) {
+    uint32_t local = get_logical_id();
+
+    // 获取当前所有cpu的运行任务数
+    uint32_t max_cpu = migration_ptr->cpu_count;
+    uint64_t task_count[max_cpu];
+    smp_get_nr_running_all(task_count);
+
+    uint32_t best = 0xFFFFFFFF, second = 0xFFFFFFFF,
+             best_count = 0, second_count = 0;
+
+
+    // 找到负载最大的两个cpu
+    for (uint32_t i = 0;i < max_cpu;i++) {
+        if (i == local) continue;
+        uint32_t curr_count = task_count[i];
+
+        // 任务太少，没有迁移的必要
+        if (curr_count <= 2) continue;
+
+        if (curr_count > best_count) {
+            second = best;
+            second_count = best_count;
+            best = i;
+            best_count = curr_count;
+        } else if (curr_count > second_count) {
+            second = i;
+            second_count = curr_count;
+        }
+    }
+
+    // 尝试迁移负债最高的cpu
+    if (best != 0xFFFFFFFF) {
+        uint64_t expected = MIG_STATE_PACK(0xFFFFFFFF, 0);
+        uint64_t desired = MIG_STATE_PACK(local, 1);
+
+        if (atomic_compare_exchange_strong(
+                &migration_ptr->infos[best].state,
+                &expected, desired)
+        ) {
+            smp_send_irq(best, IRQ_MIGRATION);
+            while (1) {
+                uint64_t cur = atomic_load(&migration_ptr->infos[best].state);
+
+                // 当前选择的cpu已经与其他cpu配对
+                if (!MIG_STATE_ACTIVE(cur)) break;
+
+                cpu_pause();
+            }
+
+            // 将迁移的队列入就绪队列
+            struct list_head *mig_list = smp_get_migration();
+            while (!list_empty(mig_list)) {
+                struct list_head *node = mig_list->next;
+                struct task_struct *task = list_entry(node, struct task_struct, sched.list);
+                list_del_init(node);
+                sched_class_ptr->enqueue(task);
+            }
+            return;
+        }
+    }
+
+    // 负债最高的cpu已经和别的cpu配对，尝试次选
+    if (second != 0xFFFFFFFF) {
+        uint64_t expected = MIG_STATE_PACK(0xFFFFFFFF, 0);
+        uint64_t desired = MIG_STATE_PACK(local, 1);
+
+        if (atomic_compare_exchange_strong(
+                &migration_ptr->infos[second].state,
+                &expected, desired)
+        ) {
+            smp_send_irq(second, IRQ_MIGRATION);
+            while (1) {
+                uint64_t cur = atomic_load(&migration_ptr->infos[second].state);
+
+                // 当前选择的cpu已经与其他cpu配对
+                if (!MIG_STATE_ACTIVE(cur)) break;
+
+                cpu_pause();
+            }
+
+            // 将迁移的队列入就绪队列
+            struct list_head *mig_list = smp_get_migration();
+            while (!list_empty(mig_list)) {
+                struct list_head *node = mig_list->next;
+                struct task_struct *task = list_entry(node, struct task_struct, sched.list);
+                list_del_init(node);
+                sched_class_ptr->enqueue(task);
+            }
+            return;
+        }
+    }
+
+    // 两个都失败，放弃本次迁移
+}
+
+// 迁移当前cpu的任务到目标cpu
+static void task_do_migration() {
+    uint32_t local = get_logical_id();
+
+    // 读取状态，尝试设置为活跃
+    uint64_t old = atomic_load(&migration_ptr->infos[local].state);
+    if (!MIG_STATE_ACTIVE(old)) return; // 无效请求
+
+    uint32_t sender = MIG_STATE_SENDER(old);
+
+    uint32_t nr = smp_get_nr_running();
+    if (nr <= 2) {
+        // 队列太短，放弃迁移，清除标准让发送这重试
+        uint64_t expected = old;
+        uint64_t desired = MIG_STATE_PACK(0xFFFFFFFF, 0);
+        atomic_compare_exchange_strong(
+            &migration_ptr->infos[local].state,
+            &expected, desired
+        );
+        return;    
+    }
+
+    // 取一半任务
+    uint32_t take = nr >> 1;
+
+    // 取出任务
+    struct task_struct *tasks[take];
+    for (uint32_t i = 0;i < take;i++) {
+        tasks[i] = sched_class_ptr->dequeue_tail();
+    }
+
+    // 推送到发送方的迁移队列
+    struct list_head *dest_mig = smp_get_cpu_migration(sender);
+    for (uint32_t i = 0; i < take; i++) {
+        list_add_tail(&tasks[i]->sched.list, dest_mig);
+    }
+
+    // 清除标志,表示任务以推送
+    uint64_t expected = old;
+    uint64_t desired = MIG_STATE_PACK(0xFFFFFFFF, 0);
+    atomic_compare_exchange_strong(
+        &migration_ptr->infos[local].state,
+        &expected, desired
+    );
+}
+
+// 任务迁移结构初始化
+static inline bool task_migration_init(void) {
+    uint32_t max_cpu = bootboot->numcores;
+
+    uint32_t migration_size = sizeof(migration_struct) + max_cpu * sizeof(migration_info);
+
+    migration_ptr = kheap_alloc(migration_size);
+    if (!migration_ptr) return false;
+
+    for (uint32_t i = 0; i < max_cpu; i++) {
+        atomic_init(&migration_ptr->infos[i].state, MIG_STATE_PACK(0xFFFFFFFF, 0));
+    }
+
+    migration_ptr->cpu_count = max_cpu;
+
+    smp_irq_register_handler(IRQ_MIGRATION, (uint64_t)task_do_migration);
+
+    return true;
 }
 
 // 更新当前任务的时间
@@ -386,6 +567,7 @@ void task_set_next_timer(void) {
 
 // 重新调度任务
 void task_sched(void) {
+    uint64_t flags = get_cpu_flags();
     irq_off();
 
     struct task_struct *prev = smp_get_task_current();
@@ -402,6 +584,12 @@ void task_sched(void) {
         goto out;
     }
 
+    // 如果选择的任务是idle任务，尝试迁移任务
+    //if (next == smp_get_idle()) {
+    //    task_try_migration();
+    //}
+
+    // 调度后相同，不需要切换和保存上下文，直接设置中断后返回
     if (prev == next) {
         prev->sched.exec_ns = 0;
         task_set_next_timer();
@@ -412,15 +600,13 @@ void task_sched(void) {
     smp_set_task_current(next);
     fpu_restore(next->thread);
 
-    irq_on();
-
     // 设置下一次中断
     task_set_next_timer();
 
     switch_to(prev->thread, next->thread);
 
 out:
-    irq_on();
+    write_cpu_flags(flags);
 }
 
 // 任务管理数据初始化
@@ -436,6 +622,8 @@ bool task_data_init(void) {
     // 创建id映射，用于找到对应id的task，最大容量为TASK_ID_MAX
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
     if (!id_map) return false;
+
+    if (!task_migration_init()) return false;
 
     sched_func();
 
@@ -456,6 +644,8 @@ void task_init(void) {
     clockevent_handle_t clockevent = clockevent_get(NULL);
     if (!clockevent) goto error;
 
+    if (task_test) task_test();
+
     smp_set_clockevent(clockevent);
     clockevent_set_handler(clockevent, task_clock_event_handle);
     clockevent_set_mode(clockevent, CLOCKEVENT_MODE_ONESHOT);
@@ -467,5 +657,5 @@ void task_init(void) {
 
     // 不应该返回，如果返回说明代码错误
     error:
-        TASK_PANIC("system error");
+        TASK_PANIC("system error\n");
 }

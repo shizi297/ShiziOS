@@ -13,6 +13,8 @@ typedef uint64_t gdte;
 struct tss;
 struct idt_gate;
 
+#define IRQ_MIGRATION    35
+
 /**
  * 设置当前CPU的栈指针
  * 
@@ -47,6 +49,38 @@ static inline void irq_off(void) {
 // 开启中断
 static inline void irq_on(void) {
     asm volatile("sti" ::: "memory");
+}
+
+/**
+ * 获取当前cpu标志值
+ * 
+ * @return 当前cpu标志值
+ */
+static inline uint64_t get_cpu_flags(void) {
+    uint64_t flags;
+    __asm__ volatile(
+        "pushfq\n\t"        
+        "pop %0"            
+        : "=r" (flags)     
+        :
+        : "memory"          
+    );
+    return flags;
+}
+
+/**
+ * 设置CPU标志寄存器
+ * 
+ * @param flags 要设置的标志值
+ */
+static inline void write_cpu_flags(uint64_t flags) {
+    __asm__ volatile(
+        "push %0\n\t"       
+        "popfq"            
+        :
+        : "r" (flags)       
+        : "memory", "cc"    
+    );
 }
 
 // 获取gdt模版的虚拟地址

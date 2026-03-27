@@ -13,23 +13,17 @@
 #define SERIAL_FILE_INIT
 #include <serial.h>
 
-#define BOOTKERNEL_PRINT(str) \
-    serial_puts("[BOOTKERNEL] " str)
+#define BOOTKERNEL_PRINT(fmt, ...) \
+    printk("[BOOTKERNEL] " fmt, ##__VA_ARGS__)
 
-#define NEWLINE \
-    serial_puts("\n")
-
-#define BOOTKERNEL_PANIC(str) \
-    panic("[BOOTKERNEL] ERROR:" str "\n")
-
-#define BOOTKERNEL_DEC(value) \
-    serial_put_dec(value)
+#define BOOTKERNEL_PANIC(fmt, ...) \
+    printp("[BOOTKERNEL] ERROR: " fmt, ##__VA_ARGS__)
 
 #define CPU_SUPPORT \
-    serial_puts("CPU supports running this system")
+    printk("[BOOTKERNEL] CPU supports running this system\n")
 
 #define CPU_NOT_SUPPORT \
-    BOOTKERNEL_PANIC("CPU does not support running this system")
+    BOOTKERNEL_PANIC("CPU does not support running this system\n")
     
 extern void kernel_main(uint32_t logical_id, uint32_t apic_id);
 extern void smp_init(uint32_t logical_id, uint32_t apic_id);
@@ -80,17 +74,13 @@ void _start(uint64_t logical_id_raw) {
     }
 
     if (bpcpu_logical_flag) {
-        BOOTKERNEL_PRINT("BP CPU logical_id : ");
-        BOOTKERNEL_DEC(logical_id);
-        NEWLINE;
-        BOOTKERNEL_PRINT("BP CPU APIC_ID : ");
-        BOOTKERNEL_DEC(apic_id);
-        NEWLINE;
+        BOOTKERNEL_PRINT("BP CPU logical_id : %d\n", logical_id);
+        BOOTKERNEL_PRINT("BP CPU APIC_ID : %d\n", apic_id);
     } 
 
     // 数据错误
     if (logical_id >= bootboot->numcores) {
-        BOOTKERNEL_PANIC("Logical CPU ID exceeds max cpu count");
+        BOOTKERNEL_PANIC("Logical CPU ID exceeds max cpu count\n");
     }
 
     /*

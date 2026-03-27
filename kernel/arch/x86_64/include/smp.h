@@ -9,6 +9,8 @@
 #include <task.h>
 #include <arch_processor.h>
 #include <time.h>
+#include <bootboot.h>
+#include <list.h>
 
 #define ALIGN8 __attribute__((aligned(8)))
 
@@ -33,7 +35,7 @@ typedef struct {
     uint64_t last_ns;
     uint64_t current_ns;
 
-    // 当前cpu的运行任务数量（包含idle）
+    // 当前cpu的运行任务数量（不包含idle与正在运行的任务）
     uint64_t nr_running;
 
     // 时钟事件句柄
@@ -42,6 +44,8 @@ typedef struct {
     // 用于在中断返回时判断是否需要重新调度
     bool need_sched;
 
+    // 用于任务迁移
+    struct list_head migration;
 } __attribute__((aligned(64))) per_cpu;
 
 /*
@@ -88,6 +92,9 @@ void smp_irq_unregister_handler(uint8_t vector);
 
 // 获取当前cpu的内核tls
 per_cpu *smp_get_kernel_tls(void);
+
+// 向目标cpu发送中断
+void smp_send_irq(uint64_t logical_id, uint8_t vector);
 
 // 获取cpu核心的逻辑id
 static inline uint32_t get_logical_id(void) {
@@ -149,10 +156,32 @@ static inline void smp_set_nr_running(uint64_t set) {
     per_cpu_ptr->nr_running = set;
 }
 
+// 设置指定cpu的运行任务数量
+static inline void smp_set_cpu_nr_running(uint32_t logical_id, uint64_t set) {
+    extern per_cpu *per_cpu_ptr;
+    per_cpu_ptr[logical_id].nr_running = set;
+}
+
 // 获取指定cpu核心的运行任务数量
-static inline uint64_t smp_get_nr_running(uint64_t logicalid) {
+static inline uint64_t smp_get_cpu_nr_running(uint64_t logicalid) {
     extern per_cpu *per_cpu_ptr;
     return per_cpu_ptr[logicalid].nr_running;
+}
+
+// 获取当前cpu的运行任务数量
+static inline uint64_t smp_get_nr_running(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return per_cpu_ptr->nr_running;
+}
+
+// 获取所有cpu核心的运行任务数
+static inline void smp_get_nr_running_all(uint64_t *nr_array) {
+    extern per_cpu *per_cpu_ptr;
+    const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
+    uint32_t max_cpu = bootboot->numcores;
+    for (uint32_t i = 0;i < max_cpu;i++) {
+        nr_array[i] = per_cpu_ptr[i].nr_running;
+    }
 }
 
 // 设置当前cpu的运行的任务结构体
@@ -207,4 +236,16 @@ static inline void smp_set_clockevent(clockevent_handle_t clockevent) {
 static inline clockevent_handle_t smp_get_clockevent(void) {
     per_cpu *per_cpu_ptr = smp_get_kernel_tls();
     return per_cpu_ptr->clockevent;
+}
+
+// 获取当前cpu迁移队列链表头
+static inline struct list_head *smp_get_migration(void) {
+    per_cpu *per_cpu_ptr = smp_get_kernel_tls();
+    return &per_cpu_ptr->migration;
+}
+
+// 获取目标cpu的迁移队列链表头
+static inline struct list_head *smp_get_cpu_migration(uint64_t logical_id) {
+    extern per_cpu *per_cpu_ptr;
+    return &per_cpu_ptr[logical_id].migration;
 }

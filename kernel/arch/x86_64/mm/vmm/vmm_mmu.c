@@ -305,7 +305,7 @@ static inline enum walk_state walk_error(bool create, uintptr_t out_blocks[3], p
 
 static inline enum walk_state walk_panic(pte_t **pte_ptr) {
     // 严重错误，需要panic
-    panic("[MMU] ERROR: page walk encountered fatal error (possibly huge page conflict)");
+    printp("[MMU] ERROR: page walk encountered fatal error (possibly huge page conflict)\n");
     *pte_ptr = NULL;
     return WALK_BREAK;
 }
@@ -405,7 +405,7 @@ pte_t* mmu_walk(uintptr_t pgd, uintptr_t addr, bool create, vm_prot_t prot, uint
             
         default:
             // 不应该到达这里
-            panic("[MMU] ERROR: invalid walk state");
+            printp("[MMU] ERROR: invalid walk state\n");
             walk = WALK_BREAK;
             pte_ptr = NULL;
             break;
@@ -549,7 +549,7 @@ vmm_result_t mmu_add_map(
             if (page_blocks[j] != 0) {
                 if (blocks_index >= max_blocks) {
                     // 不应该发生，但如果发生则说明有严重bug
-                    panic("[MMU] ERROR: blocks_index overflow, possible internal calculation error");
+                    printp("[MMU] ERROR: blocks_index overflow, possible internal calculation error\n");
                     return VMM_INTERNAL_ERROR;
                 }
                 blocks_array[blocks_index++] = page_blocks[j];

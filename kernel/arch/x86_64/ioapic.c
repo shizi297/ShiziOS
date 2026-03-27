@@ -10,6 +10,9 @@
 #include <heap.h>
 #include <ioapic.h>
 
+#define IOAPIC_PRINT(fmt, ...) \
+    printk("[IOAPIC] " fmt, ##__VA_ARGS__)
+
 // 寄存器偏移
 #define IOAPIC_IOREGSEL 0x00    // 索引寄存器
 #define IOAPIC_IOWIN    0x10    // 数据寄存器
@@ -29,9 +32,6 @@
 #define IOAPIC_MASK_BIT 16
 #define IOAPIC_POLARITY_BIT 13
 #define IOAPIC_TRIG_BIT 15
-
-#define IOAPIC_PRINT(str) \
-    serial_puts("[IOAPIC] " str );
 
 struct {
     uintptr_t base;

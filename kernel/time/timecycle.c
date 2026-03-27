@@ -9,8 +9,8 @@
 #define NSEC_PER_SEC 1000000000ULL
 #define MAX_SHIFT 32
 
-#define TIMECYCLE_PANIC(str) \
-    panic("[TIMECYCLE] ERROR: " str "\n")
+#define TIMECYCLE_PANIC(fmt, ...) \
+    printp("[TIMECYCLE] ERROR: " fmt, ##__VA_ARGS__)
 
 /**
  * @brief 计算最优的shift值
@@ -90,7 +90,7 @@ static void calc_inverse_params(
     // 如果所有尝试都失败
     *mult_inv = 0;
     *shift_inv = shift;
-    TIMECYCLE_PANIC("cannot find valid inverse parameters");
+    TIMECYCLE_PANIC("cannot find valid inverse parameters\n");
 }
 
 /**
@@ -109,11 +109,11 @@ void timecycle_init_params(
     uint32_t *mult_inv, uint32_t *shift_inv
 ) {
     if (hz == 0) {
-        TIMECYCLE_PANIC("hz is zero");
+        TIMECYCLE_PANIC("hz is zero\n");
     }
     
     if (max_seconds == 0) {
-        TIMECYCLE_PANIC("max_seconds is zero");
+        TIMECYCLE_PANIC("max_seconds is zero\n");
     }
     
     uint32_t optimal_shift = calc_optimal_shift(hz, max_seconds);
@@ -133,6 +133,6 @@ void timecycle_init_params(
     calc_inverse_params(*mult, *shift, mult_inv, shift_inv);
     
     if (*mult == 0 || *mult_inv == 0) {
-        TIMECYCLE_PANIC("invalid conversion parameters");
+        TIMECYCLE_PANIC("invalid conversion parameters\n");
     }
 }

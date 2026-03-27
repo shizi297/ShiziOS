@@ -18,11 +18,7 @@
 #include <uacpi/kernel_api.h>
 
 #define UACPI_LOG(level, str) \
-    serial_puts("[UACPI][LEVEL: "); \
-    serial_put_dec(level); \
-    serial_puts("] "); \
-    serial_puts(str); \
-    serial_puts("\n")
+    printk("[UACPI][LEVEL: %d] %s", level, str)
 
 static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 static clocksource_handle_t acpi_clocksource = NULL;
@@ -102,7 +98,7 @@ uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
     }
 
     // 未找到
-    UACPI_LOG(UACPI_LOG_ERROR, "RSDP not found");
+    UACPI_LOG(UACPI_LOG_ERROR, "RSDP not found\n");
     return UACPI_STATUS_NOT_FOUND;
 
 found:
