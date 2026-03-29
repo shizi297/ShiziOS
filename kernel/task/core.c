@@ -321,6 +321,7 @@ static void task_do_migration() {
     struct task_struct *tasks[take];
     for (uint32_t i = 0;i < take;i++) {
         tasks[i] = sched_class_ptr->dequeue_tail();
+        TASK_PRINT("migrate pid %d from CPU %d to CPU %d\n", tasks[i]->pid, local, sender);
     }
 
     // 推送到发送方的迁移队列
@@ -585,9 +586,9 @@ void task_sched(void) {
     }
 
     // 如果选择的任务是idle任务，尝试迁移任务
-    //if (next == smp_get_idle()) {
-    //    task_try_migration();
-    //}
+    if (next == smp_get_idle()) {
+        task_try_migration();
+    }
 
     // 调度后相同，不需要切换和保存上下文，直接设置中断后返回
     if (prev == next) {

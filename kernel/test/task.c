@@ -25,7 +25,7 @@ static void test_thread(void *arg) {
 
     while (1) {
         cnt++;
-        if (cnt % 5 == 0) {
+        if (cnt % 500 == 0) {
             TASK_TEST_PRINT("[%c] count=%llu\n", id, cnt);
         }
         cpu_halt();
@@ -40,5 +40,25 @@ static void test(void) {
         task_create_kernel_thread(test_thread, (void*)'D');
         task_create_kernel_thread(test_thread, (void*)'E');
         task_create_kernel_thread(test_thread, (void*)'F');
+        task_create_kernel_thread(test_thread, (void*)'G');
+        task_create_kernel_thread(test_thread, (void*)'H');
+        task_create_kernel_thread(test_thread, (void*)'I');
+        task_create_kernel_thread(test_thread, (void*)'J');
+        task_create_kernel_thread(test_thread, (void*)'K');
+        task_create_kernel_thread(test_thread, (void*)'L');
+        task_create_kernel_thread(test_thread, (void*)'M');
+        task_create_kernel_thread(test_thread, (void*)'N');
+        task_create_kernel_thread(test_thread, (void*)'O');
+        task_create_kernel_thread(test_thread, (void*)'P');
+        task_create_kernel_thread(test_thread, (void*)'Q');
+        task_create_kernel_thread(test_thread, (void*)'R');
+        task_create_kernel_thread(test_thread, (void*)'S');
+        task_create_kernel_thread(test_thread, (void*)'T');
+        task_create_kernel_thread(test_thread, (void*)'U');
+        task_create_kernel_thread(test_thread, (void*)'V');
+        task_create_kernel_thread(test_thread, (void*)'W');
+        task_create_kernel_thread(test_thread, (void*)'X');
+        task_create_kernel_thread(test_thread, (void*)'Y');
+        task_create_kernel_thread(test_thread, (void*)'Z');
     }
 }

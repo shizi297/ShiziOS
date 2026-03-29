@@ -177,7 +177,8 @@ void switch_to(struct thread_struct *prev, struct thread_struct *next) {
         "movq %%rax, %%cr3\n\t"
 
         // 跳转到 next->rip
-        "pushq %c[thr_rip](%%rsi)\n\t"
+        "movq %c[thr_rip](%%rsi), %%rax\n\t"
+        "movq %%rax, (%%rsp)\n\t"
         "ret\n"
         :
         : [thr_rip]  "i" (THR_RIP),
