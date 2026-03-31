@@ -10,44 +10,6 @@
 #include <libtree.h>
 #include <shizi/string.h>
 
-typedef struct vm_area {
-    uintptr_t start;      // 虚拟起始地址
-    uintptr_t end;        // 虚拟结束地址
-    uintptr_t linear_addr; // 映射区的线性虚拟地址（PHYS_TO_LINEAR(phys)），0 表示未预分配
-    vm_prot_t prot;       // 权限标志
-    uint8_t flags;      // 映射标志
-    anon_vma_t *anon_vma;  
-    file_t *file;         
-    device_t *device;  
-    page_table_blocks_struct page_table_blocks; // 页表块信息
-
-    // 链表节点，用于遍历所有vma节点
-    struct list_head list_node;
-    // 红黑树节点，用于找到其中的一个vma节点
-    struct rbtree_node rb_node;
-} vm_area_t;
-
-typedef struct vmm_as{
-    uintptr_t pgd;
-    struct list_head vma_list;
-    struct rbtree vma_tree;
-    atomic_int refcount;
-    spinlock_t lock;
-} as_t;
-
-// 字段信息表，用于通用读写
-static const struct {
-    size_t offset;
-    size_t size;
-    bool writable;
-} vma_field_info[] = {
-    [VMA_FIELD_START]  = { offsetof(vm_area_t, start),       sizeof(uintptr_t), false },
-    [VMA_FIELD_END]    = { offsetof(vm_area_t, end),         sizeof(uintptr_t), false },
-    [VMA_FIELD_LINEAR] = { offsetof(vm_area_t, linear_addr), sizeof(uintptr_t), true  },
-    [VMA_FIELD_PROT]   = { offsetof(vm_area_t, prot),        sizeof(vm_prot_t), false },
-    [VMA_FIELD_FLAGS]  = { offsetof(vm_area_t, flags),       sizeof(uint8_t),   false },
-};
-
 /**
  * 红黑树节点比较（按 start 地址）
  * 
@@ -116,123 +78,36 @@ static vm_area_t *vma_rb_find_le(struct rbtree *tree, uintptr_t addr) {
     return candidate;
 }
 
-/*
- * 读取VMA指定字段的值
- *
- * @param vma VMA指针
- * @param field 要读取的字段
- * @param out_data 输出缓冲区
- *
- * @return VMM_OK 成功
- * @return VMM_INVALID_ARGUMENT 参数无效
- */
-vmm_result_t vma_read(const vm_area_t *vma, vma_field_t field, void *out_data) {
-    if (!vma || !out_data || field >= sizeof(vma_field_info)/sizeof(vma_field_info[0]))
-        return VMM_INVALID_ARGUMENT;
-
-    const typeof(vma_field_info[0]) *info = &vma_field_info[field];
-    memcpy(out_data, (const uint8_t*)vma + info->offset, info->size);
-    return VMM_OK;
-}
-
-/*
- * 写入VMA指定字段的值
- *
- * @param vma VMA指针
- * @param field 要写入的字段
- * @param data 待写入数据
- *
- * @return VMM_OK 成功
- * @return VMM_INVALID_ARGUMENT 参数无效或字段不可写
- */
-vmm_result_t vma_write(vm_area_t *vma, vma_field_t field, const void *data) {
-    if (!vma || !data || field >= sizeof(vma_field_info)/sizeof(vma_field_info[0]))
-        return VMM_INVALID_ARGUMENT;
-
-    const typeof(vma_field_info[0]) *info = &vma_field_info[field];
-    if (!info->writable)
-        return VMM_INVALID_ARGUMENT;
-
-    memcpy((uint8_t*)vma + info->offset, data, info->size);
-    return VMM_OK;
-}
-
-/*
- * 获取VMA的页表块指针
- *
- * @param vma VMA指针
- *
- * @return 页表块结构体指针
- */
-page_table_blocks_struct *vma_get_ptb(vm_area_t *vma) {
-    return &vma->page_table_blocks;
-}
-
-/*
- * 创建进程地址空间描述符
- *
- * @param pgd 页全局目录的顶层目录虚拟地址
- * @return 失败：0
- * @return 成功：进程地址空间的虚拟地址
- */
-as_t *as_create(uintptr_t pgd) {
-    as_t *vaddr = (as_t *)kheap_alloc(sizeof(as_t));
-    if (vaddr == NULL) {
+// 查找地址空间中最后一个 vma
+static vm_area_t *vma_find_end(as_t *as) {
+    if (as == NULL) {
         return NULL;
     }
 
-    spinlock_init(&vaddr->lock);
-    vaddr->pgd = pgd;
-    INIT_LIST_HEAD(&vaddr->vma_list);
-    rbtree_init(&vaddr->vma_tree, vma_rb_cmp, 0);
-    atomic_store(&vaddr->refcount, 1);
-
-    return vaddr;
+    struct rbtree_node *last_node = rbtree_last(&as->vma_tree);
+    return last_node ? container_of(last_node, vm_area_t, rb_node) : NULL;
 }
 
 /*
- * 销毁进程地址空间
+ * 添加 vma 到地址空间
  *
- * @param as 进程地址空间的虚拟地址
- */
-void as_destroy(as_t *as) {
-    if (as == NULL) {
-        return;
-    }
-    
-    /*
-     * 原本是打算让这里释放所有VMA的
-     * 但是上层需要一些信息
-     * 所以改成上层负责释放VMA
-     */
-
-    // 释放as结构本身
-    kheap_free(as);
-}
-
-/*
- * 添加vma
- *
- * @param as 进程地址空间的虚拟地址
- * @param start 这段区域的起始虚拟地址
- * @param end 这段区域的结束虚拟地址
+ * @param as 进程地址空间
+ * @param start 起始虚拟地址（页对齐）
+ * @param end 结束虚拟地址（页对齐）
  * @param prot 权限标志
  * @param flags 映射标志
- * 
- * 调用时需要加as锁
+ *
+ * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end,
-                            vm_prot_t prot, uint8_t flags) {
+vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
+                     vm_prot_t prot, uint8_t flags) {
     // 参数检查
     if (as == NULL) {
         return VMM_INVALID_ARGUMENT;
     }
-    
-    // 地址有效性检查
     if (start >= end) {
         return VMM_INVALID_ARGUMENT;
     }
-    
     if ((start & (PAGE_SIZE - 1)) != 0 || (end & (PAGE_SIZE - 1)) != 0) {
         return VMM_INVALID_ARGUMENT;
     }
@@ -261,13 +136,13 @@ vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end,
         }
     }
 
-    // 分配VMA结构
+    // 分配vma结构
     vm_area_t *new_vma = (vm_area_t *)kheap_alloc(sizeof(vm_area_t));
     if (new_vma == NULL) {
         return VMM_OUT_OF_MEMORY;
     }
     
-    // 初始化VMA
+    // 初始化vma
     new_vma->start = start;
     new_vma->end = end;
     new_vma->prot = prot;
@@ -290,40 +165,15 @@ vmm_result_t vma_add_nolock(as_t *as, uintptr_t start, uintptr_t end,
 }
 
 /*
- * 添加vma
+ * 查找包含 addr 的 vma
  *
- * @param as 进程地址空间的虚拟地址
- * @param start 这段区域的起始虚拟地址
- * @param end 这段区域的结束虚拟地址
- * @param prot 权限标志
- * @param flags 映射标志
+ * @param as 进程地址空间
+ * @param addr 虚拟地址
+ *
+ * @return 失败：NULL
+ * @return 成功：vma 指针
  */
-vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
-                     vm_prot_t prot, uint8_t flags) {
-    // 参数检查
-    if (as == NULL) {
-        return VMM_INVALID_ARGUMENT;
-    }
-    
-    as_get_lock(as);
-    vmm_result_t result = vma_add_nolock(as, start, end, prot, flags);
-    as_remove_lock(as);
-    
-    return result;
-}
-
-/*
- * 查找包含这个虚拟地址的vma
- * 
- * @param as 进程地址空间的虚拟地址
- * @param addr 要查找的虚拟地址
- * 
- * @return 失败：0
- * @return 成功：vma的虚拟地址
- * 
- * 调用时需要加as锁
- */
-vm_area_t* vma_find_nolock(as_t *as, uintptr_t addr) {
+vm_area_t* vma_find(as_t *as, uintptr_t addr) {
     if (as == NULL) {
         return NULL;
     }
@@ -336,39 +186,14 @@ vm_area_t* vma_find_nolock(as_t *as, uintptr_t addr) {
 }
 
 /*
- * 查找包含这个虚拟地址的vma
- * 
- * @param as 进程地址空间的虚拟地址
- * @param addr 要查找的虚拟地址
- * 
- * @return 失败：0
- * @return 成功：vma的虚拟地址
+ * 从地址空间中移除 vma
+ *
+ * @param as 进程地址空间
+ * @param vma 要移除的 vma 指针
+ *
+ * @return VMM_OK 成功，否则错误码
  */
-vm_area_t* vma_find(as_t *as, uintptr_t addr) {
-    if (as == NULL) {
-        return NULL;
-    }
-    
-    as_get_lock(as);
-    vm_area_t *result = vma_find_nolock(as, addr);
-    as_remove_lock(as);
-    
-    return result;
-}
-
-/*
- * 从地址空间中移除vma
- * 
- * @param as 进程地址空间的虚拟地址
- * @param vma 要移除的vma的虚拟地址
- * 
- * @return 成功：VMM_OK
- * @return 失败：错误码
- * 
- * 调用时需要加as锁
- */
-vmm_result_t vma_remove_nolock(as_t *as, vm_area_t *vma) {
-    // 参数检查
+vmm_result_t vma_remove(as_t *as, vm_area_t *vma) {
     if (as == NULL || vma == NULL) {
         return VMM_INVALID_ARGUMENT;
     }
@@ -404,144 +229,176 @@ vmm_result_t vma_remove_nolock(as_t *as, vm_area_t *vma) {
     return VMM_OK;
 }
 
-/*
- * 从地址空间中移除vma
- * 
- * @param as 进程地址空间的虚拟地址
- * @param vma 要移除的vma的虚拟地址
- * 
- * @return 成功：VMM_OK
- * @return 失败：错误码
- */
-vmm_result_t vma_remove(as_t *as, vm_area_t *vma) {
-    // 参数检查
-    if (as == NULL || vma == NULL) {
-        return VMM_INVALID_ARGUMENT;
-    }
-    
-    as_get_lock(as);
-    vmm_result_t result = vma_remove_nolock(as, vma);
-    as_remove_lock(as);
-    
-    return result;
-}
-
-/*
- * 获取地址空间中的所有VMA地址
- *
- * @param as 进程地址空间的虚拟地址
- * @param result 用于存储结果的结构体指针
- * @return vmm_result_t
- */
-vmm_result_t vma_get(as_t *as, vma_result_t **result) {
-    as_get_lock(as);
-    vmm_result_t vma_get_result = vma_get_nolock(as, result);
-    as_remove_lock(as);
-    return vma_get_result;
-}
-
-/*
- * 获取地址空间中的所有VMA地址
- *
- * @param as 进程地址空间的虚拟地址
- * @param result 用于存储结果的结构体指针
- * @return vmm_result_t
- * 
- * 需要加as锁
- */
-vmm_result_t vma_get_nolock(as_t *as, vma_result_t **result) {
-    if (as == NULL || result == NULL) {
-        return VMM_INVALID_ARGUMENT;
-    }
-
-    // 遍历链表，计算VMA数量
-    uint64_t count = 0;
-    vm_area_t *pos;
-    list_for_each_entry(pos, &as->vma_list, list_node) {
-        count++;
-    }
-
-    // 创建结构体用于返回
-    uint64_t size = sizeof(vma_result_t) + count * sizeof(vma_data_t);
-    vma_result_t *vma_result = kheap_alloc(size);
-    if (vma_result == NULL) {
-        return VMM_OUT_OF_MEMORY;
-    }
-
-    vma_result->addr_count = count;
-    uint64_t i = 0;
-    list_for_each_entry(pos, &as->vma_list, list_node) {
-        vma_result->vma_data[i].start_addr = pos->start;
-        vma_result->vma_data[i].end_addr = pos->end;
-        vma_result->vma_data[i].linear = pos->linear_addr;
-        vma_result->vma_data[i].prot = pos->prot;
-        vma_result->vma_data[i].flags = pos->flags;
-        i++;
-    }
-
-    *result = vma_result;
-    return VMM_OK;
-}
-
-/*
- * 查找地址空间中最后一个vma
- * 
- * @param as 进程地址空间的虚拟地址
- * @return 失败：NULL
- * @return 成功：vma的虚拟地址
- * 
- * 需要加as锁
- */
-vm_area_t *vma_find_end(as_t *as) {
-    if (as == NULL) {
-        return NULL;
-    }
-
-    // 不加锁，由调用者负责
-    struct rbtree_node *last_node = rbtree_last(&as->vma_tree);
-    return last_node ? container_of(last_node, vm_area_t, rb_node) : NULL;
-}
-
-// 增加as的引用计数
-void as_add_ref(as_t *as) {
-    atomic_fetch_add(&as->refcount, 1);
-}
-
-// 减少as的引用计数，返回减少前的值
-int as_sub_ref(as_t *as) {
-    return atomic_fetch_sub(&as->refcount, 1);
-}
-
-// 获取当前as的引用计数
-int as_get_ref(as_t *as) {
-    return atomic_load(&as->refcount);
-}
-
-// 获取锁
-void as_get_lock(as_t *as) {
-    spin_lock(&as->lock);
-}
-
-// 释放锁
-void as_remove_lock(as_t *as) {
-    spin_unlock(&as->lock);
-}
-
-// 获取pgd
-uintptr_t as_get_pgd(as_t *as) {
-    return as->pgd;
-}
-
-// 清理地址空间内部资源，调用方需要有as锁
-void as_cleanup(as_t *as) {
-    // 释放所有VMA及其映射
+// 清理地址空间内部资源（释放所有 vma 和 pgd）
+static void as_cleanup(as_t *as) {
+    // 释放所有vma及其映射
     while (!list_empty(&as->vma_list)) {
         vm_area_t *vma = list_first_entry(&as->vma_list, vm_area_t, list_node);
         if (vma->linear_addr != 0) {
             kheap_free((void *)vma->linear_addr);
         }
-        vma_remove_nolock(as, vma);
+        vma_remove(as, vma);
     }
     // 删除页全局目录
     mmu_remove_pgd(as_get_pgd(as));
+}
+
+/*
+ * 创建进程地址空间描述符
+ *
+ * @param pgd 页全局目录物理地址
+ *
+ * @return 失败：NULL
+ * @return 成功：进程地址空间的虚拟地址
+ */
+as_t *as_create(uintptr_t pgd) {
+    as_t *vaddr = (as_t *)kheap_alloc(sizeof(as_t));
+    if (vaddr == NULL) {
+        return NULL;
+    }
+
+    spinlock_init(&vaddr->lock);
+    vaddr->pgd = pgd;
+    INIT_LIST_HEAD(&vaddr->vma_list);
+    rbtree_init(&vaddr->vma_tree, vma_rb_cmp, 0);
+    atomic_store(&vaddr->refcount, 1);
+
+    return vaddr;
+}
+
+// 获取地址空间锁
+void as_lock(as_t *as) {
+    spin_lock(&as->lock);
+}
+
+// 释放地址空间锁
+void as_unlock(as_t *as) {
+    spin_unlock(&as->lock);
+}
+
+// 增加引用计数
+void as_add_ref(as_t *as) {
+    atomic_fetch_add(&as->refcount, 1);
+}
+
+// 减少引用计数（内部）
+static int as_sub_ref(as_t *as) {
+    return atomic_fetch_sub(&as->refcount, 1) - 1;
+}
+
+// 获取当前引用计数
+int as_get_ref(as_t *as) {
+    return atomic_load(&as->refcount);
+}
+
+// 获取页全局目录物理地址
+uintptr_t as_get_pgd(as_t *as) {
+    return as->pgd;
+}
+
+/*
+ * 销毁进程地址空间（减少引用计数，归零时释放）
+ *
+ * @param as 进程地址空间的虚拟地址
+ *
+ * 调用前需持有 as 锁
+ */
+void as_destroy(as_t *as) {
+    if (as == NULL) {
+        return;
+    }
+    
+    int new_ref = as_sub_ref(as);
+    if (new_ref == 0) {
+        as_cleanup(as);
+        kheap_free(as);
+    }
+}
+
+/*
+ * 为地址空间分配一个新的虚拟地址
+ *
+ * @param as 进程地址空间
+ * @param size 需要的大小（字节）
+ *
+ * @return 失败：0
+ * @return 成功：分配的虚拟地址
+ */
+uintptr_t as_alloc_addr(as_t *as, uint64_t size) {
+    if (as == NULL || size == 0) {
+        return 0;
+    }
+    
+    // 计算需要多少页
+    uint64_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t total_size = page_count * PAGE_SIZE;
+    
+    // 查找最后一个vma
+    vm_area_t *last_vma = vma_find_end(as);
+    
+    uintptr_t start_addr;
+    
+    if (last_vma == NULL) {
+        // 第一个vma，从USER_START开始
+        start_addr = USER_START;
+    } else {
+        // 在最后一个vma之后分配，加上4KB间隙，页对齐
+        start_addr = last_vma->end + 4096;
+        start_addr = (start_addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    }
+    
+    // 检查是否超过栈区域
+    if (start_addr + total_size > USER_STACK_TOP) {
+        return 0;
+    }
+    
+    return start_addr;
+}
+
+/*
+ * 解除映射
+ *
+ * @param as 进程地址空间
+ * @param addr 虚拟地址
+ *
+ * @return VMM_OK 成功，否则错误码
+ */
+vmm_result_t as_unmap(as_t *as, uintptr_t addr) {
+    if (as == NULL) {
+        return VMM_INVALID_ARGUMENT;
+    }
+
+    // 查找对应的vma
+    vm_area_t *vma = vma_find(as, addr);
+    if (vma == NULL) {
+        return VMM_INVALID_ADDRESS;
+    }
+
+    // 读取vma的 start 和 end 用于tlb刷新
+    uintptr_t start, end;
+    vma_range(vma, &start, &end);
+
+    // 释放页表页
+    page_table_blocks_struct *ptb = &vma->page_table_blocks;
+    mmu_remove_map(ptb);
+    
+    // 释放线性地址
+    if (vma->linear_addr != 0) {
+        kheap_free((void *)vma->linear_addr);
+    }
+    
+    // 根据映射大小选择TLB刷新策略
+    uint64_t page_count = (end - start) / PAGE_SIZE;
+    if (page_count > TLB_FLUSH_THRESHOLD_PAGES) {
+        // 大范围，刷新整个TLB
+        mmu_invalidate_all();
+    } else {
+        // 小范围，逐页刷新
+        for (uintptr_t va = start; va < end; va += PAGE_SIZE) {
+            mmu_invalidate(va);
+        }
+    }
+    
+    // 从地址空间中移除vma
+    return vma_remove(as, vma);
 }

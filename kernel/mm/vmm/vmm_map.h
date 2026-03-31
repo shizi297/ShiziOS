@@ -16,9 +16,8 @@
 void vmm_init(void);
 
 /*
- * 创建一个新的进程地址空间
- * 自动分配页全局目录
- * 
+ * 创建一个新的进程地址空间（自动分配页全局目录）
+ *
  * @return 失败：NULL
  * @return 成功：进程地址空间的虚拟地址
  */
@@ -31,40 +30,28 @@ as_t *vmm_get_kernel_as(void);
 uintptr_t vmm_get_kernel_pgd(void);
 
 /*
- * 释放内存
- * 
- * @param as 进程地址空间的虚拟地址
- * @param addr 要释放的虚拟地址
- * 
- * @return vmm_result_t
- * 
- * 调用时需要加as锁
- */
-vmm_result_t vmm_unmap_nolock(as_t *as, uintptr_t addr);
-
-/*
- * 释放内存
- * 
- * @param as 进程地址空间的虚拟地址
- * @param addr 要释放的虚拟地址
- * 
- * @return vmm_result_t
+ * 解除映射
+ *
+ * @param as 进程地址空间
+ * @param addr 虚拟地址
+ *
+ * @return VMM_OK 成功，否则错误码
  */
 vmm_result_t vmm_unmap(as_t *as, uintptr_t addr);
 
 /*
  * 切换到指定的进程地址空间
- * 
+ *
  * @param as 进程地址空间的虚拟地址
  */
 void vmm_switch_as(as_t *as);
 
 /**
  * 映射mmio地址
- * 
+ *
  * @param phy_addr 物理地址
  * @param page_count 大小
- * 
+ *
  * @return 成功 ： 映射的虚拟内存
  * @return 失败 ：0
  */
@@ -77,17 +64,15 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count);
  */
 void vmm_destroy_as(as_t *as);
 
-/*
- * 增加as的引用计数
- */
+// 增加as的引用计数
 void vmm_as_add_ref(as_t *as);
 
 /**
  * 复制地址空间
  * 自动分配新的页表页与物理内存
- * 
+ *
  * @param as 进程地址空间的虚拟地址
- * 
+ *
  * @return 失败：NULL
  * @return 成功：进程地址空间的虚拟地址
  */
@@ -95,19 +80,19 @@ as_t *vmm_copy_as(as_t *as);
 
 /*
  * 映射匿名内存区域
- * 
- * @param as 进程地址空间的虚拟地址
+ *
+ * @param as 进程地址空间
  * @param addr 要映射的虚拟地址，如果为0则自动分配
  * @param page 映射页数
  * @param prot 映射权限
  * @param flags 映射标志
  * @param anon_vma 匿名内存结构体指针
  * @param alloc 是否预分配
- * @param out_addr 输出的实际映射地址，如果不需要可以传入NULL
- * 
+ * @param out_addr 输出的实际映射地址
+ *
  * anon_vma目前没有用
  * 可以先传入NULL
- * 
+ *
  * @return vmm_result_t
  */
 vmm_result_t vmm_map_anon(
@@ -120,6 +105,7 @@ vmm_result_t vmm_map_anon(
     bool alloc,
     uintptr_t *out_addr
 );
+
 
 /*
  * 映射文件到内存
