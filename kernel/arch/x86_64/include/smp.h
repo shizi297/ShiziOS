@@ -96,6 +96,9 @@ per_cpu *smp_get_kernel_tls(void);
 // 向目标cpu发送中断
 void smp_send_irq(uint64_t logical_id, uint8_t vector);
 
+// 更新架构相关的状态，用于切换上下文前
+void smp_arch_update_state(struct thread_struct *thread);
+
 // 获取cpu核心的逻辑id
 static inline uint32_t get_logical_id(void) {
     per_cpu *per_cpu_ptr = smp_get_kernel_tls();

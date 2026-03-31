@@ -99,7 +99,6 @@ struct fpu_state {
 
 // 任务切换时保存的信息
 struct thread_struct {
-    uint64_t rip;           // 存储返回地址
     uint64_t cr3;           // 页表基址
     uint64_t rsp;           // 内核栈指针
     uint64_t fs_base;       // 用户态 TLS
@@ -115,7 +114,6 @@ struct thread_struct {
     struct fpu_state fpu_state; 
 };
 
-#define THR_RIP   offsetof(struct thread_struct, rip)
 #define THR_CR3   offsetof(struct thread_struct, cr3)
 #define THR_RSP   offsetof(struct thread_struct, rsp)
 #define THR_FS    offsetof(struct thread_struct, fs_base)

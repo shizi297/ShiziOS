@@ -119,9 +119,8 @@ void processor_boot_switch(struct thread_struct *thread) {
         "movq %0, %%rsp\n\t"
         "movq %1, %%rbx\n\t"
         "movq %2, %%rbp\n\t"
-        "pushq %3\n\t"
         "ret\n"
-        : : "r"(thread->rsp), "r"(thread->rbx), "r"(thread->rbp), "r"(thread->rip)
+        : : "r"(thread->rsp), "r"(thread->rbx), "r"(thread->rbp)
         : "memory"
     );
 }
@@ -146,10 +145,6 @@ void switch_to(struct thread_struct *prev, struct thread_struct *next) {
         "movq %%r14,  %c[thr_r14](%%rdi)\n\t"
         "movq %%r15,  %c[thr_r15](%%rdi)\n\t"
         "movq %%rsp,  %c[thr_rsp](%%rdi)\n\t"
-
-        // 保存返回地址
-        "movq (%%rsp), %%rax\n\t"
-        "movq %%rax,  %c[thr_rip](%%rdi)\n\t"
 
         // 保存 fs_base
         "rdfsbase %%rax\n\t"
@@ -176,13 +171,10 @@ void switch_to(struct thread_struct *prev, struct thread_struct *next) {
         "movq %c[thr_cr3](%%rsi), %%rax\n\t"
         "movq %%rax, %%cr3\n\t"
 
-        // 跳转到 next->rip
-        "movq %c[thr_rip](%%rsi), %%rax\n\t"
-        "movq %%rax, (%%rsp)\n\t"
+        // 跳转到新任务（栈顶已有返回地址）
         "ret\n"
         :
-        : [thr_rip]  "i" (THR_RIP),
-          [thr_cr3]  "i" (THR_CR3),
+        : [thr_cr3]  "i" (THR_CR3),
           [thr_rsp]  "i" (THR_RSP),
           [thr_fs]   "i" (THR_FS),
           [thr_rbx]  "i" (THR_RBX),
@@ -264,7 +256,6 @@ void thread_struct_to_kernel_init(
     thread->rsp = (uint64_t)stack_top;
     thread->rbp = (uint64_t)arg;
     thread->rbx = (uint64_t)func;
-    thread->rip = (uint64_t)ret_from_kernel_thread;
 }
 
 // 初始化所有模版

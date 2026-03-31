@@ -27,7 +27,6 @@ typedef enum {
     TASK_UNINTERRUPTIBLE = 2,   // 不可中断睡眠
     TASK_STOPPED = 3,           // 停止
     TASK_ZOMBIE = 4,            // 僵尸
-    TASK_DIE = 5,               // 死亡
 } task_state;
 
 // 调度器数据

@@ -50,14 +50,20 @@ task_struct *task_copy(struct task_struct *task, task_flags flags);
  */
 task_struct *task_create_kernel_thread(void (*func)(void *), void *arg);
 
-// 任务退出
-void task_exit(void);
+// 等待子任务结束并回收资源
+void task_wait(void);
 
 // 设置下一次中断
 void task_set_next_timer(void);
 
 // 重新调度任务
 void task_sched(void);
+
+// 任务退出
+void task_exit(void);
+
+// 提交一个工作任务
+void task_submit_work(void (*func)(void *), void *data);
 
 // 任务管理数据初始化
 bool task_data_init(void);

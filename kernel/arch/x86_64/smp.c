@@ -360,6 +360,6 @@ void smp_send_irq(uint64_t logical_id, uint8_t vector) {
 }
 
 // 更新架构相关的状态，用于切换上下文前
-void smp_arch_update_state(void *stack) {
-    // TODO 
+void smp_arch_update_state(struct thread_struct *thread) {
+    tss_ptr[get_logical_id()].rsp0 = (uint64_t)thread->rsp;
 }

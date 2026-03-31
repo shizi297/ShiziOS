@@ -29,20 +29,36 @@
 
 #define INIT_TIME_SLICE_NS timecycle_msec_to_ns(20)
 
+// worker 线程数量
+#define WORKER_THREAD_COUNT 1
+
+extern void ret_from_kernel_thread(void);
+
+// 通用锁队列结构
+struct lock_queue {
+    struct list_head head;
+    spinlock_t lock;
+};
+
 /*
  * 用于存储对应状态的任务
  * 运行/就绪调度器负责，这里不放
  * 睡眠由调用睡眠的对应模块来管，这里也不放
- * 僵尸进程是task_struct的，不是per_cpu的，这里不做
+ * 这里的僵尸队列存放内核线程的僵尸任务和子线程待回收的任务
  */
-typedef struct {
-    struct list_head stopped;           // 停止
-} task_state_struct;
+static struct lock_queue stopped_queue;
+static struct lock_queue zombie_queue;
 
-typedef struct {
-    uint32_t count;
-    task_state_struct state[];
-} per_cpu_task_state_struct; 
+// worker 队列（存放 worker 线程句柄）
+static struct lock_queue worker_queue;
+
+// 工作任务队列（存放工作项）
+struct work_item {
+    void (*func)(void *data);
+    void *data;
+    struct list_head node;
+};
+static struct lock_queue work_queue;
 
 typedef struct {
     /*
@@ -69,7 +85,6 @@ typedef struct {
 extern sched_func_t sched_func;
 
 static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
-static per_cpu_task_state_struct *per_cpu_task_state_ptr = NULL;
 
 INIT_BITMAP(id_bitmap, TASK_ID_MAX);
 static spinlock_t id_lock = SPIN_LOCK_INIT;
@@ -78,6 +93,133 @@ static migration_struct *migration_ptr = NULL;
 
 struct sched_class sched_class = {0};
 struct sched_class *sched_class_ptr = &sched_class;
+
+// 初始化锁队列
+static void lock_queue_init(struct lock_queue *lq) {
+    INIT_LIST_HEAD(&lq->head);
+    spinlock_init(&lq->lock);
+}
+
+// 将节点加入锁队列尾部
+static void lock_queue_add_tail(struct lock_queue *lq, struct list_head *node) {
+    spin_lock(&lq->lock);
+    list_add_tail(node, &lq->head);
+    spin_unlock(&lq->lock);
+}
+
+// 从锁队列头部取出节点（不删除，仅获取）
+static struct list_head *lock_queue_peek(struct lock_queue *lq) {
+    spin_lock(&lq->lock);
+    struct list_head *node = NULL;
+    if (!list_empty(&lq->head))
+        node = lq->head.next;
+    spin_unlock(&lq->lock);
+    return node;
+}
+
+// 从锁队列头部取出并删除节点
+static struct list_head *lock_queue_pop(struct lock_queue *lq) {
+    spin_lock(&lq->lock);
+    struct list_head *node = NULL;
+    if (!list_empty(&lq->head)) {
+        node = lq->head.next;
+        list_del_init(node);
+    }
+    spin_unlock(&lq->lock);
+    return node;
+}
+
+// 回收任务资源（仅供父进程 wait 或 worker 回收时调用）
+static void task_release(struct task_struct *task) {
+    if (task->stack) kheap_free(task->stack);
+    if (task->thread) thread_struct_destroy(task->thread);
+    if (task->as) vheap_destroy_as(task->as);
+    if (task->signal) signal_destroy(task->signal);
+}
+
+// 将 worker 句柄加入 worker 队列
+static void worker_enqueue(struct task_struct *worker) {
+    lock_queue_add_tail(&worker_queue, &worker->sched.list);
+}
+
+// 从 worker 队列中取出一个 worker 句柄
+static struct task_struct *worker_dequeue(void) {
+    struct list_head *node = lock_queue_pop(&worker_queue);
+    if (node)
+        return list_entry(node, struct task_struct, sched.list);
+    return NULL;
+}
+
+// 将工作项加入工作任务队列
+static void work_enqueue(struct work_item *item) {
+    lock_queue_add_tail(&work_queue, &item->node);
+}
+
+// 从工作任务队列中取出一个工作项
+static struct work_item *work_dequeue(void) {
+    struct list_head *node = lock_queue_pop(&work_queue);
+    if (node)
+        return list_entry(node, struct work_item, node);
+    return NULL;
+}
+
+// 遍历全局 zombie 队列，释放所有任务资源
+static void zombie_reclaim(void *unused) {
+    struct list_head *head = &zombie_queue.head;
+
+    spin_lock(&zombie_queue.lock);
+    while (!list_empty(head)) {
+        struct list_head *node = head->next;
+        struct task_struct *task = list_entry(node, struct task_struct, zombie);
+        list_del_init(node);
+        spin_unlock(&zombie_queue.lock);
+
+        task_release(task);
+
+        spin_lock(&zombie_queue.lock);
+    }
+    spin_unlock(&zombie_queue.lock);
+}
+
+// 将任务加入全局 zombie 队列并提交回收工作
+static void zombie_enqueue(struct task_struct *task) {
+    lock_queue_add_tail(&zombie_queue, &task->zombie);
+
+    // 提交僵尸回收任务
+    task_submit_work(zombie_reclaim, NULL);
+}
+
+// 通用 worker 线程
+static void task_worker(void *arg) {
+    // 将自己的 worker 句柄加入队列
+    worker_enqueue(smp_get_task_current());
+
+    while (1) {
+        // TODO: 等待唤醒
+
+        struct work_item *item = work_dequeue();
+        if (item) {
+            item->func(item->data);
+            kheap_free(item);
+        } else {
+            // 没有任务，将自己的句柄重新放回队列并等待
+            worker_enqueue(smp_get_task_current());
+
+            // TODO: 进入睡眠，等待唤醒
+        }
+    }
+}
+
+// 初始化 worker 线程池
+static inline void task_worker_init(void) {
+    lock_queue_init(&worker_queue);
+    lock_queue_init(&work_queue);
+
+    for (int i = 0; i < WORKER_THREAD_COUNT; i++) {
+        task_struct *worker = task_create_kernel_thread(task_worker, NULL);
+        // TODO: 保存 worker 线程句柄，以便唤醒
+    }
+}
 
 /**
  * id分配，可以用于任务管理的任何id
@@ -165,11 +307,6 @@ static void task_idle(void *arg) {
     uint32_t cpu_id = get_logical_id();
     printk("[IDLE] CPU %d\n", cpu_id);
     while (1) {
-        count++;
-        if ((count % 500) == 0) {
-            printk("[IDLE] CPU %d\n", cpu_id);
-            printk("[IDLE] count : %lu\n", count);
-        }
         cpu_halt();
     }
 }
@@ -190,7 +327,6 @@ static void task_boot_sched(void) {
     if (!task) return;
     
     smp_set_task_current(task);
-
     irq_off();
     processor_boot_switch(task->thread);
 }
@@ -234,19 +370,13 @@ static void task_try_migration(void) {
 
         if (atomic_compare_exchange_strong(
                 &migration_ptr->infos[best].state,
-                &expected, desired)
-        ) {
+                &expected, desired)) {
             smp_send_irq(best, IRQ_MIGRATION);
             while (1) {
                 uint64_t cur = atomic_load(&migration_ptr->infos[best].state);
-
-                // 当前选择的cpu已经与其他cpu配对
                 if (!MIG_STATE_ACTIVE(cur)) break;
-
                 cpu_pause();
             }
-
-            // 将迁移的队列入就绪队列
             struct list_head *mig_list = smp_get_migration();
             while (!list_empty(mig_list)) {
                 struct list_head *node = mig_list->next;
@@ -265,19 +395,13 @@ static void task_try_migration(void) {
 
         if (atomic_compare_exchange_strong(
                 &migration_ptr->infos[second].state,
-                &expected, desired)
-        ) {
+                &expected, desired)) {
             smp_send_irq(second, IRQ_MIGRATION);
             while (1) {
                 uint64_t cur = atomic_load(&migration_ptr->infos[second].state);
-
-                // 当前选择的cpu已经与其他cpu配对
                 if (!MIG_STATE_ACTIVE(cur)) break;
-
                 cpu_pause();
             }
-
-            // 将迁移的队列入就绪队列
             struct list_head *mig_list = smp_get_migration();
             while (!list_empty(mig_list)) {
                 struct list_head *node = mig_list->next;
@@ -309,8 +433,7 @@ static void task_do_migration() {
         uint64_t desired = MIG_STATE_PACK(0xFFFFFFFF, 0);
         atomic_compare_exchange_strong(
             &migration_ptr->infos[local].state,
-            &expected, desired
-        );
+            &expected, desired);
         return;    
     }
 
@@ -335,8 +458,7 @@ static void task_do_migration() {
     uint64_t desired = MIG_STATE_PACK(0xFFFFFFFF, 0);
     atomic_compare_exchange_strong(
         &migration_ptr->infos[local].state,
-        &expected, desired
-    );
+        &expected, desired);
 }
 
 // 任务迁移结构初始化
@@ -452,11 +574,9 @@ task_struct *task_copy(struct task_struct *task, task_flags flags) {
 
 fail:
     // 错误处理
-    if (new_task->group_leader && new_task->group_leader != new_task)
-        thread_group_remove(new_task->group_leader, new_task);
+    if (new_task->group_leader && new_task->group_leader != new_task) thread_group_remove(new_task->group_leader, new_task);
 
-    if (new_task->father)
-        task_remove_child(new_task->father, new_task);
+    if (new_task->father) task_remove_child(new_task->father, new_task);
 
     if (new_task->signal) signal_destroy(new_task->signal);
     if (!(flags & TASK_VM) && new_task->as) vheap_destroy_as(new_task->as);
@@ -474,7 +594,7 @@ fail:
  * 
  * @param func 线程入口函数
  * @param arg  传递给线程的参数
- * * 
+ * 
  * @return 成功：任务结构体指针
  * @return 失败：NULL
  */
@@ -509,13 +629,23 @@ task_struct *task_create_kernel_thread(void (*func)(void *), void *arg) {
 
     // 设置地址空间（内核线程共享内核地址空间）
     task->as = vheap_get_kernel_as();
+    vheap_as_add_ref(task->as);
 
     // 获取内核页表物理地址
     uintptr_t kernel_pgd = vheap_get_kernel_pgd();
 
-    // 初始化线程上下文
+    // 计算原始栈顶
     void *stack_top = (void *)((uintptr_t)stack + KERNEL_START_SIZE);
-    thread_struct_to_kernel_init(thread, stack_top, (void *)kernel_pgd, func, arg);
+
+    // 在栈顶预留一个位置存放返回地址，并写入 ret_from_kernel_thread
+    uint64_t *ret_slot = (uint64_t *)stack_top - 1;
+    *ret_slot = (uint64_t)ret_from_kernel_thread;
+
+    // 新的栈顶（向下移动 8 字节）
+    void *new_stack_top = (void *)ret_slot;
+
+    // 初始化线程上下文
+    thread_struct_to_kernel_init(thread, new_stack_top, (void *)kernel_pgd, func, arg);
 
     // 初始化调度器私有数据
     if (sched_class_ptr && sched_class_ptr->sched_init) sched_class_ptr->sched_init(task);
@@ -556,9 +686,27 @@ fail:
     return NULL;
 }
 
-// 任务退出
-void task_exit(void) {
-    // TODO
+// 等待子任务结束并回收资源
+void task_wait(void) {
+    task_struct *current = smp_get_task_current();
+    if (!current) return;
+
+    while (1) {
+        spin_lock(&current->list_lock);
+        if (!list_empty(&current->zombie)) {
+            struct list_head *node = current->zombie.next;
+            struct task_struct *child = list_entry(node, struct task_struct, zombie);
+            list_del(node);
+            spin_unlock(&current->list_lock);
+
+            task_release(child);
+            id_free(child->pid);
+            kheap_free(child);
+        } else {
+            spin_unlock(&current->list_lock);
+            break;
+        }
+    }
 }
 
 // 设置下一次中断
@@ -572,23 +720,19 @@ void task_sched(void) {
     irq_off();
 
     struct task_struct *prev = smp_get_task_current();
-    if (!prev) {
+    if (!prev)
         goto out;
-    }
 
-    if (prev->state == TASK_RUNNING && prev != smp_get_idle()) {
+    if (prev->state == TASK_RUNNING && prev != smp_get_idle())
         sched_class_ptr->enqueue(prev);
-    }
 
     struct task_struct *next = sched_class_ptr->pick_next();
-    if (!next) {
+    if (!next)
         goto out;
-    }
 
     // 如果选择的任务是idle任务，尝试迁移任务
-    if (next == smp_get_idle()) {
+    if (next == smp_get_idle())
         task_try_migration();
-    }
 
     // 调度后相同，不需要切换和保存上下文，直接设置中断后返回
     if (prev == next) {
@@ -598,6 +742,7 @@ void task_sched(void) {
     }
 
     fpu_save(prev->thread);
+    smp_arch_update_state(next->thread);
     smp_set_task_current(next);
     fpu_restore(next->thread);
 
@@ -610,21 +755,76 @@ out:
     write_cpu_flags(flags);
 }
 
+// 任务退出
+__attribute__((noreturn))
+void task_exit(void) {
+    task_struct *task_current = smp_get_task_current();
+    if (!task_current) TASK_PANIC("no current task\n");
+
+    // 将当前任务标记为僵尸，防止被重新调度
+    task_current->state = TASK_ZOMBIE;
+
+    // TODO : 关闭文件描述符
+
+    if (task_current->father == NULL) {
+        // 内核线程
+        zombie_enqueue(task_current);
+    } else if (task_current->pid == task_current->tgid) {
+        // 主线程（进程退出），杀死线程组内其他线程
+        struct list_head *head = &task_current->thread_group;
+        while (!list_empty(head)) {
+            struct task_struct *thread = list_first_entry(head, struct task_struct, thread_group);
+            list_del_init(&thread->thread_group);
+            thread->state = TASK_ZOMBIE;
+            zombie_enqueue(thread);
+        }
+
+        // 主线程自身加入父进程的僵尸链表
+        spin_lock(&task_current->father->list_lock);
+        list_add_tail(&task_current->zombie, &task_current->father->zombie);
+        spin_unlock(&task_current->father->list_lock);
+        if (task_current->father->sigchld) signal_send(task_current->father, task_current->father->signal, SIGCHLD, true, false);
+    } else {
+        // 普通用户线程
+        zombie_enqueue(task_current);
+    }
+
+    task_sched();
+
+    // 不应该返回，如果返回说明代码错误
+    TASK_PANIC("task exit failed\n");
+}
+
+// 提交一个工作任务
+void task_submit_work(void (*func)(void *), void *data) {
+    struct work_item *item = kheap_alloc(sizeof(struct work_item));
+    if (!item) TASK_PANIC("out of memory\n");
+    item->func = func;
+    item->data = data;
+    INIT_LIST_HEAD(&item->node);
+
+    work_enqueue(item);
+
+    // 唤醒一个 worker
+    struct task_struct *worker = worker_dequeue();
+    if (worker) {
+        // TODO: 唤醒 worker 线程
+    }
+}
+
 // 任务管理数据初始化
 bool task_data_init(void) {
-    uint32_t max_cpu = bootboot->numcores;
-    uint64_t per_cpu_task_stopped_size = sizeof(uint32_t) + (sizeof(task_state_struct) * max_cpu); 
-    per_cpu_task_state_ptr = kheap_alloc(per_cpu_task_stopped_size);
-    if (!per_cpu_task_state_ptr) return false;
-
-    // 初始化链表节点
-    for (int i = 0; i < max_cpu; i++) INIT_LIST_HEAD(&per_cpu_task_state_ptr->state[i].stopped);
+    lock_queue_init(&stopped_queue);
+    lock_queue_init(&zombie_queue);
 
     // 创建id映射，用于找到对应id的task，最大容量为TASK_ID_MAX
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
     if (!id_map) return false;
 
     if (!task_migration_init()) return false;
+
+    // 初始化 worker 线程池
+    task_worker_init();
 
     sched_func();
 

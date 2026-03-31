@@ -25,14 +25,21 @@ static void test_thread(void *arg) {
 
     while (1) {
         cnt++;
-        if (cnt % 500 == 0) {
+        if (cnt % 100 == 0) {
             TASK_TEST_PRINT("[%c] count=%llu\n", id, cnt);
+            if (cnt == 1000) {
+                TASK_TEST_PRINT("Thread %c succeeded\n", id);
+                return;
+            }
+
         }
         cpu_halt();
     }
 }
 
 static void test(void) {
+    uint64_t flags;
+    spin_lock_irqsave(&serial_lock, &flags);
     if (get_logical_id() == bootboot->bspid) {
         task_create_kernel_thread(test_thread, (void*)'A');
         task_create_kernel_thread(test_thread, (void*)'B');
@@ -61,4 +68,5 @@ static void test(void) {
         task_create_kernel_thread(test_thread, (void*)'Y');
         task_create_kernel_thread(test_thread, (void*)'Z');
     }
+    spin_unlock_irqrestore(&serial_lock, flags);
 }
