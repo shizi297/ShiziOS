@@ -43,11 +43,11 @@ struct lock_queue {
 /*
  * 用于存储对应状态的任务
  * 运行/就绪调度器负责，这里不放
- * 睡眠由调用睡眠的对应模块来管，这里也不放
  * 这里的僵尸队列存放内核线程的僵尸任务和子线程待回收的任务
  */
 static struct lock_queue stopped_queue;
 static struct lock_queue zombie_queue;
+static struct lock_queue sleep_queue;
 
 // worker 队列（存放 worker 线程句柄）
 static struct lock_queue worker_queue;
@@ -129,6 +129,13 @@ static struct list_head *lock_queue_pop(struct lock_queue *lq) {
     return node;
 }
 
+// 从锁队列中删除指定节点
+static void lock_queue_del(struct lock_queue *lq, struct list_head *node) {
+    spin_lock(&lq->lock);
+    list_del_init(node);
+    spin_unlock(&lq->lock);
+}
+
 // 回收任务资源（仅供父进程 wait 或 worker 回收时调用）
 static void task_release(struct task_struct *task) {
     if (task->stack) kheap_free(task->stack);
@@ -191,21 +198,18 @@ static void zombie_enqueue(struct task_struct *task) {
 
 // 通用 worker 线程
 static void task_worker(void *arg) {
-    // 将自己的 worker 句柄加入队列
-    worker_enqueue(smp_get_task_current());
-
     while (1) {
-        // TODO: 等待唤醒
+        // 将自己的 worker 句柄加入队列
+        worker_enqueue(smp_get_task_current());
 
-        struct work_item *item = work_dequeue();
-        if (item) {
+        // 睡眠，等待唤醒
+        task_sleep(true);
+
+        // 被唤醒后处理工作任务
+        struct work_item *item;
+        while ((item = work_dequeue()) != NULL) {
             item->func(item->data);
             kheap_free(item);
-        } else {
-            // 没有任务，将自己的句柄重新放回队列并等待
-            worker_enqueue(smp_get_task_current());
-
-            // TODO: 进入睡眠，等待唤醒
         }
     }
 }
@@ -217,7 +221,7 @@ static inline void task_worker_init(void) {
 
     for (int i = 0; i < WORKER_THREAD_COUNT; i++) {
         task_struct *worker = task_create_kernel_thread(task_worker, NULL);
-        // TODO: 保存 worker 线程句柄，以便唤醒
+        // 不把worker加入worker线程池，调度到他时会自动加入
     }
 }
 
@@ -317,7 +321,7 @@ static inline task_struct *task_create_idle(void) {
 }
 
 // 时钟中断的回调
-static void task_clock_event_handle(void) {
+static void task_clock_event_handle(void *data) {
     smp_set_need_sched();
 }
 
@@ -714,6 +718,30 @@ void task_set_next_timer(void) {
     sched_class_ptr->set_next_timer(smp_get_task_current());
 }
 
+// 让当前任务睡眠
+task_struct *task_sleep(bool interruptible) {
+    task_struct *current = smp_get_task_current();
+    if (!current) return NULL;
+
+    current->state = interruptible ? TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE;
+    lock_queue_add_tail(&sleep_queue, &current->sleep);
+
+    smp_set_need_sched();
+
+    return current;
+}
+
+// 唤醒睡眠的任务
+void task_wakeup(task_struct *task) {
+    if (!task) return;
+
+    if (task->state != TASK_INTERRUPTIBLE && task->state != TASK_UNINTERRUPTIBLE) return;
+
+    lock_queue_del(&sleep_queue, &task->sleep);
+    task->state = TASK_RUNNING;
+    sched_class_ptr->enqueue(task);
+}
+
 // 重新调度任务
 void task_sched(void) {
     uint64_t flags = get_cpu_flags();
@@ -808,7 +836,7 @@ void task_submit_work(void (*func)(void *), void *data) {
     // 唤醒一个 worker
     struct task_struct *worker = worker_dequeue();
     if (worker) {
-        // TODO: 唤醒 worker 线程
+        task_wakeup(worker);
     }
 }
 
@@ -816,6 +844,7 @@ void task_submit_work(void (*func)(void *), void *data) {
 bool task_data_init(void) {
     lock_queue_init(&stopped_queue);
     lock_queue_init(&zombie_queue);
+    lock_queue_init(&sleep_queue);
 
     // 创建id映射，用于找到对应id的task，最大容量为TASK_ID_MAX
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
@@ -842,14 +871,15 @@ void task_init(void) {
 
     if (sched_class_ptr && sched_class_ptr->init) sched_class_ptr->init();
 
-    clockevent_handle_t clockevent = clockevent_get(NULL);
-    if (!clockevent) goto error;
+    // 为当前CPU分配调度定时器句柄
+    struct clockevent_timer *sched_timer = clockevent_timer_alloc();
+    if (!sched_timer) goto error;
+    
+    // 初始化定时器回调
+    clockevent_timer_init_callback(sched_timer, task_clock_event_handle, NULL);
+    smp_set_sched_timer(sched_timer);
 
     if (task_test) task_test();
-
-    smp_set_clockevent(clockevent);
-    clockevent_set_handler(clockevent, task_clock_event_handle);
-    clockevent_set_mode(clockevent, CLOCKEVENT_MODE_ONESHOT);
 
     TASK_PRINT("task init success\n");
 

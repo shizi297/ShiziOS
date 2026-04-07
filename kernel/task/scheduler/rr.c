@@ -110,8 +110,6 @@ void rr_sched_init(struct task_struct *task) {
 
 // 设置中断
 void rr_set_next_timer(struct task_struct *task) {
-    clockevent_handle_t clockevent = smp_get_clockevent();
-
     /*
      * 当前exec_ns就设置中断
      * 否则不设置
@@ -130,7 +128,8 @@ void rr_set_next_timer(struct task_struct *task) {
      * 所以自然会被重新设置为新任务的
      */
     if (!task->sched.exec_ns) {
-        clockevent_set_next(clockevent, task->sched.time_slice_ns); 
+        struct clockevent_timer *timer = smp_get_sched_timer();
+        clockevent_timer_add(timer, task->sched.time_slice_ns);
     }
 }
 

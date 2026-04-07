@@ -18,12 +18,50 @@ typedef enum {
     CLOCKEVENT_MODE_PERIODIC,   // 周期模式
 } clockevent_mode_t;
 
-/* 不透明句柄类型 */
 typedef struct clockevent_device* clockevent_handle_t;
 typedef struct clocksource_device* clocksource_handle_t;
+struct clockevent_timer;
 
 // 时钟事件框架初始化
 void clockevent_init(void);
+
+/**
+ * 初始化软件定时器队列
+ *
+ * 必须在时钟事件设备注册完成后调用
+ */
+bool clockevent_timer_init(void);
+
+/**
+ * 分配一个定时器句柄
+ *
+ * @return 成功返回定时器句柄，失败返回NULL
+ */
+struct clockevent_timer *clockevent_timer_alloc(void);
+
+/**
+ * 初始化定时器的回调函数
+ *
+ * @param timer 定时器句柄
+ * @param callback 超时回调函数
+ * @param data 回调参数
+ */
+void clockevent_timer_init_callback(struct clockevent_timer *timer, void (*callback)(void *), void *data);
+
+/**
+ * 释放一个定时器句柄
+ *
+ * @param timer 定时器句柄
+ */
+void clockevent_timer_free(struct clockevent_timer *timer);
+
+/**
+ * 添加/重新添加一个定时器
+ *
+ * @param timer 定时器句柄
+ * @param ns 相对超时时间（纳秒）
+ */
+void clockevent_timer_add(struct clockevent_timer *timer, uint64_t ns);
 
 /**
  * 获取时钟事件设备句柄
@@ -160,6 +198,13 @@ static inline void time_init(void) {
     clocksource_init();
     clockevent_init();
     TIME_PRINT("time init success");
+}
+
+// time数据初始化（必须在时钟事件设备注册完成后调用）
+static inline bool time_data_init(void) {
+    if (!clockevent_timer_init()) return false;
+    TIME_PRINT("time data init success");
+    return true;
 }
 
 /**

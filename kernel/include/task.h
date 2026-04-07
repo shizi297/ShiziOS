@@ -56,6 +56,12 @@ void task_wait(void);
 // 设置下一次中断
 void task_set_next_timer(void);
 
+// 让当前任务睡眠
+task_struct *task_sleep(bool interruptible);
+
+// 唤醒睡眠的任务
+void task_wakeup(task_struct *task);
+
 // 重新调度任务
 void task_sched(void);
 

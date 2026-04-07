@@ -288,6 +288,9 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         }
     }
 
+    // 初始化时间数据结构
+    if (!time_data_init()) SMP_PANIC("time data init failed\n");
+
     // 写入per_cpu用于获取时间戳
     uint64_t (*ts)(void) = &clocksource_default_read;
     smp_set_timestamp(ts);

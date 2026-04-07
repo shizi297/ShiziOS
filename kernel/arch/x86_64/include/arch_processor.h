@@ -15,6 +15,15 @@ struct idt_gate;
 
 #define IRQ_MIGRATION    35
 
+#define PROCESSOR_READ_GS(off) ({ \
+    uint64_t __val; \
+    __asm__ volatile("movq %%gs:%c1, %0" : "=r"(__val) : "i"(off)); \
+    __val; \
+})
+
+#define PROCESSOR_WRITE_GS(off, val) \
+    __asm__ volatile("movq %0, %%gs:%c1" : : "r"((uint64_t)(val)), "i"(off))
+
 /**
  * 设置当前CPU的栈指针
  * 

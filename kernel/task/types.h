@@ -58,8 +58,6 @@ typedef struct task_struct {
 
     task_state state;  // 任务当前的状态
 
-    void (*wakeup_cb)(struct task_struct *);    // 睡眠队列的回调函数
-
     struct signal_struct *signal;  // 信号相关
 
     struct pt_regs *regs;    // 存储中断/异常/系统调用/信号处理信息
