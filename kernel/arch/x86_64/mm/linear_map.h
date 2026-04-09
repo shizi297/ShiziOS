@@ -7,8 +7,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <mm/bootmem/bootmem.h>
-#include <mm_addr.h>
+#include <mm/bootmem.h>
+#include <asm/mm_addr.h>
 
 /* 8TB需要的1GB页数 */
 #define LINEAR_MAP_PAGES   (8ULL * 1024ULL)

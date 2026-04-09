@@ -4,10 +4,10 @@
  */
 
 #include <task/types.h>
-#include <serial.h>
+#include <asm/serial.h>
 #include <bootboot.h>
-#include <arch_processor.h>
-#include <smp.h>
+#include <asm/processor.h>
+#include <asm/smp.h>
 #include <task.h>
 
 #define TASK_TEST_PRINT(fmt, ...) \

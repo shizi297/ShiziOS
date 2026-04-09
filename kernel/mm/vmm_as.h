@@ -6,8 +6,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <mm/vmm/vmm_mmu.h>
-#include <mm/vmm/vmm_types.h>
+#include <mm/vmm_mmu.h>
+#include <mm/vmm_types.h>
 #include <spinlock.h>
 #include <list.h>
 #include <libtree.h>

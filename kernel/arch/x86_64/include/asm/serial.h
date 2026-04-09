@@ -6,8 +6,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <io.h>
-#include <arch_processor.h>
+#include <asm/io.h>
+#include <asm/processor.h>
 #include <spinlock.h>
 #include <stdarg.h>
 

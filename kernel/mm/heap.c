@@ -4,10 +4,10 @@
  */
 
 #include <stdint.h>
-#include <mm/pmm/buddy.h>
-#include <mm/pmm/pmm.h>
-#include <mm/bootmem/linear_map.h>
-#include <mm/vmm/vmm_map.h>
+#include <mm/buddy.h>
+#include <mm/pmm.h>
+#include <mm/linear_map.h>
+#include <mm/vmm_map.h>
 
 // 计算要分配的内存大小属于哪个order
 static inline uint8_t size_to_order(uint64_t size) {

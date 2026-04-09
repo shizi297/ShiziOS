@@ -21,11 +21,21 @@ Execute the following commands in the project root directory:
 
 ## Project Directory Structure
 - `include`: System header files
-- `kernel`: Kernel-related code
-- `kernel/include`: Kernel header files
-- `kernel/task`: Task management
-- `kernel/mm`: Memory management
-- `kernel/fs`: File system
+- `kernel`: Kernel main directory
+  - `kernel/include`: Kernel internal public header files
+  - `kernel/init`: Kernel initialization
+  - `kernel/arch/${ARCH}`: Architecture‑dependent code
+  - `kernel/arch/${ARCH}/include`: Architecture‑internal header files
+  - `kernel/arch/${ARCH}/include/asm`: Architecture‑specific headers provided to generic code
+  - `kernel/mm`: Generic memory management
+  - `kernel/task`: Task management
+  - `kernel/sync`: Synchronization primitives
+  - `kernel/ipc`: Inter‑process communication
+  - `kernel/time`: Time subsystem
+  - `kernel/lib`: Kernel utility library
+  - `kernel/drivers`: Device drivers
+  - `kernel/fs`: File system
+  - `kernel/test`: Testing module
 
 ## Project Home
 **Primary Development Platform: GitHub.**

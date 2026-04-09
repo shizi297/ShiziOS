@@ -92,6 +92,7 @@ add_subdirectory(kernel/time)              # 时间管理模块
 add_subdirectory(kernel/task)              # 任务管理模块
 add_subdirectory(kernel/init)              # 内核初始化模块
 add_subdirectory(kernel/ipc)               # IPC模块
+add_subdirectory(kernel/sync)              # 同步原语模块
 
 # 测试模块
 if(TEST)
@@ -115,6 +116,7 @@ set(LINK_LIBS
     kernel_time     
     kernel_task
     kernel_ipc
+    kernel_sync
 )
 
 if(TEST)

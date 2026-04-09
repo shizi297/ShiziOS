@@ -5,10 +5,10 @@
 
 #pragma once
 
-#include <mm/bootmem/linear_map.h>
-#include <mm/bootmem/boot_allot.h>
-#include <mm/pmm/buddy.h>
-#include <mm/vmm/vmm_map.h>
+#include <mm/linear_map.h>
+#include <mm/boot_allot.h>
+#include <mm/buddy.h>
+#include <mm/vmm_map.h>
 
 // 初始化内存管理
 static inline void memory_init(void) {

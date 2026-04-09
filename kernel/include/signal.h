@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <arch_processor.h>
+#include <asm/processor.h>
 #include <task.h>
 
 struct signal_struct;

@@ -6,8 +6,8 @@
 #pragma once
 
 #include <stdint.h>
-#include <mm/pmm/pmm.h>
-#include <mm/vmm/vmm_map.h>
+#include <mm/pmm.h>
+#include <mm/vmm_map.h>
 
 /**
  * 内核堆分配

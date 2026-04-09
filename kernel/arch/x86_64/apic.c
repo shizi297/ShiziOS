@@ -9,8 +9,8 @@
 #include <processor.h>
 #include <time.h>
 #include <bootboot.h>
-#include <smp.h>
-#include <io.h>
+#include <asm/smp.h>
+#include <asm/io.h>
 #include <heap.h>
 
 // 广播IPI的目标范围

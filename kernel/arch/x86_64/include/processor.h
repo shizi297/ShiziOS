@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <fault.h>
-#include <arch_processor.h>
+#include <asm/processor.h>
 #include <heap.h>
 #include <msr.h>
 

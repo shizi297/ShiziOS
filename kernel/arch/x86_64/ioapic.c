@@ -5,8 +5,8 @@
  
 #include <stdint.h>
 #include <acpi.h>
-#include <serial.h>
-#include <mm_addr.h>
+#include <asm/serial.h>
+#include <asm/mm_addr.h>
 #include <heap.h>
 #include <ioapic.h>
 

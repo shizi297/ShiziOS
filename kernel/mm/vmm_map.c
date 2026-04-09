@@ -7,11 +7,11 @@
 #include "vmm_map.h"
 #include "vmm_types.h"
 #include <heap.h>
-#include <mm/bootmem/linear_map.h>
-#include <mm/vmm/vmm_mmu.h>
+#include <mm/linear_map.h>
+#include <mm/vmm_mmu.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <serial.h>
+#include <asm/serial.h>
 #include <shizi/string.h>
  
 #define VMM_PANIC(fmt, ...) \

@@ -6,8 +6,8 @@
 #include "pmm.h"
 #include <stdint.h>
 #include <bootboot.h>
-#include <mm/bootmem/boot_allot.h>
-#include <serial.h>
+#include <mm/boot_allot.h>
+#include <asm/serial.h>
 #include <spinlock.h>
 #include <stddef.h>
 #include <list.h>

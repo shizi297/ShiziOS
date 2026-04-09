@@ -5,11 +5,11 @@
 
 #include <fault.h>
 #include <processor.h>
-#include <serial.h>
+#include <asm/serial.h>
 #include <apic.h>
 #include <time.h>
 #include <task.h>
-#include <smp.h>
+#include <asm/smp.h>
 
 #define IRQ_PRINT(fmt, ...) \
     printk("[IRQ] " fmt, ##__VA_ARGS__)

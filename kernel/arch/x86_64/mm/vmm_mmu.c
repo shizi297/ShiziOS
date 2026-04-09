@@ -8,8 +8,8 @@
 #include <heap.h>
 #include <shizi/uint4_512t.h>
 #include <stddef.h>
-#include <mm/vmm/vmm_as.h>
-#include <serial.h>
+#include <mm/vmm_as.h>
+#include <asm/serial.h>
 #include "vmm_mmu.h"
 
 static uintptr_t kernel_pgd = 0;

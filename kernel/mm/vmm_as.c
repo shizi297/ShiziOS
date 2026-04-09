@@ -5,7 +5,7 @@
 
 #include "vmm_as.h"
 #include <heap.h>
-#include <mm/bootmem/linear_map.h>
+#include <mm/linear_map.h>
 #include <list.h>
 #include <libtree.h>
 #include <shizi/string.h>

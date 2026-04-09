@@ -11,8 +11,8 @@
 #include <list.h>
 #include <bootboot.h>
 #include <heap.h>
-#include <serial.h>
-#include <smp.h>
+#include <asm/serial.h>
+#include <asm/smp.h>
 
 #define CLOCKSOURCE_INFO(name, hz) \
     printk("[CLOCKSOURCE] register clocksource : [\"name\" = \"%s\", \"hz\" = \"%llu\"]\n", name, hz)

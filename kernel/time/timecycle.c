@@ -4,7 +4,7 @@
  */
 
 #include <timecycle.h>
-#include <serial.h>
+#include <asm/serial.h>
 
 #define NSEC_PER_SEC 1000000000ULL
 #define MAX_SHIFT 32

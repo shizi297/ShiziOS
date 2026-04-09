@@ -4,16 +4,16 @@
  */
 
 #include <bootboot.h>
-#include <mm_addr.h>
+#include <asm/mm_addr.h>
 #include <heap.h>
-#include <serial.h>
+#include <asm/serial.h>
 #include <time.h>
 #include <spinlock.h>
 #include <timecycle.h> 
 #include <processor.h>
 #include <stdatomic.h>
-#include <smp.h>
-#include <io.h>
+#include <asm/smp.h>
+#include <asm/io.h>
 #include <shizi/string.h>
 #include <uacpi/kernel_api.h>
 

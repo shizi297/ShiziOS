@@ -3,8 +3,8 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#include "fault.h"
-#include <serial.h>
+#include "include/fault.h"
+#include <asm/serial.h>
 #include <processor.h>
 
 static void print_regs(const struct pt_regs *regs) {

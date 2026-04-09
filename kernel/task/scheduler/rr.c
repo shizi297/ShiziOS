@@ -4,7 +4,7 @@
  */
 
 #include <task/types.h>
-#include <smp.h>
+#include <asm/smp.h>
 #include <time.h>
 #include <timecycle.h>
 

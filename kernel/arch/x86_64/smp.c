@@ -3,13 +3,13 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#include <smp.h>
+#include <asm/smp.h>
 #include <processor.h>
 #include <bootboot.h>
 #include <heap.h>
 #include <stdint.h>
 #include <config.h>
-#include <serial.h>
+#include <asm/serial.h>
 #include <acpi.h>
 #include <pit.h>
 #include <ioapic.h>

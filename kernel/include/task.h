@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <arch_processor.h>
+#include <asm/processor.h>
 
 struct task_struct;
 typedef struct per_cpu_sched per_cpu_sched;

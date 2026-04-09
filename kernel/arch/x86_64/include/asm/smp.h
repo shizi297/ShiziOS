@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 #include <task.h>
-#include <arch_processor.h>
+#include <asm/processor.h>
 #include <time.h>
 #include <bootboot.h>
 #include <list.h>

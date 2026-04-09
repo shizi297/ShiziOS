@@ -21,11 +21,21 @@ ShiziOS 是一个轻量级的操作系统。目前仅支持 x86_64 架构，使�
 
 ## 项目目录说明
 - `include`：系统头文件
-- `kernel`：内核相关
-- `kernel/include`：内核头文件
-- `kernel/task`：任务管理
-- `kernel/mm`：内存管理
-- `kernel/fs`：文件系统
+- `kernel`：内核主目录
+  - `kernel/include`：内核内部公共头文件
+  - `kernel/init`：内核初始化
+  - `kernel/arch/${ARCH}`：架构相关代码
+  - `kernel/arch/${ARCH}/include`：架构内部头文件
+  - `kernel/arch/${ARCH}/include/asm`：架构相关提供给通用的头文件
+  - `kernel/mm`：通用内存管理
+  - `kernel/task`：任务管理
+  - `kernel/sync`：同步原语
+  - `kernel/ipc`：进程间通信
+  - `kernel/time`：时间子系统
+  - `kernel/lib`：内核库函数
+  - `kernel/drivers`：设备驱动
+  - `kernel/fs`：文件系统
+  - `kernel/test`：测试模块
 
 ## 项目主页
 **主要开发平台：GitHub。**

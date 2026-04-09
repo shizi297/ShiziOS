@@ -4,10 +4,10 @@
  */
 
 #include <mm/init.h>
-#include <smp.h>
-#include <arch_processor.h>
+#include <asm/smp.h>
+#include <asm/processor.h>
 #include <kernel.h>
-#include <serial.h>  
+#include <asm/serial.h>  
 #include <time.h>
 #include <config.h>
 

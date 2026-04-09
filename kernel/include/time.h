@@ -7,7 +7,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <serial.h>
+#include <asm/serial.h>
 
 #define TIME_PRINT(str) \
     serial_puts("[TIME]" str "\n")

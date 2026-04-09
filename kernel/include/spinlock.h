@@ -7,7 +7,7 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
-#include <arch_processor.h>
+#include <asm/processor.h>
 
 // 自旋锁结构
 typedef struct {

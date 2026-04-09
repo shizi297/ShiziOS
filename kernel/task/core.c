@@ -8,17 +8,17 @@
 #include <stdbool.h>
 #include <list.h>
 #include <task.h>
-#include <smp.h>
+#include <asm/smp.h>
 #include <bootboot.h>
 #include <heap.h>
 #include <signal.h>
 #include <timecycle.h>
-#include <arch_processor.h>
+#include <asm/processor.h>
 #include <config.h>
 #include <bitmap.h>
 #include <libtree.h>
 #include <dynarr.h>
-#include <serial.h>
+#include <asm/serial.h>
 #include <stdatomic.h>
 
 #define TASK_PRINT(fmt, ...) \

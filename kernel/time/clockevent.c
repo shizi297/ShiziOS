@@ -9,8 +9,8 @@
 #include <stdbool.h>
 #include <shizi/string.h>
 #include <bootboot.h>
-#include <serial.h>
-#include <smp.h>
+#include <asm/serial.h>
+#include <asm/smp.h>
 #include <list.h>
 #include <heap.h>
 

@@ -11,7 +11,7 @@
 #include <apic.h>
 
 #define SERIAL_FILE_INIT
-#include <serial.h>
+#include <asm/serial.h>
 
 #define BOOTKERNEL_PRINT(fmt, ...) \
     printk("[BOOTKERNEL] " fmt, ##__VA_ARGS__)

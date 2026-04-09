@@ -5,10 +5,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <io.h>
+#include <asm/io.h>
 #include <time.h>           
 #include <processor.h>    
-#include <smp.h>   
+#include <asm/smp.h>   
 #include <ioapic.h>
 #include <apic.h>
 

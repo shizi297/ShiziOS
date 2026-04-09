@@ -7,8 +7,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <mm/vmm/vmm_types.h>
-#include <mm/bootmem/linear_map.h>
+#include <mm/vmm_types.h>
+#include <mm/linear_map.h>
 
 /*
  * x86_64页表条目（PTE）标志位定义
