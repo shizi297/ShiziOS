@@ -9,6 +9,7 @@
 #include <list.h>
 #include <libtree.h>
 #include <heap.h>
+#include <rcu.h>
 
 // 用于线程id与线程组id
 typedef int task_id; 
@@ -52,11 +53,13 @@ typedef struct task_struct {
     id_t pid;  // 线程id，每个线程有一个
     id_t tgid; // 线程组id，每个进程有一个，同一进程的线程共享
 
+    rcu_task_struct rcu;  // RCU相关
+
+    task_state state;  // 任务当前的状态
+
     as_t *as;    // 进程地址空间描述符，线程间共享
 
     void *stack; // 内核栈指针
-
-    task_state state;  // 任务当前的状态
 
     struct signal_struct *signal;  // 信号相关
 

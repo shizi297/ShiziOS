@@ -6,11 +6,13 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 #include <task.h>
 #include <asm/processor.h>
 #include <time.h>
 #include <bootboot.h>
 #include <list.h>
+#include <rcu.h>
 
 struct sched_class;
 
@@ -45,23 +47,27 @@ typedef struct {
     // 用于在中断返回时判断是否需要重新调度
     uint64_t need_sched;
 
+    // RCU 每 CPU 数据指针
+    struct per_cpu_rcu *rcu_ptr;
+
     // 用于任务迁移
     struct list_head migration;
 } __attribute__((aligned(64))) per_cpu;
 
 enum per_cpu_offset {
-    PER_CPU_TIMESTAMP_OFFSET    = 0,
-    PER_CPU_CURRENT_OFFSET      = 8,
-    PER_CPU_SCHED_OFFSET        = 16,
-    PER_CPU_LOGICAL_ID_OFFSET   = 24,
-    PER_CPU_IDLE_OFFSET         = 32,
-    PER_CPU_CANCRY_OFFSET       = 40,
-    PER_CPU_LAST_NS_OFFSET      = 48,
-    PER_CPU_CURRENT_NS_OFFSET   = 56,
-    PER_CPU_NR_RUNNING_OFFSET   = 64,
-    PER_CPU_CLOCKEVENT_OFFSET   = 72,
-    PER_CPU_SCHED_TIMER_OFFSET  = 80,
-    PER_CPU_NEED_SCHED_OFFSET   = 88,
+    PER_CPU_TIMESTAMP_OFFSET    = offsetof(per_cpu, timestamp),
+    PER_CPU_CURRENT_OFFSET      = offsetof(per_cpu, current),
+    PER_CPU_SCHED_OFFSET        = offsetof(per_cpu, sched),
+    PER_CPU_LOGICAL_ID_OFFSET   = offsetof(per_cpu, logical_id),
+    PER_CPU_IDLE_OFFSET         = offsetof(per_cpu, idle),
+    PER_CPU_CANCRY_OFFSET       = offsetof(per_cpu, cancry),
+    PER_CPU_LAST_NS_OFFSET      = offsetof(per_cpu, last_ns),
+    PER_CPU_CURRENT_NS_OFFSET   = offsetof(per_cpu, current_ns),
+    PER_CPU_NR_RUNNING_OFFSET   = offsetof(per_cpu, nr_running),
+    PER_CPU_CLOCKEVENT_OFFSET   = offsetof(per_cpu, clockevent),
+    PER_CPU_SCHED_TIMER_OFFSET  = offsetof(per_cpu, sched_timer),
+    PER_CPU_NEED_SCHED_OFFSET   = offsetof(per_cpu, need_sched),
+    PER_CPU_RCU_PTR_OFFSET      = offsetof(per_cpu, rcu_ptr),
 };
 
 /*
@@ -257,4 +263,9 @@ static inline struct list_head *smp_get_migration(void) {
 static inline struct list_head *smp_get_cpu_migration(uint64_t logical_id) {
     extern per_cpu *per_cpu_ptr;
     return &per_cpu_ptr[logical_id].migration;
+}
+
+// 获取当前 CPU 的 RCU 每 CPU 数据指针
+static inline struct per_cpu_rcu *smp_get_rcu(void) {
+    return (struct per_cpu_rcu *)PROCESSOR_READ_GS(PER_CPU_RCU_PTR_OFFSET);
 }

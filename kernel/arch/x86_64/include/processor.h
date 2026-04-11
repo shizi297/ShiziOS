@@ -218,8 +218,3 @@ static inline uint64_t rdtsc(void) {
     asm volatile ("lfence; rdtsc" : "=a"(lo), "=d"(hi) :: "memory");
     return ((uint64_t)hi << 32) | lo;
 }
-
-// 内存屏障
-static inline void barrier(void) {
-    __asm__ volatile ("" ::: "memory");
-}

@@ -19,14 +19,6 @@ typedef struct mutex {
     spinlock_t wait_lock;           // 保护等待队列的自旋锁
 } mutex_t;
 
-// 静态初始化宏
-#define MUTEX_INIT { \
-    .state = 0,       \
-    .owner = NULL,    \
-    .wait_list = LIST_HEAD_INIT(((mutex_t){0}).wait_list), \
-    .wait_lock = SPIN_LOCK_INIT \
-}
-
 // 初始化互斥锁
 static inline void mutex_init(mutex_t *m) {
     atomic_init(&m->state, 0);

@@ -20,6 +20,7 @@
 #include <dynarr.h>
 #include <asm/serial.h>
 #include <stdatomic.h>
+#include <rcu.h>
 
 #define TASK_PRINT(fmt, ...) \
     printk("[TASK]" fmt, ##__VA_ARGS__)
@@ -573,6 +574,7 @@ task_struct *task_copy(struct task_struct *task, task_flags flags) {
 
     // 添加到映射表
     dynarr_set(id_map, new_task->pid, &new_task);
+    rcu_task_init(&new_task->rcu);
 
     return new_task;
 
@@ -676,6 +678,7 @@ task_struct *task_create_kernel_thread(void (*func)(void *), void *arg) {
 
     // 添加到 id 映射表
     dynarr_set(id_map, pid, &task);
+    rcu_task_init(&task->rcu);
 
     return task;
 
@@ -718,6 +721,11 @@ void task_set_next_timer(void) {
     sched_class_ptr->set_next_timer(smp_get_task_current());
 }
 
+// 获取当前任务的 RCU 结构体指针
+rcu_task_struct *task_get_current_rcu(void) {
+    return &smp_get_task_current()->rcu;
+}
+
 // 让当前任务睡眠
 task_struct *task_sleep(bool interruptible) {
     task_struct *current = smp_get_task_current();
@@ -750,6 +758,8 @@ void task_sched(void) {
     struct task_struct *prev = smp_get_task_current();
     if (!prev)
         goto out;
+
+    rcu_note_context_switch(&prev->rcu);
 
     if (prev->state == TASK_RUNNING && prev != smp_get_idle())
         sched_class_ptr->enqueue(prev);

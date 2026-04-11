@@ -50,7 +50,7 @@ if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
 endif()
 
 # 基础编译选项（所有模式共用）
-set(BASE_FLAGS "-std=gnu11 -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel -mgeneral-regs-only -fno-omit-frame-pointer")
+set(BASE_FLAGS "-std=gnu11 -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel -mgeneral-regs-only -fno-omit-frame-pointer -fno-strict-aliasing")
 
 # 栈保护标志
 if(STACK)
@@ -159,6 +159,7 @@ endif()
 add_custom_target(run
     DEPENDS img
     COMMAND qemu-system-x86_64 
+        -machine q35
         -bios /usr/share/ovmf/OVMF.fd 
         -drive file=${CMAKE_SOURCE_DIR}/disk/shizios.img,format=raw,if=virtio 
         -m 2G 
@@ -186,6 +187,7 @@ add_custom_target(ram-img
 add_custom_target(ram-run
     DEPENDS ram-img
     COMMAND qemu-system-x86_64 
+        -machine q35
         -bios /usr/share/ovmf/OVMF.fd 
         -drive file=/dev/shm/shizios/shizios.img,format=raw,if=virtio 
         -m 2G 

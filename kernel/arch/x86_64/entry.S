@@ -3,7 +3,7 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#include "fault.h"
+#include <fault.h>
 
 .altmacro
 

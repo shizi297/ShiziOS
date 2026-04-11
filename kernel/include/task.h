@@ -9,6 +9,7 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <asm/processor.h>
+#include <rcu.h>
 
 struct task_struct;
 typedef struct per_cpu_sched per_cpu_sched;
@@ -55,6 +56,9 @@ void task_wait(void);
 
 // 设置下一次中断
 void task_set_next_timer(void);
+
+// 获取当前任务的 RCU 结构体指针
+rcu_task_struct *task_get_current_rcu(void);
 
 // 让当前任务睡眠
 task_struct *task_sleep(bool interruptible);

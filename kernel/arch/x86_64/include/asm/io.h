@@ -9,76 +9,60 @@
 
 #define IO_WAIT_PORT 0x80
 
-static inline void io_barrier(void) {
-    asm volatile ("" : : : "memory");
-}
-
 static inline void io_wait(void) {
-    asm volatile ("outb %%al, $0x80" : : "a"(0));
+    asm volatile ("outb %%al, $0x80" : : "a"(0) : "memory");
 }
 
 static inline void outb(uint16_t port, uint8_t value) {
-    asm volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
-    io_barrier();
+    asm volatile ("outb %0, %1" : : "a"(value), "Nd"(port) : "memory");
 }
 
 static inline uint8_t inb(uint16_t port) {
     uint8_t ret;
-    asm volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    io_barrier();
+    asm volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port) : "memory");
     return ret;
 }
 
 static inline void outw(uint16_t port, uint16_t value) {
-    asm volatile ("outw %0, %1" : : "a"(value), "Nd"(port));
-    io_barrier();
+    asm volatile ("outw %0, %1" : : "a"(value), "Nd"(port) : "memory");
 }
 
 static inline uint16_t inw(uint16_t port) {
     uint16_t ret;
-    asm volatile ("inw %1, %0" : "=a"(ret) : "Nd"(port));
-    io_barrier();
+    asm volatile ("inw %1, %0" : "=a"(ret) : "Nd"(port) : "memory");
     return ret;
 }
 
 static inline void outl(uint16_t port, uint32_t value) {
-    asm volatile ("outl %0, %1" : : "a"(value), "Nd"(port));
-    io_barrier();
+    asm volatile ("outl %0, %1" : : "a"(value), "Nd"(port) : "memory");
 }
 
 static inline uint32_t inl(uint16_t port) {
     uint32_t ret;
-    asm volatile ("inl %1, %0" : "=a"(ret) : "Nd"(port));
-    io_barrier();
+    asm volatile ("inl %1, %0" : "=a"(ret) : "Nd"(port) : "memory");
     return ret;
 }
 
 static inline void insb(uint16_t port, void* buffer, uint32_t count) {
     asm volatile ("cld; rep insb" : "+D"(buffer), "+c"(count) : "d"(port) : "memory");
-    io_barrier();
 }
 
 static inline void insw(uint16_t port, void* buffer, uint32_t count) {
     asm volatile ("cld; rep insw" : "+D"(buffer), "+c"(count) : "d"(port) : "memory");
-    io_barrier();
 }
 
 static inline void insl(uint16_t port, void* buffer, uint32_t count) {
     asm volatile ("cld; rep insl" : "+D"(buffer), "+c"(count) : "d"(port) : "memory");
-    io_barrier();
 }
 
 static inline void outsb(uint16_t port, const void* buffer, uint32_t count) {
     asm volatile ("cld; rep outsb" : "+S"(buffer), "+c"(count) : "d"(port) : "memory");
-    io_barrier();
 }
 
 static inline void outsw(uint16_t port, const void* buffer, uint32_t count) {
     asm volatile ("cld; rep outsw" : "+S"(buffer), "+c"(count) : "d"(port) : "memory");
-    io_barrier();
 }
 
 static inline void outsl(uint16_t port, const void* buffer, uint32_t count) {
     asm volatile ("cld; rep outsl" : "+S"(buffer), "+c"(count) : "d"(port) : "memory");
-    io_barrier();
 }

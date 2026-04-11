@@ -3,8 +3,8 @@
  * SPDX-FileCopyrightText: 2025 shizi <https://github.com/shizi297>
  */
 
-#include "include/processor.h"
-#include "include/fault.h"
+#include <processor.h>
+#include <fault.h>
 
 extern uint64_t irq_entry_table[256];
 

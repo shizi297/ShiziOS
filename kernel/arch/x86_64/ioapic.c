@@ -33,11 +33,11 @@
 #define IOAPIC_POLARITY_BIT 13
 #define IOAPIC_TRIG_BIT 15
 
-struct {
+static struct {
     uintptr_t base;
     uint32_t start_gsi;
     uint32_t gsi_count;
-} static ioapic_info = {0};
+} ioapic_info = {0};
 
 /**
  * 向ioapic的内部寄存器写入32位值
