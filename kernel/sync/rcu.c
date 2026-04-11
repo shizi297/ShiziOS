@@ -37,7 +37,7 @@ struct rcu_state {
     atomic_uint_least64_t completed; // 已完成的最新宽限期世代号（纯世代，无状态位）
     spinlock_t lock;                 // 保护全局状态变更的自旋锁
     uint32_t cpu_count;              // 在线 CPU 总数
-    uint64_t qs_mask[];              // 位掩码，记录尚未报告 QS 的 CPU（柔性数组）
+    uint64_t qs_mask[];              // 位掩码，记录尚未报告 QS 的 CPU
 };
 
 static struct rcu_state *rcu_state;
@@ -71,13 +71,11 @@ static mutex_t rcu_barrier_mutex;
 
 // 获取当前任务的 RCU 数据
 static inline rcu_task_struct *_rcu_current_task(void) {
-    extern rcu_task_struct *task_get_current_rcu(void);
     return task_get_current_rcu();
 }
 
 // 获取当前 CPU 的 per_cpu_rcu 数据
 static inline struct per_cpu_rcu *_rcu_this_cpu(void) {
-    extern struct per_cpu_rcu *smp_get_rcu(void);
     return smp_get_rcu();
 }
 
@@ -109,11 +107,13 @@ static void _rcu_report_qs(void) {
     pcpu->gp_seq = atomic_load(&rcu_state->gp_seq);
 
     // 检查是否所有 CPU 均已报告
+    atomic_thread_fence(memory_order_acquire);
     uint32_t first_set = bitmap_find((bitmap_t *)rcu_state->qs_mask, rcu_state->cpu_count, 0, 1);
     if (first_set == rcu_state->cpu_count) {
-        spin_lock(&rcu_state->lock);
+        uint64_t flags;
+        spin_lock_irqsave(&rcu_state->lock, flags);
         _rcu_complete_gp_locked();
-        spin_unlock(&rcu_state->lock);
+        spin_unlock_irqrestore(&rcu_state->lock, flags);
     }
 }
 
@@ -228,6 +228,7 @@ static void _rcu_reset_qs_mask_locked(void) {
 // 检查并启动新宽限期
 static void _rcu_check_gp_start(void) {
     uint64_t gp_seq = atomic_load(&rcu_state->gp_seq);
+    uint64_t flags;
 
     // 仅当系统空闲且本 CPU 有待处理回调时才启动
     if ((gp_seq & RCU_STATE_MASK) != RCU_GP_IDLE) return;
@@ -236,7 +237,7 @@ static void _rcu_check_gp_start(void) {
     if (list_empty(&pcpu->cb_list)) return;
 
     // 持全局锁，再次检查状态并完成宽限期启动
-    spin_lock(&rcu_state->lock);
+    spin_lock_irqsave(&rcu_state->lock, flags);
     gp_seq = atomic_load(&rcu_state->gp_seq);
     if ((gp_seq & RCU_STATE_MASK) == RCU_GP_IDLE) {
         // 递增世代，状态置为进行中
@@ -246,7 +247,7 @@ static void _rcu_check_gp_start(void) {
         // 初始化位图：所有 CPU 均未报告
         _rcu_reset_qs_mask_locked();
     }
-    spin_unlock(&rcu_state->lock);
+    spin_unlock_irqrestore(&rcu_state->lock, flags);
 
     // 当前 CPU 立即设置本地标志并尝试报告
     _rcu_check_gp_local();
@@ -272,16 +273,17 @@ static void _rcu_check_barrier(void) {
 void rcu_read_lock(void) {
     rcu_task_struct *rcu = _rcu_current_task();
     atomic_fetch_add_explicit(&rcu->nesting, 1, memory_order_relaxed);
+    atomic_signal_fence(memory_order_acq_rel);
 }
 
 // 退出读临界区
 void rcu_read_unlock(void) {
     rcu_task_struct *rcu = _rcu_current_task();
 
+    atomic_thread_fence(memory_order_release);
     if (atomic_fetch_sub_explicit(&rcu->nesting, 1, memory_order_relaxed) == 1) {
         uint64_t gp_seq = atomic_load_explicit(&rcu_state->gp_seq, memory_order_acquire);
 
-        // 世代号落后说明在读临界区期间有宽限期推进，需报告 QS
         if ((rcu->gp_seq ^ gp_seq) & RCU_SEQ_MASK) {
             rcu->gp_seq = gp_seq;
             _rcu_report_qs();
@@ -328,7 +330,7 @@ void rcu_call(struct rcu_head *head, void (*func)(struct rcu_head *)) {
 
     // 若当前无活跃宽限期，启动新宽限期
     if ((gp_seq & RCU_STATE_MASK) == RCU_GP_IDLE) {
-        spin_lock(&rcu_state->lock);
+        spin_lock_irqsave(&rcu_state->lock, flags);
         gp_seq = atomic_load(&rcu_state->gp_seq);
         if ((gp_seq & RCU_STATE_MASK) == RCU_GP_IDLE) {
             uint64_t new_gp_seq = (gp_seq & RCU_SEQ_MASK) + 4 | RCU_GP_ONGOING;
@@ -336,7 +338,7 @@ void rcu_call(struct rcu_head *head, void (*func)(struct rcu_head *)) {
 
             _rcu_reset_qs_mask_locked();
         }
-        spin_unlock(&rcu_state->lock);
+        spin_unlock_irqrestore(&rcu_state->lock, flags);
 
         // 当前 CPU 立即设置本地标志并尝试报告
         _rcu_check_gp_local();
