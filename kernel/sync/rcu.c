@@ -23,29 +23,30 @@
 
 // 每 CPU RCU 数据
 struct per_cpu_rcu {
-    struct list_head cb_list;    // 回调链表头
-    uint64_t gp_seq;             // 本 CPU 最后报告 QS 时记录的全局宽限期序列号
-    uint64_t pending_gp_seq;     // 本 CPU 回调链表中最早的回调世代号，UINT64_MAX 表示空链表
-    spinlock_t lock;             // 保护本 CPU 回调链表的自旋锁
-    bool qs_pending;             // 本 CPU 是否欠当前宽限期一个 QS 报告
-    uint32_t barrier_generation; // 本 CPU 已处理的屏障请求世代号
+    struct list_head cb_list;       // 回调链表头
+    uint64_t gp_seq;                // 本 CPU 最后报告 QS 时记录的全局宽限期序列号
+    uint64_t pending_gp_seq;        // 本 CPU 回调链表中最早的回调世代号，UINT64_MAX 表示空链表
+    spinlock_t lock;                // 保护本 CPU 回调链表的自旋锁
+    bool qs_pending;                // 本 CPU 是否欠当前宽限期一个 QS 报告
+    uint32_t barrier_generation;    // 本 CPU 已处理的屏障请求世代号
+    atomic_uint_least32_t cpu_nesting; // 本 CPU 上所有任务的读临界区嵌套计数总和
 };
 
 // 全局 RCU 状态
 struct rcu_state {
     atomic_uint_least64_t gp_seq;   // 全局宽限期序列号，低 2 位状态，高位世代号
     atomic_uint_least64_t completed; // 已完成的最新宽限期世代号（纯世代，无状态位）
-    spinlock_t lock;                 // 保护全局状态变更的自旋锁
-    uint32_t cpu_count;              // 在线 CPU 总数
-    uint64_t qs_mask[];              // 位掩码，记录尚未报告 QS 的 CPU
+    spinlock_t lock;                // 保护全局状态变更的自旋锁
+    uint32_t cpu_count;             // 在线 CPU 总数
+    uint64_t qs_mask[];             // 位掩码，记录尚未报告 QS 的 CPU
 };
 
 static struct rcu_state *rcu_state;
 
 // 回调处理工作项
 struct rcu_work {
-    struct list_head list;       // 待处理的回调链表头
-    struct per_cpu_rcu *pcpu;    // 回调所属的 CPU 数据
+    struct list_head list;          // 待处理的回调链表头
+    struct per_cpu_rcu *pcpu;       // 回调所属的 CPU 数据
 };
 
 // 状态位编码
@@ -82,6 +83,7 @@ static inline struct per_cpu_rcu *_rcu_this_cpu(void) {
 // 宽限期完成逻辑，调用者必须持有 rcu_state->lock
 static void _rcu_complete_gp_locked(void) {
     uint64_t cur_gp_seq = atomic_load(&rcu_state->gp_seq);
+
     if ((cur_gp_seq & RCU_STATE_MASK) != RCU_GP_ONGOING) return;
 
     // 提取当前世代号存入 completed，并将 gp_seq 置为下一代空闲状态
@@ -90,31 +92,33 @@ static void _rcu_complete_gp_locked(void) {
     atomic_store(&rcu_state->gp_seq, (completed_gen + 1) << 2);
 }
 
-// 报告当前 CPU 经历了一次静止状态
+// 报告当前 CPU 经历了一次静止状态，调用者不持锁
 static void _rcu_report_qs(void) {
     struct per_cpu_rcu *pcpu = _rcu_this_cpu();
     uint32_t id = get_logical_id();
+    uint64_t flags;
+
+    spin_lock_irqsave(&rcu_state->lock, &flags);
 
     // 检查本 CPU 是否欠 QS 报告
-    if (!pcpu->qs_pending) return;
+    if (!pcpu->qs_pending) {
+        spin_unlock_irqrestore(&rcu_state->lock, flags);
+        return;
+    }
 
-    // 使用 bitmap 清除对应位，并插入释放屏障保证可见性
+    // 清除位掩码中对应位
     bitmap_clear((bitmap_t *)rcu_state->qs_mask, id);
-    atomic_thread_fence(memory_order_release);
 
     // 更新本地标志和世代号
     pcpu->qs_pending = false;
     pcpu->gp_seq = atomic_load(&rcu_state->gp_seq);
 
-    // 检查是否所有 CPU 均已报告
-    atomic_thread_fence(memory_order_acquire);
+    // 检查是否所有 CPU 均已报告，若全零则完成宽限期
     uint32_t first_set = bitmap_find((bitmap_t *)rcu_state->qs_mask, rcu_state->cpu_count, 0, 1);
-    if (first_set == rcu_state->cpu_count) {
-        uint64_t flags;
-        spin_lock_irqsave(&rcu_state->lock, flags);
-        _rcu_complete_gp_locked();
-        spin_unlock_irqrestore(&rcu_state->lock, flags);
-    }
+
+    if (first_set == rcu_state->cpu_count) _rcu_complete_gp_locked();
+
+    spin_unlock_irqrestore(&rcu_state->lock, flags);
 }
 
 // 处理当前 CPU 到期的回调
@@ -131,6 +135,7 @@ static void _rcu_do_callbacks(void *data) {
     list_for_each_safe(pos, tmp, &work->list) {
         struct rcu_head *curr = list_entry(pos, struct rcu_head, node);
         list_del(pos);
+
         if (curr->gp_seq <= completed) {
             // 到期回调，释放锁后执行
             spin_unlock_irqrestore(&pcpu->lock, flags);
@@ -139,8 +144,8 @@ static void _rcu_do_callbacks(void *data) {
         } else {
             // 未到期，头插回原链表并更新最小世代号
             list_add(&curr->node, &pcpu->cb_list);
-            if (curr->gp_seq < pcpu->pending_gp_seq)
-                pcpu->pending_gp_seq = curr->gp_seq;
+
+            if (curr->gp_seq < pcpu->pending_gp_seq) pcpu->pending_gp_seq = curr->gp_seq;
         }
     }
 
@@ -162,11 +167,13 @@ static void _rcu_submit_callbacks(struct per_cpu_rcu *pcpu) {
 
     // 持锁摘下链表
     spin_lock_irqsave(&pcpu->lock, &flags);
+
     if (list_empty(&pcpu->cb_list)) {
         spin_unlock_irqrestore(&pcpu->lock, flags);
         kheap_free(work);
         return;
     }
+
     list_splice_init(&pcpu->cb_list, &tmp_list);
     pcpu->pending_gp_seq = UINT64_MAX;
     spin_unlock_irqrestore(&pcpu->lock, flags);
@@ -179,8 +186,7 @@ static void _rcu_submit_callbacks(struct per_cpu_rcu *pcpu) {
 
 // 屏障回调，由 rcu_barrier 内部使用
 static void _rcu_barrier_callback(struct rcu_head *head) {
-    if (atomic_fetch_sub(&rcu_barrier_count, 1) == 1)
-        task_wakeup(rcu_barrier_waiter);
+    if (atomic_fetch_sub(&rcu_barrier_count, 1) == 1) task_wakeup(rcu_barrier_waiter);
 
     kheap_free(head);
 }
@@ -191,32 +197,34 @@ static void _rcu_check_qs(void) {
 
     if (
         pcpu->qs_pending &&
-        !atomic_load_explicit(&_rcu_current_task()->nesting, memory_order_relaxed)
+        !atomic_load_explicit(&pcpu->cpu_nesting, memory_order_acquire)
     ) _rcu_report_qs();
 }
 
 // 检查并提交到期回调
 static void _rcu_check_callbacks(void) {
     struct per_cpu_rcu *pcpu = _rcu_this_cpu();
+
     if (!list_empty(&pcpu->cb_list)) {
         uint64_t completed = atomic_load_explicit(&rcu_state->completed, memory_order_acquire);
-        if (pcpu->pending_gp_seq <= completed)
-            _rcu_submit_callbacks(pcpu);
+
+        if (pcpu->pending_gp_seq <= completed) _rcu_submit_callbacks(pcpu);
     }
 }
 
 // 检查并处理宽限期启动所需的本地 qs_pending 设置
 static void _rcu_check_gp_local(void) {
     uint64_t gp_seq = atomic_load(&rcu_state->gp_seq);
+
     if ((gp_seq & RCU_STATE_MASK) != RCU_GP_ONGOING) return;
 
     struct per_cpu_rcu *pcpu = _rcu_this_cpu();
+
     if (!pcpu->qs_pending) {
         pcpu->qs_pending = true;
 
-        // 设置后立即尝试报告，若当前任务不在临界区则直接完成
-        if (!atomic_load_explicit(&_rcu_current_task()->nesting, memory_order_relaxed))
-            _rcu_report_qs();
+        // 设置后立即尝试报告，若当前 CPU 上无读临界区则直接完成
+        if (!atomic_load_explicit(&pcpu->cpu_nesting, memory_order_relaxed)) _rcu_report_qs();
     }
 }
 
@@ -234,11 +242,13 @@ static void _rcu_check_gp_start(void) {
     if ((gp_seq & RCU_STATE_MASK) != RCU_GP_IDLE) return;
 
     struct per_cpu_rcu *pcpu = _rcu_this_cpu();
+
     if (list_empty(&pcpu->cb_list)) return;
 
     // 持全局锁，再次检查状态并完成宽限期启动
-    spin_lock_irqsave(&rcu_state->lock, flags);
+    spin_lock_irqsave(&rcu_state->lock, &flags);
     gp_seq = atomic_load(&rcu_state->gp_seq);
+
     if ((gp_seq & RCU_STATE_MASK) == RCU_GP_IDLE) {
         // 递增世代，状态置为进行中
         uint64_t new_gp_seq = (gp_seq & RCU_SEQ_MASK) + 4 | RCU_GP_ONGOING;
@@ -269,25 +279,70 @@ static void _rcu_check_barrier(void) {
     }
 }
 
+// 任务迁移时的 RCU 状态转移
+void rcu_migrate_task(rcu_task_struct *rcu, uint32_t src_cpu, uint32_t dst_cpu) {
+    uint32_t nest = atomic_load_explicit(&rcu->nesting, memory_order_relaxed);
+
+    if (!nest) return;
+
+    uint64_t flags;
+    spin_lock_irqsave(&rcu_state->lock, &flags);
+
+    struct per_cpu_rcu *dst_pcpu = smp_get_cpu_rcu(dst_cpu);
+
+    // 处理目标 CPU：若原本无读锁，则需撤销其静止状态
+    if (!atomic_load_explicit(&dst_pcpu->cpu_nesting, memory_order_relaxed)) {
+        dst_pcpu->qs_pending = true;
+        bitmap_set((bitmap_t *)rcu_state->qs_mask, dst_cpu);
+    }
+
+    atomic_fetch_add_explicit(&dst_pcpu->cpu_nesting, nest, memory_order_relaxed);
+
+    // 处理源 CPU
+    struct per_cpu_rcu *src_pcpu = smp_get_cpu_rcu(src_cpu);
+    atomic_fetch_sub_explicit(&src_pcpu->cpu_nesting, nest, memory_order_relaxed);
+
+    spin_unlock_irqrestore(&rcu_state->lock, flags);
+}
+
 // 进入读临界区
 void rcu_read_lock(void) {
     rcu_task_struct *rcu = _rcu_current_task();
+    struct per_cpu_rcu *pcpu = _rcu_this_cpu();
+
     atomic_fetch_add_explicit(&rcu->nesting, 1, memory_order_relaxed);
-    atomic_signal_fence(memory_order_acq_rel);
+
+    uint32_t old = atomic_fetch_add_explicit(&pcpu->cpu_nesting, 1, memory_order_acquire);
+
+    // 若 cpu_nesting 从 0 变为 1 且当前有进行中宽限期，则撤销本 CPU 的静止状态
+    if (!old) {
+        uint64_t gp_seq = atomic_load_explicit(&rcu_state->gp_seq, memory_order_acquire);
+
+        if ((gp_seq & RCU_STATE_MASK) == RCU_GP_ONGOING) {
+            uint64_t flags;
+            spin_lock_irqsave(&rcu_state->lock, &flags);
+
+            if (!pcpu->qs_pending) {
+                pcpu->qs_pending = true;
+                bitmap_set((bitmap_t *)rcu_state->qs_mask, get_logical_id());
+            }
+
+            spin_unlock_irqrestore(&rcu_state->lock, flags);
+        }
+    }
 }
 
 // 退出读临界区
 void rcu_read_unlock(void) {
     rcu_task_struct *rcu = _rcu_current_task();
+    struct per_cpu_rcu *pcpu = _rcu_this_cpu();
 
-    atomic_thread_fence(memory_order_release);
+    atomic_fetch_sub_explicit(&pcpu->cpu_nesting, 1, memory_order_release);
+
     if (atomic_fetch_sub_explicit(&rcu->nesting, 1, memory_order_relaxed) == 1) {
         uint64_t gp_seq = atomic_load_explicit(&rcu_state->gp_seq, memory_order_acquire);
 
-        if ((rcu->gp_seq ^ gp_seq) & RCU_SEQ_MASK) {
-            rcu->gp_seq = gp_seq;
-            _rcu_report_qs();
-        }
+        if ((rcu->gp_seq ^ gp_seq) & RCU_SEQ_MASK) rcu->gp_seq = gp_seq;
     }
 }
 
@@ -330,8 +385,9 @@ void rcu_call(struct rcu_head *head, void (*func)(struct rcu_head *)) {
 
     // 若当前无活跃宽限期，启动新宽限期
     if ((gp_seq & RCU_STATE_MASK) == RCU_GP_IDLE) {
-        spin_lock_irqsave(&rcu_state->lock, flags);
+        spin_lock_irqsave(&rcu_state->lock, &flags);
         gp_seq = atomic_load(&rcu_state->gp_seq);
+
         if ((gp_seq & RCU_STATE_MASK) == RCU_GP_IDLE) {
             uint64_t new_gp_seq = (gp_seq & RCU_SEQ_MASK) + 4 | RCU_GP_ONGOING;
             atomic_store(&rcu_state->gp_seq, new_gp_seq);
@@ -351,14 +407,12 @@ void rcu_call(struct rcu_head *head, void (*func)(struct rcu_head *)) {
  * @param prev_rcu 被切换出任务的 RCU 私有数据指针
  */
 void rcu_note_context_switch(rcu_task_struct *prev_rcu) {
-    // 仅当被切换出的任务不在读临界区内时，才构成静止状态
+    // 仅当被切换出的任务不在读临界区内时，才同步世代号
     if (atomic_load_explicit(&prev_rcu->nesting, memory_order_relaxed)) return;
 
     uint64_t gp_seq = atomic_load_explicit(&rcu_state->gp_seq, memory_order_acquire);
-    if ((prev_rcu->gp_seq ^ gp_seq) & RCU_SEQ_MASK) {
-        prev_rcu->gp_seq = gp_seq;
-        _rcu_report_qs();
-    }
+
+    if ((prev_rcu->gp_seq ^ gp_seq) & RCU_SEQ_MASK) prev_rcu->gp_seq = gp_seq;
 }
 
 // 统一状态推进入口
@@ -397,8 +451,7 @@ void rcu_barrier(void) {
     atomic_fetch_sub(&rcu_barrier_count, 1);
 
     // 等待所有 CPU 的屏障回调执行完毕
-    while (atomic_load(&rcu_barrier_count) > 0)
-        task_sleep(true);
+    while (atomic_load(&rcu_barrier_count) > 0) task_sleep(true);
 
     mutex_lock(&rcu_barrier_mutex);
     atomic_store(&rcu_barrier_pending, false);
@@ -408,6 +461,7 @@ void rcu_barrier(void) {
 // 分配并初始化一个 per_cpu_rcu 结构体
 struct per_cpu_rcu *rcu_per_cpu_alloc(void) {
     struct per_cpu_rcu *pcpu = kheap_alloc(sizeof(struct per_cpu_rcu));
+
     if (!pcpu) RCU_PANIC("failed to allocate per_cpu_rcu\n");
 
     INIT_LIST_HEAD(&pcpu->cb_list);
@@ -416,6 +470,7 @@ struct per_cpu_rcu *rcu_per_cpu_alloc(void) {
     spinlock_init(&pcpu->lock);
     pcpu->qs_pending = false;
     pcpu->barrier_generation = 0;
+    atomic_init(&pcpu->cpu_nesting, 0);
 
     return pcpu;
 }
@@ -431,6 +486,7 @@ void rcu_init(void) {
     // 分配全局 RCU 状态
     size_t state_size = sizeof(struct rcu_state) + BITMAP_BYTES(num_cpus);
     rcu_state = kheap_alloc(state_size);
+
     if (!rcu_state) RCU_PANIC("failed to allocate rcu_state\n");
 
     atomic_init(&rcu_state->gp_seq, 0);

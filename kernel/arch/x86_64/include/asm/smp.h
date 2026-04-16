@@ -269,3 +269,9 @@ static inline struct list_head *smp_get_cpu_migration(uint64_t logical_id) {
 static inline struct per_cpu_rcu *smp_get_rcu(void) {
     return (struct per_cpu_rcu *)PROCESSOR_READ_GS(PER_CPU_RCU_PTR_OFFSET);
 }
+
+// 获取指定 CPU 的 RCU 每 CPU 数据指针
+static inline struct per_cpu_rcu *smp_get_cpu_rcu(uint32_t logical_id) {
+    extern per_cpu *per_cpu_ptr;
+    return per_cpu_ptr[logical_id].rcu_ptr;
+}

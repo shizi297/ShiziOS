@@ -57,6 +57,9 @@ void rcu_barrier(void);
 // 分配并初始化一个 per_cpu_rcu 结构体
 struct per_cpu_rcu *rcu_per_cpu_alloc(void);
 
+// 任务迁移时的 RCU 状态转移
+void rcu_migrate_task(rcu_task_struct *rcu, uint32_t src_cpu, uint32_t dst_cpu);
+
 // 初始化 RCU
 void rcu_init(void);
 

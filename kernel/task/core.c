@@ -447,8 +447,9 @@ static void task_do_migration() {
 
     // 取出任务
     struct task_struct *tasks[take];
-    for (uint32_t i = 0;i < take;i++) {
+    for (uint32_t i = 0; i < take; i++) {
         tasks[i] = sched_class_ptr->dequeue_tail();
+        rcu_migrate_task(&tasks[i]->rcu, local, sender);
         TASK_PRINT("migrate pid %d from CPU %d to CPU %d\n", tasks[i]->pid, local, sender);
     }
 
