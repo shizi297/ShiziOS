@@ -8,7 +8,7 @@
 #include <mm/linear_map.h>
 #include <list.h>
 #include <libtree.h>
-#include <shizi/string.h>
+#include <klibc.h>
 
 /**
  * 红黑树节点比较（按 start 地址）

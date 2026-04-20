@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <shizi/string.h>   
+#include <klibc.h>   
 
 // 负载因子
 #define DYNARR_LOAD_NUMERATOR 9

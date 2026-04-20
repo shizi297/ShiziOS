@@ -22,6 +22,11 @@ typedef struct clockevent_device* clockevent_handle_t;
 typedef struct clocksource_device* clocksource_handle_t;
 struct clockevent_timer;
 
+struct timespec {
+    int64_t tv_sec;   // 秒
+    long tv_nsec;     // 纳秒
+};
+
 // 时钟事件框架初始化
 void clockevent_init(void);
 

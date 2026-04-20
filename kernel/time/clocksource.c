@@ -7,7 +7,7 @@
 #include <timecycle.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <shizi/string.h>
+#include <klibc.h>
 #include <list.h>
 #include <bootboot.h>
 #include <heap.h>
@@ -88,7 +88,7 @@ clocksource_handle_t clocksource_get(const char *name) {
     if (name) {
         clocksource_list_struct *pos;
         list_for_each_entry(pos, head, node) {
-            if (strcmp(pos->clocksource.name, name))
+            if (!strcmp(pos->clocksource.name, name))
                 return (clocksource_handle_t)pos;
         }
         return NULL;

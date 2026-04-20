@@ -14,7 +14,7 @@
 #include <stdatomic.h>
 #include <asm/smp.h>
 #include <asm/io.h>
-#include <shizi/string.h>
+#include <klibc.h>
 #include <uacpi/kernel_api.h>
 
 #define UACPI_LOG(level, str) \
@@ -50,7 +50,7 @@ uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
     // 检查给定的地址是否是RSDP
     mapped = uacpi_kernel_map(addr, 8);
     if (mapped) {
-        if (memcmp(mapped, expected, 8)) {
+        if (!memcmp(mapped, expected, 8)) {
             found_addr = addr;
             goto found;
         }
@@ -64,7 +64,7 @@ uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
         uacpi_phys_addr candidate = addr - offset;
         mapped = uacpi_kernel_map(candidate, 8);
         if (!mapped) continue;
-        if (memcmp(mapped, expected, 8)) {
+        if (!memcmp(mapped, expected, 8)) {
             found_addr = candidate;
             goto found;
         }
@@ -77,7 +77,7 @@ uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
         uacpi_phys_addr candidate = addr + offset;
         mapped = uacpi_kernel_map(candidate, 8);
         if (!mapped) continue;
-        if (memcmp(mapped, expected, 8)) {
+        if (!memcmp(mapped, expected, 8)) {
             found_addr = candidate;
             goto found;
         }
@@ -89,7 +89,7 @@ uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
     for (uacpi_phys_addr candidate = 0xE0000; candidate <= 0xFFFFF; candidate += 16) {
         mapped = uacpi_kernel_map(candidate, 8);
         if (!mapped) continue;
-        if (memcmp(mapped, expected, 8)) {
+        if (!memcmp(mapped, expected, 8)) {
             found_addr = candidate;
             goto found;
         }

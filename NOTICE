@@ -18,6 +18,10 @@ linux-like-list (kernel/include/list.h)
 Licensed under the MIT License
 See LICENSES/LINUX_LIKE_LIST_LICENSE for details.
 
-uACPI（kernel/drivers/acpi/uacpi）
+uACPI (kernel/drivers/acpi/uacpi)
 Licensed under the MIT License
 See LICENSES/uACPI_LICENSE for details.
+
+musl (portions of lib/libc/ without ShiziOS copyright headers)
+Licensed under the MIT License
+See LICENSES/MUSL_LICENSE for details.

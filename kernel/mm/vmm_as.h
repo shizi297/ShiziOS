@@ -11,7 +11,7 @@
 #include <spinlock.h>
 #include <list.h>
 #include <libtree.h>
-#include <shizi/string.h>
+#include <klibc.h>
 
 // vma结构体
 typedef struct vm_area {

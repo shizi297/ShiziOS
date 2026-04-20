@@ -7,7 +7,7 @@
 #include <timecycle.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <shizi/string.h>
+#include <klibc.h>
 #include <bootboot.h>
 #include <asm/serial.h>
 #include <asm/smp.h>
@@ -262,7 +262,7 @@ clockevent_handle_t clockevent_get(const char *name) {
     if (name) {
         clockevent_list_struct *pos;
         list_for_each_entry(pos, head, node) {
-            if (strcmp(pos->clockevent.name, name))
+            if (!strcmp(pos->clockevent.name, name))
                 return (clockevent_handle_t)pos;
         }
         return NULL;

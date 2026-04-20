@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <asm/serial.h>
-#include <shizi/string.h>
+#include <klibc.h>
  
 #define VMM_PANIC(fmt, ...) \
     printp("[VMM] ERROR : " fmt, ##__VA_ARGS__)

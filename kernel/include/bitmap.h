@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <shizi/string.h>
+#include <klibc.h>
 
 typedef uint8_t bitmap_t;
 

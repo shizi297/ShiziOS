@@ -32,10 +32,10 @@ set(QEMU "" CACHE STRING "Additional QEMU arguments (space-separated)")    # QEM
 
 # 根据 OPTIMIZE 设置优化级别和 LTO
 if(OPTIMIZE)
-    set(OPT_LEVEL "-O2")
+    set(OPT_LEVEL -O2)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 else()
-    set(OPT_LEVEL "-O0")
+    set(OPT_LEVEL -O0)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 endif()
 
@@ -50,90 +50,41 @@ if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
 endif()
 
 # 基础编译选项（所有模式共用）
-set(BASE_FLAGS "-std=gnu11 -ffreestanding -fno-pic -mno-red-zone -mcmodel=kernel -mgeneral-regs-only -fno-omit-frame-pointer -fno-strict-aliasing")
+set(BASE_FLAGS -std=gnu11 -ffreestanding -fno-strict-aliasing ${OPT_LEVEL})
+
+# 用户态专用编译选项
+set(USER_EXTRA_FLAGS -fPIC -nostdlib -nostdlibinc)
 
 # 栈保护标志
 if(STACK)
-    set(STACK_PROTECTOR_FLAGS "-fstack-protector-all")
+    set(STACK_PROTECTOR_FLAGS -fstack-protector-all)
 else()
-    set(STACK_PROTECTOR_FLAGS "-fstack-protector-strong")
+    set(STACK_PROTECTOR_FLAGS -fstack-protector-strong)
 endif()
 
 # 调试标志
 if(DEBUG)
-    set(EXTRA_FLAGS "-g -fstack-check -DDEBUG ${STACK_PROTECTOR_FLAGS}")
+    set(EXTRA_FLAGS -g -fstack-check -DDEBUG ${STACK_PROTECTOR_FLAGS})
 else()
-    set(EXTRA_FLAGS "${STACK_PROTECTOR_FLAGS}")
+    set(EXTRA_FLAGS ${STACK_PROTECTOR_FLAGS})
 endif()
 
-# 最终编译标志
-set(CMAKE_C_FLAGS "${BASE_FLAGS} ${OPT_LEVEL} ${EXTRA_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS "-nostdlib -static -T ${CMAKE_SOURCE_DIR}/linker.ld")
-
-# 全局路径
+# 全局路径（仅公共头文件）
 include_directories(
-    kernel/include
-    kernel
-    kernel/arch/x86_64
+    include
+    include/libc
     config
-    kernel/arch/x86_64/drivers
-    kernel/drivers
-    kernel/arch/x86_64/include
-    kernel/drivers/acpi/uacpi/include/
 )
 
-# 添加模块子目录
-add_subdirectory(kernel/arch/x86_64)      # x86_64架构模块
-add_subdirectory(kernel/arch/x86_64/mm)   # x86_64架构特定内存管理
-add_subdirectory(kernel/drivers)          # 通用驱动模块
-add_subdirectory(kernel/mm)               # 通用内存管理模块
-add_subdirectory(kernel/lib)               # 库模块
-add_subdirectory(kernel/time)              # 时间管理模块
-add_subdirectory(kernel/task)              # 任务管理模块
-add_subdirectory(kernel/init)              # 内核初始化模块
-add_subdirectory(kernel/ipc)               # IPC模块
-add_subdirectory(kernel/sync)              # 同步原语模块
-
-# 测试模块
-if(TEST)
-    add_subdirectory(kernel/test)          # 测试模块
-endif()
-
-# 链接生成内核
-set(EMPTY_SOURCE ${CMAKE_BINARY_DIR}/empty.c)
-file(WRITE ${EMPTY_SOURCE} "// Empty source file for linking libraries\n")
-
-add_executable(kernel.elf ${EMPTY_SOURCE})
-
-# 链接所有模块库
-set(LINK_LIBS
-    kernel_init
-    x86_64_arch
-    x86_64_mm       
-    kernel_drivers  
-    kernel_mm
-    kernel_lib
-    kernel_time     
-    kernel_task
-    kernel_ipc
-    kernel_sync
-)
-
-if(TEST)
-    list(APPEND LINK_LIBS kernel_test)
-endif()
-
-target_link_libraries(kernel.elf
-    "-Wl,--start-group"
-    ${LINK_LIBS}
-    "-Wl,--end-group"
-)
+# 添加子目录
+add_subdirectory(kernel)          # 内核模块
+add_subdirectory(lib/libc)        # C 标准库
 
 # 生成磁盘镜像
 add_custom_target(img
     DEPENDS kernel.elf
     COMMAND mkdir -p initrd_root/sys
-    COMMAND cp ${CMAKE_BINARY_DIR}/kernel.elf initrd_root/sys/core
+    COMMAND cp ${CMAKE_BINARY_DIR}/kernel/kernel.elf initrd_root/sys/core
     COMMAND cp ${CMAKE_SOURCE_DIR}/config/CONFIG initrd_root/sys/config
     COMMAND ${CMAKE_SOURCE_DIR}/disk/mkbootimg ${CMAKE_SOURCE_DIR}/config/ShiziOS.json ${CMAKE_SOURCE_DIR}/disk/shizios.img
     COMMAND rm -rf initrd_root
@@ -150,7 +101,7 @@ foreach(arg ${QEMU_LIST})
     endif()
 endforeach()
 if(NOT USER_SMP_SPECIFIED)
-    set(DEFAULT_SMP "-smp;2")
+    set(DEFAULT_SMP -smp 2)
 else()
     set(DEFAULT_SMP "")
 endif()
@@ -176,7 +127,7 @@ add_custom_target(run
 add_custom_target(ram-img
     DEPENDS kernel.elf
     COMMAND mkdir -p /dev/shm/shizios/initrd_root/sys
-    COMMAND cp ${CMAKE_BINARY_DIR}/kernel.elf /dev/shm/shizios/initrd_root/sys/core
+    COMMAND cp ${CMAKE_BINARY_DIR}/kernel/kernel.elf /dev/shm/shizios/initrd_root/sys/core
     COMMAND cp ${CMAKE_SOURCE_DIR}/config/CONFIG /dev/shm/shizios/initrd_root/sys/config
     COMMAND ${CMAKE_SOURCE_DIR}/disk/mkbootimg ${CMAKE_SOURCE_DIR}/config/ShiziOS.json /dev/shm/shizios/shizios.img
     COMMAND rm -rf /dev/shm/shizios/initrd_root
