@@ -5,9 +5,13 @@
 
 #pragma once
 
+#define NO_PMM
 #include <stdint.h>
+#include <stdbool.h>
+#include <mm/vmm_types.h>
 #include <mm/pmm.h>
-#include <mm/vmm_map.h>
+
+typedef struct vmm_as as_t;
 
 /**
  * 内核堆分配

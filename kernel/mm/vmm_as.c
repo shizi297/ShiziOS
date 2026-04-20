@@ -6,6 +6,7 @@
 #include "vmm_as.h"
 #include <heap.h>
 #include <mm/linear_map.h>
+#include <mm/vmm_map.h>
 #include <list.h>
 #include <libtree.h>
 #include <klibc.h>

@@ -43,12 +43,10 @@ size_t strnlen(const char *, size_t);
 char *strtok(char *__restrict, const char *__restrict);
 char *strtok_r(char *__restrict, const char *__restrict, char **__restrict);
 
-#ifdef KERNEL
+#ifndef KERNEL
     char *strdup(const char *);
     char *strndup(const char *, size_t);
 #endif
-
-int strerror_r(int, char *, size_t);
 
 #ifdef __cplusplus
 }

@@ -197,6 +197,9 @@ bool apic_init(void) {
     if (apic_get_id() == bootboot->bspid) {
         smp_irq_register_handler(IRQ_APIC, (uint64_t)apic_timer_irq);
     }
+    
+    // 设置分频为 1（不分频）
+    msr_write(X2APIC_MSR_TIMER_DIV, 0xB);  
 
     return true;
 }

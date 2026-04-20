@@ -18,5 +18,6 @@
 
 #define CACHE_LINE_SIZE 64
 
-#include "pmm_types.h"
-
+#ifndef NO_PMM
+    #include "pmm_types.h"
+#endif
