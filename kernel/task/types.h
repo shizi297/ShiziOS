@@ -10,6 +10,8 @@
 #include <libtree.h>
 #include <heap.h>
 #include <rcu.h>
+#include <vfs.h>
+#include <shizi/types.h>
 
 // 用于线程id与线程组id
 typedef int task_id; 
@@ -65,6 +67,16 @@ typedef struct task_struct {
 
     struct pt_regs *regs;    // 存储中断/异常/系统调用/信号处理信息
     struct thread_struct *thread;   // 任务切换时保存的信息
+
+    struct {
+        struct path *root;    // 根目录路径
+        struct path *pwd;     // 当前工作目录路径
+    } fs;
+
+    struct {
+      uid_t uid;
+      gid_t gid;  
+    } user_id;
 
     struct list_head zombie;    // 僵尸队列头
 

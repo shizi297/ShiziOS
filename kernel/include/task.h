@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <asm/processor.h>
 #include <rcu.h>
+#include <vfs.h>
 
 struct task_struct;
 typedef struct per_cpu_sched per_cpu_sched;
@@ -74,6 +75,12 @@ void task_exit(void);
 
 // 提交一个工作任务
 void task_submit_work(void (*func)(void *), void *data);
+
+// 获取当前任务的文件系统上下文（使用后需要尽快增加path引用和拷贝）
+void task_get_current_fs(struct path **root, struct path **pwd);
+
+// 获取当前任务的gid和uid
+void task_get_current_ugid(uid_t *uid, gid_t *gid);
 
 // 任务管理数据初始化
 bool task_data_init(void);

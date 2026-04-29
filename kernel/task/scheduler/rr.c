@@ -111,7 +111,7 @@ void rr_sched_init(struct task_struct *task) {
 // 设置中断
 void rr_set_next_timer(struct task_struct *task) {
     /*
-     * 当前exec_ns就设置中断
+     * 当前exec_ns等于0就设置中断
      * 否则不设置
      * 
      * 因为当新任务的exec_ns为0时

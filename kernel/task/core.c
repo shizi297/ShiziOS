@@ -433,7 +433,7 @@ static void task_do_migration() {
 
     uint32_t nr = smp_get_nr_running();
     if (nr <= 2) {
-        // 队列太短，放弃迁移，清除标准让发送这重试
+        // 队列太短，放弃迁移，清除标准让发送者重试
         uint64_t expected = old;
         uint64_t desired = MIG_STATE_PACK(0xFFFFFFFF, 0);
         atomic_compare_exchange_strong(
@@ -634,6 +634,15 @@ task_struct *task_create_kernel_thread(void (*func)(void *), void *arg) {
     // 设置 tgid
     task->tgid = pid;
 
+    // 内核线程的用户 id 为 root
+    task->user_id.uid = 0;
+    task->user_id.gid = 0;
+
+    // 设置文件系统上下文
+    struct path *root_path = vfs_get_root_path();
+    task->fs.pwd = root_path;
+    task->fs.root = root_path;
+
     // 设置地址空间（内核线程共享内核地址空间）
     task->as = vheap_get_kernel_as();
     vheap_as_add_ref(task->as);
@@ -648,7 +657,7 @@ task_struct *task_create_kernel_thread(void (*func)(void *), void *arg) {
     uint64_t *ret_slot = (uint64_t *)stack_top - 1;
     *ret_slot = (uint64_t)ret_from_kernel_thread;
 
-    // 新的栈顶（向下移动 8 字节）
+    // 新的栈顶（向下移动一个指针）
     void *new_stack_top = (void *)ret_slot;
 
     // 初始化线程上下文
@@ -849,6 +858,30 @@ void task_submit_work(void (*func)(void *), void *data) {
     if (worker) {
         task_wakeup(worker);
     }
+}
+
+// 获取当前任务的文件系统上下文（使用后需要尽快增加path引用和拷贝）
+void task_get_current_fs(struct path **root, struct path **pwd) {
+    task_struct *current = smp_get_task_current();
+
+    if (root) 
+        *root = current->fs.root;
+
+    if (pwd) 
+        *pwd = current->fs.pwd;
+
+}
+
+// 获取当前任务的gid和uid
+void task_get_current_ugid(uid_t *uid, gid_t *gid) {
+    task_struct *current = smp_get_task_current();
+
+    if (uid)
+        *uid = current->user_id.uid;
+        
+    if (gid)
+        *gid = current->user_id.gid;
+
 }
 
 // 任务管理数据初始化
