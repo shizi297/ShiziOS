@@ -152,6 +152,28 @@ static inline void *dynarr_get(dynarr_t *d, uint64_t index) {
     return (char *)d->arr + index * d->element_size;
 }
 
+/**
+ * 移除最后一个元素
+ *
+ * @param d 动态数组指针
+ * @param out_element 指向存放被移除元素的空间(可以为null)
+ *
+ * @return 成功：true
+ * @return 失败：false（数组为空）
+ */
+static inline bool dynarr_pop(dynarr_t *d, void *out_element) {
+    if (!d || !d->current_count) return false;
+
+    d->current_count--;
+
+    if (out_element) {
+        void *src = (char *)d->arr + d->current_count * d->element_size;
+        memcpy(out_element, src, d->element_size);
+    }
+
+    return true;
+}
+
 // 将容量扩展到至少 min_capacity，新增区域清零
 static inline bool dynarr_expand_to(dynarr_t *d, uint64_t min_capacity) {
     if (min_capacity <= d->dynarr_count) return true;
