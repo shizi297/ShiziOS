@@ -25,6 +25,7 @@ add_subdirectory(task)             # 任务管理模块
 add_subdirectory(init)             # 内核初始化模块
 add_subdirectory(ipc)              # IPC模块
 add_subdirectory(sync)             # 同步原语模块
+add_subdirectory(fs)               # 文件系统模块
 
 # 测试模块
 if(TEST)
@@ -38,29 +39,27 @@ file(WRITE ${EMPTY_SOURCE} "// Empty source file for linking libraries\n")
 add_executable(kernel.elf ${EMPTY_SOURCE})
 
 # 设置内核链接选项
-target_link_options(kernel.elf PRIVATE -nostdlib -no-pie -T ${CMAKE_SOURCE_DIR}/linker.ld)
-
-# 链接所有模块库
-set(LINK_LIBS
-    kernel_init
-    x86_64_arch
-    x86_64_mm       
-    kernel_drivers  
-    kernel_mm
-    kernel_lib
-    kernel_time     
-    kernel_task
-    kernel_ipc
-    kernel_sync
-    libc
-)
-
-if(TEST)
-    list(APPEND LINK_LIBS kernel_test)
-endif()
+target_link_options(kernel.elf PRIVATE -nostdlib -no-pie -T ${CMAKE_SOURCE_DIR}/linker.ld -Wl,-z,start-stop-visibility=default)
 
 target_link_libraries(kernel.elf
     "-Wl,--start-group"
-    ${LINK_LIBS}
+    kernel_init
+    x86_64_arch
+    x86_64_mm
+    kernel_drivers
+    kernel_mm
+    kernel_lib
+    kernel_time
+    kernel_task
+    kernel_ipc
+    kernel_sync
+    "-Wl,--whole-archive"
+    kernel_fs
+    "-Wl,--no-whole-archive"
+    libc
     "-Wl,--end-group"
 )
+
+if(TEST)
+    target_link_libraries(kernel.elf kernel_test)
+endif()

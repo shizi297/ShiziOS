@@ -7,7 +7,8 @@ Primary Maintainer:
 Third-party components:
 
 Libtree (kernel/include/libtree.h, kernel/lib/rbtree.c)
-Licensed under the GNU Lesser General Public License v3
+Licensed under the GNU Lesser General Public License v2.1 or (at your option) any later version.
+This project elects to use this component under the terms of the GNU Lesser General Public License v3.
 See LICENSES/LIBTREE_LICENSE for details.
 
 BOOTBOOT (kernel/include/bootboot.h)
@@ -25,3 +26,4 @@ See LICENSES/uACPI_LICENSE for details.
 musl (portions of lib/libc/ without ShiziOS copyright headers)
 Licensed under the MIT License
 See LICENSES/MUSL_LICENSE for details.
+
