@@ -92,7 +92,8 @@ static inline void *rcu_dereference(void *p) {
  * @param p 要更新的指针变量地址
  * @param v 新值
  */
-static inline void rcu_assign_pointer(void **p, void *v) {
-    atomic_uint_least64_t *ap = (atomic_uint_least64_t *)p;
-    atomic_store_explicit(ap, (uint64_t)v, memory_order_release);
-}
+#define rcu_assign_pointer(p, v) \
+    do { \
+        atomic_uint_least64_t *__ap = (atomic_uint_least64_t *)(p); \
+        atomic_store_explicit(__ap, (uint64_t)(v), memory_order_release); \
+    } while(0)
