@@ -9,7 +9,15 @@
 #include <kernel.h>
 #include <asm/serial.h>  
 #include <time.h>
+#include <drivers.h>
+#include <vfs.h>
 #include <config.h>
+
+#define KERNEL_PRINT(fmt, ...) \
+    printk("[KERNEL] " fmt, ##__VA_ARGS__)
+
+#define KERNEL_PANIC(fmt, ...) \
+    printp("[KERNEL] ERROR : " fmt, ##__VA_ARGS__)
 
 __attribute__((section(".bss"), aligned(16))) 
 uint8_t bp_stack[INIT_STACK_BYTE];
@@ -20,7 +28,7 @@ static uint32_t bp_apic_id = 0;
 
 __attribute__((noreturn))
 void kernel_main(uint32_t logical_id, uint32_t apic_id) {
-    printk("[KERNEL]ShiziOS KERNEL v%s\n", KERNEL_VERSION);
+    KERNEL_PRINT("ShiziOS KERNEL v%s\n", KERNEL_VERSION);
 
     bp_logical_id = logical_id;
     bp_apic_id = bp_apic_id;
@@ -40,6 +48,12 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     
     // 初始化time系统
     time_init();
+
+    // 初始化驱动框架
+    drivers_init();
+
+    // 初始化vfs
+    if (!vfs_init()) KERNEL_PANIC("vfs init failed");
 
     // 设置标志位让ap启动
     cpu_ready_flag = 1;
