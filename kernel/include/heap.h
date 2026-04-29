@@ -78,6 +78,9 @@ void kheap_set_on_pte_ptr(void *vaddr, uintptr_t pte_ptr);
  */
 uintptr_t kheap_get_on_pte_ptr(void *vaddr);
 
+// 获取内存总页数
+uint64_t kheap_max_page(void);
+
 /**
  * 虚拟堆分配
  * 

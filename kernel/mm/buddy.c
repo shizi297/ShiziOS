@@ -836,6 +836,11 @@ uintptr_t pmm_get_on_pte_ptr(uint64_t pfn) {
     return ptr;
 }
 
+// 获取物理内存总页数
+uint64_t pmm_max_page(void) {
+    return max_pfn + 1;
+}
+
 void pmm_init(void) {
     PMM_PRINT("Initializing physical memory manager\n");
     

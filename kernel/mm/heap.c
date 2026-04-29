@@ -183,6 +183,11 @@ uintptr_t kheap_get_on_pte_ptr(void *vaddr) {
     return pmm_get_on_pte_ptr(pfn);
 }
 
+// 获取内存总页数
+uint64_t kheap_max_page(void) {
+    return pmm_max_page();
+}
+
 /**
  * 虚拟堆分配
  * 

@@ -5,8 +5,6 @@
  
 #pragma once
 
-void pmm_init(void);
-
 /**
  * 分配伙伴块
  * 
@@ -66,3 +64,8 @@ void pmm_set_on_pte_ptr(uint64_t pfn, uintptr_t ptr);
  * @return 上层页表项的虚拟地址
  */
 uintptr_t pmm_get_on_pte_ptr(uint64_t pfn);
+
+// 获取物理内存总页数
+uint64_t pmm_max_page(void);
+
+void pmm_init(void);
