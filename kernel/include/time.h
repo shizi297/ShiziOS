@@ -20,10 +20,12 @@ typedef enum {
 
 typedef struct clockevent_device* clockevent_handle_t;
 typedef struct clocksource_device* clocksource_handle_t;
+typedef long long time_t;
+
 struct clockevent_timer;
 
 struct timespec {
-    int64_t tv_sec;   // 秒
+    time_t tv_sec;   // 秒
     long tv_nsec;     // 纳秒
 };
 
@@ -205,13 +207,6 @@ static inline void time_init(void) {
     TIME_PRINT("time init success");
 }
 
-// time数据初始化（必须在时钟事件设备注册完成后调用）
-static inline bool time_data_init(void) {
-    if (!clockevent_timer_init()) return false;
-    TIME_PRINT("time data init success");
-    return true;
-}
-
 /**
  * 忙等待
  * 
@@ -239,3 +234,17 @@ void time_update(uint64_t now);
  * @return 纳秒
  */
 uint64_t time_delta(void);
+
+// 计算系统启动时的unix时间戳
+void time_get_boot_unix(void);
+
+// 获取当前系统时间
+void time_get(struct timespec *ts);
+
+// time数据初始化（必须在时钟事件设备注册完成后调用）
+static inline bool time_data_init(void) {
+    if (!clockevent_timer_init()) return false;
+    time_get_boot_unix();
+    TIME_PRINT("time data init success");
+    return true;
+}
