@@ -149,6 +149,9 @@
 // 从错误指针提取错误码
 #define PTR_ERR(ptr)     ((long)(ptr))
 
+// 将错误码转为指针
+#define ERR_CAST(x) ((void *)(long)(x))
+
 // 判断指针是否为错误指针
 #define IS_ERR(ptr)      IS_ERR_VALUE((unsigned long)(ptr))
 

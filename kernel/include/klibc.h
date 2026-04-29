@@ -6,6 +6,7 @@
 #pragma once
 
 #include <string.h>
+#include <errno.h>
 #include <heap.h>
 
 static inline char *strdup(const char *s) {
