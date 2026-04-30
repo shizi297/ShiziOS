@@ -337,13 +337,13 @@ void rcu_read_unlock(void) {
     rcu_task_struct *rcu = _rcu_current_task();
     struct per_cpu_rcu *pcpu = _rcu_this_cpu();
 
-    atomic_fetch_sub_explicit(&pcpu->cpu_nesting, 1, memory_order_release);
-
     if (atomic_fetch_sub_explicit(&rcu->nesting, 1, memory_order_relaxed) == 1) {
         uint64_t gp_seq = atomic_load_explicit(&rcu_state->gp_seq, memory_order_acquire);
 
         if ((rcu->gp_seq ^ gp_seq) & RCU_SEQ_MASK) rcu->gp_seq = gp_seq;
     }
+
+    atomic_fetch_sub_explicit(&pcpu->cpu_nesting, 1, memory_order_release);
 }
 
 /**

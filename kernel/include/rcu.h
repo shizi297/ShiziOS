@@ -11,6 +11,8 @@
 #include <list.h>
 #include <spinlock.h>
 
+#define __rcu
+
 // 嵌入任务结构体的 RCU 私有数据
 typedef struct rcu_task_struct {
     atomic_uint_least32_t nesting;    // 读临界区嵌套深度
