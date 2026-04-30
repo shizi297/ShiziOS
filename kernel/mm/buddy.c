@@ -307,8 +307,8 @@ static free_list_t *split_buddy_block(uint64_t pfn) {
 /*
  * 合并空闲链表中的伙伴块
  * 调用者必须持有zone锁和mem_block锁
- * 成功：返回合并后块的虚拟地址（free_list_t*）
- * 失败：返回NULL
+ * 
+ * @return 合并后块的虚拟地址
  */
 static free_list_t* merge_buddy_block(uint64_t pfn1, uint64_t pfn2) {
     uint8_t order1 = mem_block->blocks[pfn1].order;
@@ -534,8 +534,8 @@ static void mem_block_init(void) {
  * 
  * @param order 分配的伙伴块大小
  * @param zone  首选内存区域：ZONE_DMA(0)、ZONE_DMA32(1)、ZONE_NORMAL(2)
- * @return 成功：pfn；失败：0
  * 
+ * @return pfn
  * 
  * - order必须小于MAX_ORDER
  */
@@ -548,12 +548,13 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
     uint64_t pfn = 0;
     uint8_t find_order = 0;
     bool find = false;
+    uint64_t flags;
 
-    spin_lock(&mem_block->lock);
+    spin_lock_irqsave(&mem_block->lock, &flags);
 
     // 检查zone是否有内存
     if (zones[zone].start_pfn >= zones[zone].end_pfn) {
-        spin_unlock(&mem_block->lock);
+        spin_unlock_irqrestore(&mem_block->lock, flags);
         return 0;
     }
 
@@ -623,7 +624,7 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
     }
 
     spin_unlock(&zones[zone].lock);
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 
     return pfn;
 }
@@ -635,6 +636,7 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
  */
 void pmm_free_pages(uint64_t pfn) {
     check_pfn_valid(pfn);
+    uint64_t flags;
     /*
      * 获取pfn的zone
      * 获取zone不需要锁
@@ -643,14 +645,14 @@ void pmm_free_pages(uint64_t pfn) {
      */
     uint8_t zone = mem_block->blocks[pfn].zone;
 
-    spin_lock(&mem_block->lock);
+    spin_lock_irqsave(&mem_block->lock, &flags);
     spin_lock(&zones[zone].lock);
 
     mem_block_t* block = &mem_block->blocks[pfn];
     
     if (block->is_head == 0 || block->is_free == 1) {
         spin_unlock(&mem_block->lock);
-        spin_unlock(&zones[zone].lock);
+        spin_unlock_irqrestore(&zones[zone].lock, flags);
         return;
     }
     
@@ -670,7 +672,7 @@ void pmm_free_pages(uint64_t pfn) {
      */
     if (block->ref_count > 0) {
         spin_unlock(&mem_block->lock);
-        spin_unlock(&zones[zone].lock);
+        spin_unlock_irqrestore(&zones[zone].lock, flags);
         return;
     }
     
@@ -705,7 +707,7 @@ void pmm_free_pages(uint64_t pfn) {
     }
     
     spin_unlock(&zones[zone].lock);
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 
     return;
 }
@@ -716,7 +718,8 @@ void pmm_free_pages(uint64_t pfn) {
  */
 void pmm_add_ref_count(uint64_t pfn) {
     check_pfn_valid(pfn);
-    spin_lock(&mem_block->lock);
+    uint64_t flags;
+    spin_lock_irqsave(&mem_block->lock, &flags);
     
     mem_block_t* block = &mem_block->blocks[pfn];
     uint8_t order = block->order;
@@ -728,16 +731,18 @@ void pmm_add_ref_count(uint64_t pfn) {
         current->ref_count++;
     }
     
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 }
 
 /*
  * 增加内存块映射计数
+ *
  * @param pfn 要增加映射计数的页帧号
  */
 void pmm_add_map_count(uint64_t pfn) {
     check_pfn_valid(pfn);
-    spin_lock(&mem_block->lock);
+    uint64_t flags;
+    spin_lock_irqsave(&mem_block->lock, &flags);
     
     mem_block_t* block = &mem_block->blocks[pfn];
     uint8_t order = block->order;
@@ -749,7 +754,7 @@ void pmm_add_map_count(uint64_t pfn) {
         current->map_count++;
     }
     
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 }
 
 /*
@@ -759,7 +764,8 @@ void pmm_add_map_count(uint64_t pfn) {
  */
 void pmm_sub_map_count(uint64_t pfn) {
     check_pfn_valid(pfn);
-    spin_lock(&mem_block->lock);
+    uint64_t flags;
+    spin_lock_irqsave(&mem_block->lock, &flags);
     
     mem_block_t* block = &mem_block->blocks[pfn];
     uint8_t order = block->order;
@@ -774,7 +780,7 @@ void pmm_sub_map_count(uint64_t pfn) {
         }
     }
     
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 }
 
 /*
@@ -784,7 +790,8 @@ void pmm_sub_map_count(uint64_t pfn) {
  */
 void pmm_zero_map_count(uint64_t pfn) {
     check_pfn_valid(pfn);
-    spin_lock(&mem_block->lock);
+    uint64_t flags;
+    spin_lock_irqsave(&mem_block->lock, &flags);
     
     mem_block_t* block = &mem_block->blocks[pfn];
     uint8_t order = block->order;
@@ -796,7 +803,7 @@ void pmm_zero_map_count(uint64_t pfn) {
         current->map_count = 0;
     }
     
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 }
 
 /*
@@ -807,7 +814,8 @@ void pmm_zero_map_count(uint64_t pfn) {
  */
 void pmm_set_on_pte_ptr(uint64_t pfn, uintptr_t ptr) {
     check_pfn_valid(pfn);
-    spin_lock(&mem_block->lock);
+    uint64_t flags;
+    spin_lock_irqsave(&mem_block->lock, &flags);
     
     mem_block_t* block = &mem_block->blocks[pfn];
     uint8_t order = block->order;
@@ -819,7 +827,7 @@ void pmm_set_on_pte_ptr(uint64_t pfn, uintptr_t ptr) {
         current->on_pte_ptr = ptr;
     }
     
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
 }
 
 /*
@@ -830,9 +838,10 @@ void pmm_set_on_pte_ptr(uint64_t pfn, uintptr_t ptr) {
  */
 uintptr_t pmm_get_on_pte_ptr(uint64_t pfn) {
     check_pfn_valid(pfn);
-    spin_lock(&mem_block->lock);
+    uint64_t flags;
+    spin_lock_irqsave(&mem_block->lock, &flags);
     uintptr_t ptr = mem_block->blocks[pfn].on_pte_ptr;
-    spin_unlock(&mem_block->lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
     return ptr;
 }
 

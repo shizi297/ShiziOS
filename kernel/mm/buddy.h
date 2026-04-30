@@ -10,8 +10,8 @@
  * 
  * @param order 分配的伙伴块大小
  * @param zone  选择内存区域
- * @return 成功：pfn；失败：0
  * 
+ * @return pfn
  * 
  * order必须小于MAX_ORDER
  */
@@ -26,18 +26,21 @@ void pmm_free_pages(uint64_t pfn);
 
 /*
  * 增加内存块引用计数
+ *
  * @param pfn 要增加引用计数的页帧号
  */
 void pmm_add_ref_count(uint64_t pfn);
 
 /*
  * 增加内存块映射计数
+ *
  * @param pfn 要增加映射计数的页帧号
  */
 void pmm_add_map_count(uint64_t pfn);
 
 /*
  * 减少内存块映射计数
+ *
  * @param pfn 要减少映射计数的页帧号
  */
 void pmm_sub_map_count(uint64_t pfn);
