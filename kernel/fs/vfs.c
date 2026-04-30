@@ -31,12 +31,12 @@ static struct vfs_hash_table dentry_cache = {0};
 
 // 用于挂载文件系统
 static struct {
-    struct vfsmount *root;  // 根挂载点
+    struct vfsmount * __rcu root;  // 根挂载点
     atomic_uint count;  // 挂载的文件系统数量
     mutex_t lock;   // 保护挂载树修改的互斥锁
 } mount_tree = {0};
 
-static struct path *vfs_root = NULL;   // 根路径对象
+static struct path * __rcu vfs_root = NULL;   // 根路径对象
 
 static uint64_t vfs_get_hash_size(uint64_t obj_size, uint64_t scale);
 static inline void vfs_dget(struct dentry *dentry);
@@ -299,7 +299,7 @@ static struct dentry *vfs_dalloc(struct dentry *parent, const char *name) {
 
 // 读取符号链接目标
 static ssize_t vfs_readlink(struct dentry *dentry, char *buf, size_t bufsiz) {
-    if (!dentry->inode || (dentry->inode->mode & S_IFMT) != S_IFLNK)
+    if (!dentry->inode || !S_ISLNK(dentry->inode->mode))
         return -EINVAL;
 
     if (!dentry->inode->ops->readlink)
@@ -441,7 +441,7 @@ static void vfs_detach_mount(struct vfsmount *mnt) {
     spin_unlock(&mnt->mountpoint->lock);
 }
 
-// 根据挂载点 dentry 查找对应的 vfsmount
+// 根据挂载点 dentry 查找对应的 vfsmount，返回时已增加引用计数
 static struct vfsmount *vfs_find_mount(struct dentry *dentry) {
     struct vfsmount *found = NULL;
 
@@ -469,6 +469,8 @@ static struct vfsmount *vfs_find_mount(struct dentry *dentry) {
         // 检查当前挂载点的挂载点 dentry 是否匹配
         if (cur->mountpoint == dentry) {
             found = cur;
+            // 在释放锁之前增加引用计数，防止并发卸载导致悬挂指针
+            vfs_mntget(found);
             break;
         }
 
@@ -631,10 +633,10 @@ static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pw
  * 查找路径
  *
  * @param path 路径字符串
- * @param flags 查找标志（LOOKUP_FOLLOW, LOOKUP_DIRECTORY）
+ * @param flags 查找标志
  * @param pwd 当前工作目录
  *
- * @return 返回路径的path对象
+ * @return 路径的path对象
  */
 static struct path *vfs_path_lookup(
     const char *path,
@@ -667,7 +669,7 @@ static struct path *vfs_path_lookup(
                 // 没有符号链接，直接返回结果
                 if (
                     (flags & LOOKUP_DIRECTORY) &&
-                    ((cur->curr_path->dentry->inode->mode & S_IFMT) != S_IFDIR)
+                    !S_ISDIR(cur->curr_path->dentry->inode->mode)
                 ) {
                     // 不是目录但要求是目录，返回错误
                     err = -ENOTDIR;
@@ -700,11 +702,16 @@ static struct path *vfs_path_lookup(
                 err = -ENOMEM;
                 break;
             }
-
-            // 切换到挂载点根
+            
+            /*
+             * 切换到挂载点根
+             * 引用已在 vfs_find_mount 函数增加过
+             * 这里不增加
+             */
             new_cur->mnt = mnt;
+            vfs_dget(mnt->root);
             new_cur->dentry = mnt->root;
-            vfs_path_get(new_cur);
+
             vfs_path_put(cur->curr_path);
             kheap_free(cur->curr_path);
             cur->curr_path = new_cur;
@@ -712,7 +719,7 @@ static struct path *vfs_path_lookup(
         }
 
         // 检查是否是符号链接
-        if (((p->dentry->inode->mode & S_IFMT) == S_IFLNK) && (flags & LOOKUP_FOLLOW)) {
+        if (S_ISLNK(p->dentry->inode->mode) && (flags & LOOKUP_FOLLOW)) {
             if (depth >= MAX_SYMLINKS) {
                 // 符号链接过多，可能存在循环，返回错误
                 err = -ELOOP;
@@ -1281,7 +1288,7 @@ struct file *vfs_open(
     if (
         (flags & O_TRUNC) && 
         (perm_mask & MAY_WRITE) &&
-        (inode->mode & S_IFMT) == S_IFREG
+        S_ISREG(inode->mode)
     ) {
         err = vfs_truncate(file, 0);
         if (err)

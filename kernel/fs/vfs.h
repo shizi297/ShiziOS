@@ -17,6 +17,7 @@
 #include <vfs.h>
 #include <mutex.h>
 #include <drivers.h>
+#include <rcu.h>
 
 #define S_ISDIR(mode)  (((mode) & S_IFMT) == S_IFDIR)
 #define S_ISREG(mode)  (((mode) & S_IFMT) == S_IFREG)
@@ -165,7 +166,7 @@ struct inode {
 struct dentry {
     struct dentry *parent;  // 父目录项指针
     struct qstr name;   
-    struct inode *inode;    // 目录项对应的 inode
+    struct inode * __rcu inode;    // 目录项对应的 inode
     struct dentry_operations *ops;  // 目录项操作表
     struct hlist_node hash_node; // 哈希表节点（用于dentry 缓存）
     struct list_head lru;   // LRU 链表节点
