@@ -19,6 +19,8 @@
 #include <drivers.h>
 #include <rcu.h>
 
+#define PATH_MAX 4096
+
 #define S_ISDIR(mode)  (((mode) & S_IFMT) == S_IFDIR)
 #define S_ISREG(mode)  (((mode) & S_IFMT) == S_IFREG)
 #define S_ISLNK(mode)  (((mode) & S_IFMT) == S_IFLNK)
@@ -28,13 +30,6 @@ typedef enum lookup_flags {
     LOOKUP_FOLLOW    = 1 << 0,   // 跟随符号链接
     LOOKUP_DIRECTORY = 1 << 1,   // 要求最后组件是目录
 } vfs_lookup_flags_t;
-
-// 文件偏移
-typedef enum seek_whence {
-    SEEK_SET = 0,   // 从文件开头偏移
-    SEEK_CUR = 1,   // 从当前位置偏移
-    SEEK_END = 2,   // 从文件末尾偏移
-} seek_whence_t;
 
 // 目录项标志
 typedef enum dentry_flags {
@@ -76,17 +71,6 @@ struct file {
     atomic_uint count;  // 引用计数
     struct file_operations *ops;    // 文件操作表
     spinlock_t lock;    // 保护 pos, flags
-};
-
-// 用于 setattr 的属性结构体
-struct iattr {
-    uint32_t ia_valid;  
-    mode_t ia_mode;
-    uid_t ia_uid;
-    gid_t ia_gid;
-    off_t ia_size;
-    struct timespec ia_atime;
-    struct timespec ia_mtime;
 };
 
 // 用于 dentry 哈希缓存的键
@@ -254,6 +238,39 @@ typedef struct {
     struct path *curr_path;    // 当前解析到的路径
     size_t offset;   // 当前解析位置
 } vfs_path_prs_t;
+
+// 将 inode 添加到 inode 缓存哈希表
+void vfs_icache_add(struct inode *inode);
+
+/**
+ * 在 inode 缓存哈希表中查找 inode
+ *
+ * @param sb 超级块
+ * @param ino inode 号
+ *
+ * @return 找到的 inode（引用计数已增加）
+ */
+struct inode *vfs_icache_find(struct super_block *sb, ino_t ino);
+
+// 将 dentry 添加到 dentry 缓存哈希表
+void vfs_dcache_add(struct dentry *dentry);
+
+/**
+ * 在 dentry 缓存哈希表中查找 dentry
+ *
+ * @param parent 父 dentry
+ * @param name 组件名
+ * @param len 名称长度
+ *
+ * @return 找到的 dentry（引用计数已增加）
+ */
+struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t len);
+
+// 增加路径引用
+void vfs_path_get(struct path *path);
+
+// 减少路径引用
+void vfs_path_put(struct path *path);
 
 // 注册文件系统
 int vfs_register_filesystem(struct file_system_type *fs);

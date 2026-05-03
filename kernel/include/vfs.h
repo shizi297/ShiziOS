@@ -78,6 +78,13 @@ typedef enum open_flags {
     O_CLOEXEC  = 0x80000,    // 执行时关闭文件描述符
 } open_flags_t;
 
+// 文件偏移
+typedef enum seek_whence {
+    SEEK_SET = 0,   // 从文件开头偏移
+    SEEK_CUR = 1,   // 从当前位置偏移
+    SEEK_END = 2,   // 从文件末尾偏移
+} seek_whence_t;
+
 // 路径结构体，表示一个文件系统路径
 struct path {
     struct vfsmount *mnt;
@@ -99,6 +106,17 @@ struct kstat {
     struct timespec st_ctim; // 最后状态改变时间
     blksize_t st_blksize;   // 文件系统块大小
     blkcnt_t st_blocks;     // 已分配的 512 字节块数
+};
+
+// 用于 setattr 的属性结构体
+struct iattr {
+    uint32_t ia_valid;  
+    mode_t ia_mode;
+    uid_t ia_uid;
+    gid_t ia_gid;
+    off_t ia_size;
+    struct timespec ia_atime;
+    struct timespec ia_mtime;
 };
 
 // vfs 文件系统统计信息
@@ -138,21 +156,15 @@ struct path *vfs_get_root_path(void);
 bool vfs_init(void);
 
 /**
- * 打开文件
+ * 调整文件偏移
  *
- * @param path 路径字符串
- * @param flags 打开标志
- * @param mode 创建时的权限
- * @param pwd 当前工作目录
+ * @param file 打开的文件
+ * @param offset 偏移量
+ * @param whence 参照点
  *
- * @return file 指针
+ * @return 新的文件偏移
  */
-struct file *vfs_open(
-    const char *path,
-    open_flags_t flags,
-    mode_t mode,
-    const struct path *pwd
-);
+off_t vfs_lseek(struct file *file, off_t offset, seek_whence_t whence);
 
 /**
  * 读取文件
@@ -179,8 +191,97 @@ ssize_t vfs_read(struct file *file, char *buf, size_t count, off_t *pos);
 ssize_t vfs_write(struct file *file, const char *buf, size_t count, off_t *pos);
 
 /**
+ * 截断文件
+ *
+ * @param file 打开的文件
+ * @param length 目标长度
+ */
+int vfs_truncate(struct file *file, off_t length);
+
+/**
  * 关闭文件
  *
  * @param file 要关闭的文件
  */
 void vfs_close(struct file *file);
+
+/**
+ * 创建目录
+ *
+ * @param path 路径字符串
+ * @param mode 目录权限
+ * @param pwd 当前工作目录
+ */
+int vfs_mkdir(const char *path, mode_t mode, const struct path *pwd);
+
+/**
+ * 删除空目录
+ *
+ * @param path 路径字符串
+ * @param pwd 当前工作目录
+ */
+int vfs_rmdir(const char *path, const struct path *pwd);
+
+/**
+ * 删除文件
+ *
+ * @param path 路径字符串
+ * @param pwd 当前工作目录
+ */
+int vfs_unlink(const char *path, const struct path *pwd);
+
+/**
+ * 创建符号链接
+ *
+ * @param target 链接目标字符串
+ * @param linkpath 链接路径
+ * @param pwd 当前工作目录
+ */
+int vfs_symlink(const char *target, const char *linkpath, const struct path *pwd);
+
+/**
+ * 创建硬链接
+ *
+ * @param oldpath 现有文件路径
+ * @param newpath 新链接路径
+ * @param pwd 当前工作目录
+ */
+int vfs_link(const char *oldpath, const char *newpath, const struct path *pwd);
+
+/**
+ * 重命名或移动文件/目录
+ *
+ * @param oldpath 源路径
+ * @param newpath 目标路径
+ */
+int vfs_rename(const char *oldpath, const char *newpath, const struct path *pwd);
+
+/**
+ * 获取文件属性
+ *
+ * @param path 路径字符串
+ * @param stat 输出状态结构体
+ * @param pwd 当前工作目录
+ */
+int vfs_getattr(const char *path, struct kstat *stat, const struct path *pwd);
+
+/**
+ * 设置文件属性
+ *
+ * @param path 路径字符串
+ * @param attr 属性结构体
+ * @param pwd 当前工作目录
+ */
+int vfs_setattr(const char *path, struct iattr *attr, const struct path *pwd);
+
+/**
+ * 打开文件
+ *
+ * @param path 路径字符串
+ * @param flags 打开标志
+ * @param mode 创建时的权限
+ * @param pwd 当前工作目录
+ *
+ * @return file 指针
+ */
+struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const struct path *pwd);

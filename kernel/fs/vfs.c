@@ -10,7 +10,6 @@
 #include <initcall.h>
 #include <klibc.h>
 
-#define PATH_MAX 4096
 #define MAX_SYMLINKS 8
 
 #define VFS_HASH_MIN 256
@@ -232,27 +231,7 @@ static inline void vfs_mntput(struct vfsmount *mnt) {
 
 // 在 dentry 哈希表中查找 dentry
 static struct dentry *vfs_dlookup(struct dentry *parent, const char *name, size_t len) {
-    struct dentry_key key;
-    struct hlist_node *node;
-    struct dentry *dentry;
-
-    key.parent = parent;
-    key.name.name = name;
-    key.name.len = len;
-    key.name.hash = vfs_full_name_hash(name, len);   
-
-    rcu_read_lock();
-    node = hash_lookup_rcu(&dentry_cache.hash, &key, vfs_dentry_get_key);
-    if (node) {
-        dentry = hlist_entry(node, struct dentry, hash_node);
-        if (vfs_dget_rcu(dentry)) {
-            rcu_read_unlock();
-            return dentry;
-        }
-    }
-
-    rcu_read_unlock();
-    return NULL;
+    return vfs_dcache_find(parent, name, len);
 }
 
 // 分配并初始化 dentry
@@ -293,6 +272,9 @@ static struct dentry *vfs_dalloc(struct dentry *parent, const char *name) {
         list_add_tail(&dentry->child, &parent->subdirs);
         spin_unlock(&parent->lock);
     }
+
+    // 插入 dentry 哈希表
+    vfs_dcache_add(dentry);
 
     return dentry;
 }
@@ -350,18 +332,6 @@ static inline struct dentry *vfs_dget_rcu(struct dentry *dentry) {
 static inline void vfs_dput(struct dentry *dentry) {
     if (atomic_fetch_sub(&dentry->count, 1) == 1) 
         vfs_dlru_add(dentry);
-}
-
-// 增加路径引用
-static inline void vfs_path_get(struct path *path) {
-    vfs_mntget(path->mnt);
-    vfs_dget(path->dentry);
-}
-
-// 减少路径引用
-static inline void vfs_path_put(struct path *path) {
-    vfs_dput(path->dentry);
-    vfs_mntput(path->mnt);
 }
 
 // 根据名称查找已注册的文件系统类型
@@ -665,7 +635,13 @@ static struct path *vfs_path_lookup(
 
         // 所有组件解析完成
         if (p == NULL) {
-            if (depth == 0) {
+            if (!depth) {
+                // 是负缓存，返回没有找到文件或目录
+                if (!cur->curr_path->dentry->inode) {
+                    err = -ENOENT;
+                    break;
+                }
+
                 // 没有符号链接，直接返回结果
                 if (
                     (flags & LOOKUP_DIRECTORY) &&
@@ -682,10 +658,20 @@ static struct path *vfs_path_lookup(
                 vfs_path_prs_free(cur);
                 return res;
             } else {
-                // 还有符号链接需要处理，继续处理下一个符号链接
+                /*
+                 * 我们已经完成了符号链接的展开
+                 * 此时 cur->curr_path 就是最终路径
+                 * 直接返回结果
+                 * 并清理栈中所有残留的解析器 
+                 */
+                res = cur->curr_path;
+                cur->curr_path = NULL;
                 vfs_path_prs_free(cur);
-                cur = stack[--depth];
-                continue;
+
+                while (depth > 0)
+                    vfs_path_prs_free(stack[--depth]);
+
+                return res;
             }
         }
 
@@ -781,6 +767,80 @@ static struct path *vfs_path_lookup(
         vfs_path_prs_free(stack[--depth]);
 
     return ERR_PTR(err);
+}
+
+/**
+ * 根据路径找到父目录的信息
+ *
+ * @param path 要解析的路径字符串
+ * @param pwd 当前工作目录
+ * @param name 指向原始 path 中最后一个组件的起始字符
+ * @param len 最后一个组件的长度
+ *
+ * @return 父目录的 path 指针
+ */
+static struct path *vfs_path_parent(
+    const char *path,
+    const struct path *pwd,
+    const char **name,
+    size_t *len
+) {
+    const char *last_slash;
+    const char *end;
+    char *parent_buf;
+    struct path *parent;
+    size_t parent_len;
+
+    if (!path || !name || !len)
+        return ERR_PTR(-EINVAL);
+
+    // 跳过末尾的斜杠，定位到实际路径的最后一个非斜杠字符
+    end = path + strlen(path);
+    while (end > path && end[-1] == '/')
+        end--;
+    if (end == path)                // 路径全部由斜杠组成，无效
+        return ERR_PTR(-ENOENT);
+
+    // 在有效范围内查找最后一个 '/' 字符
+    last_slash = memrchr(path, '/', end - path);
+    if (last_slash) {
+        // 有斜杠：父目录为前缀部分，最后一个组件为斜杠后的部分
+        parent_len = last_slash - path;
+        if (parent_len == 0) {
+            // 父目录是根目录
+            parent = vfs_path_lookup("/", LOOKUP_DIRECTORY, pwd);
+        } else {
+            // 分配父目录字符串
+            parent_buf = kheap_alloc(parent_len + 1);
+            if (!parent_buf)
+                return ERR_PTR(-ENOMEM);
+
+            memcpy(parent_buf, path, parent_len);
+            parent_buf[parent_len] = '\0';
+            parent = vfs_path_lookup(parent_buf, LOOKUP_DIRECTORY, pwd);
+            kheap_free(parent_buf);
+        }
+        
+        // 输出最后一个组件的名称和长度（跳过斜杠）
+        *name = last_slash + 1;
+        *len = end - (last_slash + 1);
+    } else {
+        // 没有斜杠：整个路径就是最后一个组件，父目录为当前目录
+        parent = vfs_path_lookup(".", LOOKUP_DIRECTORY, pwd);
+        *name = path;
+        *len = end - path;
+    }
+
+    if (IS_ERR(parent))
+        return parent;
+
+    // 确保最后一个组件非空
+    if (*len == 0) {
+        vfs_path_put(parent);
+        return ERR_PTR(-ENOENT);
+    }
+
+    return parent;
 }
 
 // 挂载根文件系统
@@ -888,9 +948,6 @@ static int vfs_inode_permission(struct inode *inode, int mask) {
  * @param dir 父目录 inode
  * @param dentry 新文件目录项
  * @param mode 文件权限
- *
- * @return 成功：0
- * @return 失败：错误码
  */
 static int vfs_create(struct inode *dir, struct dentry *dentry, mode_t mode) {
     int err;
@@ -903,23 +960,6 @@ static int vfs_create(struct inode *dir, struct dentry *dentry, mode_t mode) {
         return -EINVAL;
 
     return dir->ops->create(dir, dentry, mode);
-}
-
-/**
- * 截断文件
- *
- * @param file 打开的文件
- * @param length 目标长度
- */
-static int vfs_truncate(struct file *file, off_t length) {
-    struct inode *inode;
-    struct iattr attr = { .ia_valid = ATTR_SIZE, .ia_size = length };
-
-    inode = file->path.dentry->inode;
-    if (!inode->ops->setattr)
-        return -EINVAL;
-
-    return inode->ops->setattr(file->path.dentry, &attr);
 }
 
 /**
@@ -969,6 +1009,93 @@ static struct file_operations default_file_operations = {
     .write   = NULL,
     .llseek  = vfs_default_llseek,
 };
+
+// 将 inode 添加到 inode 缓存哈希表
+void vfs_icache_add(struct inode *inode) {
+    spin_lock(&inode_cache.lock);
+    hash_add(&inode_cache.hash, &inode->hash, &inode->key);
+    spin_unlock(&inode_cache.lock);
+}
+
+/**
+ * 在 inode 缓存哈希表中查找 inode
+ *
+ * @param sb 超级块
+ * @param ino inode 号
+ *
+ * @return 找到的 inode（引用计数已增加）
+ */
+struct inode *vfs_icache_find(struct super_block *sb, ino_t ino) {
+    struct inode_key key = { .sb = sb, .ino = ino };
+    struct hlist_node *node;
+    struct inode *inode;
+
+    rcu_read_lock();
+
+    node = hash_lookup_rcu(&inode_cache.hash, &key, vfs_inode_get_key);
+    if (node) {
+        inode = hlist_entry(node, struct inode, hash);
+        atomic_fetch_add(&inode->count, 1);
+        rcu_read_unlock();
+        return inode;
+    }
+
+    rcu_read_unlock();
+    return NULL;
+}
+
+// 将 dentry 添加到 dentry 缓存哈希表
+void vfs_dcache_add(struct dentry *dentry) {
+    spin_lock(&dentry_cache.lock);
+    hash_add(&dentry_cache.hash, &dentry->hash_node, &dentry->key);
+    spin_unlock(&dentry_cache.lock);
+}
+
+/**
+ * 在 dentry 缓存哈希表中查找 dentry
+ *
+ * @param parent 父 dentry
+ * @param name 组件名
+ * @param len 名称长度
+ *
+ * @return 找到的 dentry（引用计数已增加）
+ */
+struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t len) {
+    struct dentry_key key;
+    struct hlist_node *node;
+    struct dentry *dentry;
+
+    key.parent = parent;
+    key.name.name = name;
+    key.name.len = len;
+    key.name.hash = vfs_full_name_hash(name, len);
+
+    rcu_read_lock();
+
+    node = hash_lookup_rcu(&dentry_cache.hash, &key, vfs_dentry_get_key);
+    if (node) {
+        dentry = hlist_entry(node, struct dentry, hash_node);
+        if (vfs_dget_rcu(dentry)) {
+            rcu_read_unlock();
+            return dentry;
+        }
+    }
+    
+    rcu_read_unlock();
+    return NULL;
+}
+
+// 增加路径引用
+void vfs_path_get(struct path *path) {
+    vfs_mntget(path->mnt);
+    vfs_dget(path->dentry);
+}
+
+// 减少路径引用
+void vfs_path_put(struct path *path) {
+    vfs_dput(path->dentry);
+    vfs_mntput(path->mnt);
+}
 
 // 注册文件系统
 int vfs_register_filesystem(struct file_system_type *fs) {
@@ -1143,6 +1270,552 @@ bool vfs_init(void) {
 }
 
 /**
+ * 调整文件偏移
+ *
+ * @param file 打开的文件
+ * @param offset 偏移量
+ * @param whence 参照点
+ *
+ * @return 新的文件偏移
+ */
+off_t vfs_lseek(struct file *file, off_t offset, seek_whence_t whence) {
+    struct inode *inode = file->path.dentry->inode;
+    off_t new_pos;
+
+    // 根据参照点计算新位置
+    switch (whence) {
+        case SEEK_SET:
+            new_pos = offset;
+            break;
+        case SEEK_CUR:
+            new_pos = file->pos + offset;
+            break;
+        case SEEK_END:
+            new_pos = inode->size + offset;
+            break;
+        default:
+            return -EINVAL;
+    }
+
+    // 偏移不能为负
+    if (new_pos < 0)
+        return -EINVAL;
+
+    spin_lock(&file->lock);
+    file->pos = new_pos;
+    spin_unlock(&file->lock);
+
+    return new_pos;
+}
+
+/**
+ * 读取文件
+ *
+ * @param file 打开的文件
+ * @param buf 用户缓冲区
+ * @param count 读取字节数
+ * @param pos 偏移指针，NULL 表示使用 file 内部偏移
+ *
+ * @return 实际读取字节数
+ */
+ssize_t vfs_read(struct file *file, char *buf, size_t count, off_t *pos) {
+    off_t offset;
+    ssize_t ret;
+
+    if (!(file->mode & MAY_READ))
+        return -EBADF;
+
+    if (!file->ops->read)
+        return -EINVAL;
+
+    // 确定读取偏移：外部传入优先，否则用文件内部偏移
+    if (pos) {
+        offset = *pos;
+    } else {
+        offset = file->pos;
+    }
+
+    ret = file->ops->read(file, buf, count, &offset);
+    if (ret > 0) {
+        if (pos) {
+            *pos = offset;
+        } else {
+            // 如果成功读取，更新 file 内部偏移
+            spin_lock(&file->lock);
+            file->pos = offset;
+            spin_unlock(&file->lock);
+        }
+    }
+
+    return ret;
+}
+
+/**
+ * 写入文件
+ *
+ * @param file 打开的文件
+ * @param buf 数据缓冲区
+ * @param count 写入字节数
+ * @param pos 偏移指针，NULL 表示使用 file 内部偏移
+ *
+ * @return 实际写入字节数
+ */
+ssize_t vfs_write(struct file *file, const char *buf, size_t count, off_t *pos) {
+    off_t offset;
+    ssize_t ret;
+
+    if (!(file->mode & MAY_WRITE))
+        return -EBADF;
+
+    if (!file->ops->write)
+        return -EINVAL;
+
+    // 确定写入偏移：外部传入优先，否则用文件内部偏移
+    if (pos) {
+        offset = *pos;
+    } else {
+        offset = file->pos;
+    }
+
+    ret = file->ops->write(file, buf, count, &offset);
+    if (ret > 0) {
+        if (pos) {
+            *pos = offset;
+        } else {
+            // 如果成功写入，更新 file 内部偏移
+            spin_lock(&file->lock);
+            file->pos = offset;
+            spin_unlock(&file->lock);
+        }
+    }
+
+    return ret;
+}
+
+/**
+ * 截断文件
+ *
+ * @param file 打开的文件
+ * @param length 目标长度
+ */
+int vfs_truncate(struct file *file, off_t length) {
+    struct inode *inode = file->path.dentry->inode;
+    struct iattr attr = { .ia_valid = ATTR_SIZE, .ia_size = length };
+
+    if (!inode->ops->setattr)
+        return -EINVAL;
+
+    return inode->ops->setattr(file->path.dentry, &attr);
+}
+
+/**
+ * 关闭文件
+ *
+ * @param file 要关闭的文件
+ */
+void vfs_close(struct file *file) {
+    if (file->ops->release)
+        file->ops->release(file->path.dentry->inode, file);
+
+    // 引用计数归零时释放 file 结构体
+    if (atomic_fetch_sub(&file->count, 1) == 1) {
+        vfs_path_put(&file->path);
+        kheap_free(file);
+    }
+}
+
+/**
+ * 创建目录
+ *
+ * @param path 路径字符串
+ * @param mode 目录权限
+ * @param pwd 当前工作目录
+ */
+int vfs_mkdir(const char *path, mode_t mode, const struct path *pwd) {
+    struct path *parent_path = NULL;
+    struct dentry *dentry = NULL;
+    const char *name;
+    size_t namelen;
+    char *name_copy;
+    int err;
+
+    // 解析父目录路径
+    parent_path = vfs_path_parent(path, pwd, &name, &namelen);
+    if (IS_ERR(parent_path))
+        return PTR_ERR(parent_path);
+
+    // 权限检查
+    err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out;
+
+    // 复制组件名（因为 vfs_dalloc 需要以 '\0' 结尾）
+    name_copy = strndup(name, namelen);
+    if (!name_copy) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    // 分配临时 dentry
+    dentry = vfs_dalloc(parent_path->dentry, name_copy);
+    kheap_free(name_copy);
+    if (!dentry) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    // 调用对应文件系统的 mkdir
+    err = parent_path->dentry->inode->ops->mkdir(parent_path->dentry->inode, dentry, mode);
+
+    vfs_dput(dentry);
+out:
+    vfs_path_put(parent_path);
+    return err;
+}
+
+/**
+ * 删除空目录
+ *
+ * @param path 路径字符串
+ * @param pwd 当前工作目录
+ */
+int vfs_rmdir(const char *path, const struct path *pwd) {
+    struct path *target = NULL;
+    struct inode *dir_inode, *child_inode;
+    int err;
+
+    // 解析目标路径
+    target = vfs_path_lookup(path, LOOKUP_DIRECTORY, pwd);
+    if (IS_ERR(target))
+        return PTR_ERR(target);
+
+    child_inode = target->dentry->inode;
+
+    // 确保目标是目录
+    if (!S_ISDIR(child_inode->mode)) {
+        err = -ENOTDIR;
+        goto out;
+    }
+
+    // 权限检查（需要父目录的写和执行权限）
+    dir_inode = target->dentry->parent->inode;
+    err = vfs_inode_permission(dir_inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out;
+
+    // 调用对应文件系统的 rmdir
+    err = dir_inode->ops->rmdir(dir_inode, target->dentry);
+
+out:
+    vfs_path_put(target);
+    return err;
+}
+
+/**
+ * 删除文件
+ *
+ * @param path 路径字符串
+ * @param pwd 当前工作目录
+ */
+int vfs_unlink(const char *path, const struct path *pwd) {
+    struct path *parent_path = NULL;
+    struct dentry *dentry = NULL;
+    const char *name;
+    size_t namelen;
+    char *name_copy;
+    int err;
+
+    // 解析父目录路径和最后一个组件名
+    parent_path = vfs_path_parent(path, pwd, &name, &namelen);
+    if (IS_ERR(parent_path))
+        return PTR_ERR(parent_path);
+
+    // 权限检查（需要父目录的写和执行权限）
+    err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out_parent;
+
+    // 复制组件名（因为 vfs_dalloc 需要以 '\0' 结尾）
+    name_copy = strndup(name, namelen);
+    if (!name_copy) {
+        err = -ENOMEM;
+        goto out_parent;
+    }
+
+    // 分配临时 dentry（负缓存）
+    dentry = vfs_dalloc(parent_path->dentry, name_copy);
+    kheap_free(name_copy);
+    if (!dentry) {
+        err = -ENOMEM;
+        goto out_parent;
+    }
+
+    // 调用对应文件系统的 unlink
+    err = parent_path->dentry->inode->ops->unlink(parent_path->dentry->inode, dentry);
+    vfs_dput(dentry);
+
+out_parent:
+    vfs_path_put(parent_path);
+    return err;
+}
+
+/**
+ * 创建符号链接
+ *
+ * @param target 链接目标字符串
+ * @param linkpath 链接路径
+ * @param pwd 当前工作目录
+ */
+int vfs_symlink(const char *target, const char *linkpath, const struct path *pwd) {
+    struct path *parent_path = NULL;
+    struct dentry *dentry = NULL;
+    const char *name;
+    size_t namelen;
+    char *name_copy;
+    int err;
+
+    // 解析链接的父目录路径
+    parent_path = vfs_path_parent(linkpath, pwd, &name, &namelen);
+    if (IS_ERR(parent_path))
+        return PTR_ERR(parent_path);
+
+    // 权限检查
+    err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out;
+
+    // 复制组件名
+    name_copy = strndup(name, namelen);
+    if (!name_copy) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    // 分配临时 dentry
+    dentry = vfs_dalloc(parent_path->dentry, name_copy);
+    kheap_free(name_copy);
+    if (!dentry) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    // 调用对应文件系统的 symlink
+    err = parent_path->dentry->inode->ops->symlink(parent_path->dentry->inode, dentry, target);
+
+    vfs_dput(dentry);
+out:
+    vfs_path_put(parent_path);
+    return err;
+}
+
+/**
+ * 创建硬链接
+ *
+ * @param oldpath 现有文件路径
+ * @param newpath 新链接路径
+ * @param pwd 当前工作目录
+ */
+int vfs_link(const char *oldpath, const char *newpath, const struct path *pwd) {
+    struct path *old_path = NULL, *new_parent_path = NULL;
+    struct dentry *new_dentry = NULL;
+    const char *name;
+    size_t namelen;
+    char *name_copy;
+    int err;
+
+    // 解析现有文件路径
+    old_path = vfs_path_lookup(oldpath, LOOKUP_FOLLOW, pwd);
+    if (IS_ERR(old_path))
+        return PTR_ERR(old_path);
+
+    // 确保不是目录（硬链接通常不允许对目录）
+    if (S_ISDIR(old_path->dentry->inode->mode)) {
+        err = -EPERM;
+        goto out_old;
+    }
+
+    // 解析新链接的父目录路径
+    new_parent_path = vfs_path_parent(newpath, pwd, &name, &namelen);
+    if (IS_ERR(new_parent_path)) {
+        err = PTR_ERR(new_parent_path);
+        goto out_old;
+    }
+
+    // 权限检查（需要父目录的写和执行权限）
+    err = vfs_inode_permission(new_parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out_new_parent;
+
+    // 复制组件名
+    name_copy = strndup(name, namelen);
+    if (!name_copy) {
+        err = -ENOMEM;
+        goto out_new_parent;
+    }
+
+    // 分配临时 dentry
+    new_dentry = vfs_dalloc(new_parent_path->dentry, name_copy);
+    kheap_free(name_copy);
+    if (!new_dentry) {
+        err = -ENOMEM;
+        goto out_new_parent;
+    }
+
+    // 调用对应文件系统的 link
+    err = new_parent_path->dentry->inode->ops->link(old_path->dentry, new_parent_path->dentry->inode, new_dentry);
+
+    vfs_dput(new_dentry);
+out_new_parent:
+    vfs_path_put(new_parent_path);
+out_old:
+    vfs_path_put(old_path);
+    return err;
+}
+
+/**
+ * 重命名或移动文件/目录
+ *
+ * @param oldpath 源路径
+ * @param newpath 目标路径
+ */
+int vfs_rename(const char *oldpath, const char *newpath, const struct path *pwd) {
+    struct path *old_path = NULL, *new_path = NULL;
+    struct path *new_parent_path = NULL;
+    struct dentry *new_dentry = NULL;
+    const char *name;
+    size_t namelen;
+    char *name_copy;
+    int err;
+
+    // 解析源路径
+    old_path = vfs_path_lookup(oldpath, LOOKUP_FOLLOW, pwd);
+    if (IS_ERR(old_path))
+        return PTR_ERR(old_path);
+
+    // 解析目标路径（可能已存在）
+    new_path = vfs_path_lookup(newpath, LOOKUP_FOLLOW, pwd);
+    if (IS_ERR(new_path)) {
+        if (PTR_ERR(new_path) != -ENOENT) {
+            err = PTR_ERR(new_path);
+            goto out_old;
+        }
+        
+        // 目标路径不存在，需要创建负缓存 dentry
+        new_parent_path = vfs_path_parent(newpath, pwd, &name, &namelen);
+        if (IS_ERR(new_parent_path)) {
+            err = PTR_ERR(new_parent_path);
+            goto out_old;
+        }
+
+        // 权限检查（父目录写和执行权限）
+        err = vfs_inode_permission(new_parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
+        if (err) {
+            vfs_path_put(new_parent_path);
+            goto out_old;
+        }
+
+        name_copy = strndup(name, namelen);
+        if (!name_copy) {
+            vfs_path_put(new_parent_path);
+            err = -ENOMEM;
+            goto out_old;
+        }
+
+        new_dentry = vfs_dalloc(new_parent_path->dentry, name_copy);
+        kheap_free(name_copy);
+        if (!new_dentry) {
+            vfs_path_put(new_parent_path);
+            err = -ENOMEM;
+            goto out_old;
+        }
+
+        // 构造一个临时 path 结构体代表该负缓存 dentry
+        new_path = kheap_alloc(sizeof(struct path));
+        if (!new_path) {
+            vfs_dput(new_dentry);
+            vfs_path_put(new_parent_path);
+            err = -ENOMEM;
+            goto out_old;
+        }
+
+        new_path->mnt = new_parent_path->mnt;
+        vfs_mntget(new_path->mnt);
+        new_path->dentry = new_dentry;
+        vfs_path_put(new_parent_path);
+    }
+
+    // 权限检查（需要源和目标父目录的写和执行权限）
+    err = vfs_inode_permission(old_path->dentry->parent->inode, MAY_WRITE | MAY_EXEC);
+    if (!err)
+        err = vfs_inode_permission(new_path->dentry->parent->inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out_new;
+
+    // 调用对应文件系统的 rename
+    err = old_path->dentry->parent->inode->ops->rename(
+        old_path->dentry->parent->inode, old_path->dentry,
+        new_path->dentry->parent->inode, new_path->dentry);
+
+out_new:
+    vfs_path_put(new_path);
+out_old:
+    vfs_path_put(old_path);
+    return err;
+}
+
+/**
+ * 获取文件属性
+ *
+ * @param path 路径字符串
+ * @param stat 输出状态结构体
+ * @param pwd 当前工作目录
+ */
+int vfs_getattr(const char *path, struct kstat *stat, const struct path *pwd) {
+    struct path *ps = NULL;
+    int err;
+
+    // 解析路径
+    ps = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
+    if (IS_ERR(ps))
+        return PTR_ERR(ps);
+
+    // 调用对应文件系统的 getattr
+    err = ps->dentry->inode->ops->getattr(ps, stat);
+
+    vfs_path_put(ps);
+    return err;
+}
+
+/**
+ * 设置文件属性
+ *
+ * @param path 路径字符串
+ * @param attr 属性结构体
+ * @param pwd 当前工作目录
+ */
+int vfs_setattr(const char *path, struct iattr *attr, const struct path *pwd) {
+    struct path *ps = NULL;
+    int err;
+
+    // 解析路径
+    ps = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
+    if (IS_ERR(ps))
+        return PTR_ERR(ps);
+
+    // 权限检查（修改属性通常需要写权限或自己是属主）
+    err = vfs_inode_permission(ps->dentry->inode, MAY_WRITE);
+    if (err)
+        goto out;
+
+    // 调用底层 setattr
+    err = ps->dentry->inode->ops->setattr(ps->dentry, attr);
+
+out:
+    vfs_path_put(ps);
+    return err;
+}
+
+/**
  * 打开文件
  *
  * @param path 路径字符串
@@ -1152,12 +1825,7 @@ bool vfs_init(void) {
  *
  * @return file 指针
  */
-struct file *vfs_open(
-    const char *path,
-    open_flags_t flags,
-    mode_t mode,
-    const struct path *pwd
-) {
+struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const struct path *pwd) {
     struct path *ps = NULL;
     struct dentry *dentry = NULL;
     struct file *file = NULL;
@@ -1171,27 +1839,22 @@ struct file *vfs_open(
         if (PTR_ERR(ps) != -ENOENT || !(flags & O_CREAT))
             return ERR_CAST(ps);
 
-        // O_CREAT 且文件不存在
-
-        // 复制路径字符串，以便安全地分割目录和文件名
+        // O_CREAT 且文件不存在，准备创建
         char *path_copy = strdup(path);
         if (!path_copy) {
             err = -ENOMEM;
             goto out_err_ps;
         }
 
-        // 找到最后一个路径分隔符，分割出父目录路径和文件名
         char *last_slash = strrchr(path_copy, '/');
         char *filename;
         const char *parent_path_str;
 
-        // 如果存在路径分隔符，分割路径
         if (last_slash) {
             *last_slash = '\0';
             parent_path_str = path_copy;
             filename = last_slash + 1;
         } else {
-            // 没有 '/'，父目录就是当前目录
             parent_path_str = ".";
             filename = path_copy;
         }
@@ -1241,7 +1904,6 @@ struct file *vfs_open(
     // 根据打开标志计算权限掩码
     int acc = flags & O_RDWR;
     perm_mask = 0;
-
     if (acc != O_WRONLY)
         perm_mask |= MAY_READ;
 
@@ -1285,11 +1947,7 @@ struct file *vfs_open(
     }
 
     // 如果指定了 O_TRUNC 且有写权限且是常规文件，执行截断
-    if (
-        (flags & O_TRUNC) && 
-        (perm_mask & MAY_WRITE) &&
-        S_ISREG(inode->mode)
-    ) {
+    if ((flags & O_TRUNC) && (perm_mask & MAY_WRITE) && S_ISREG(inode->mode)) {
         err = vfs_truncate(file, 0);
         if (err)
             goto out_free_file;
@@ -1308,90 +1966,3 @@ out_err_ps:
     return ERR_PTR(err);
 }
 
-/**
- * 读取文件
- *
- * @param file 打开的文件
- * @param buf 用户缓冲区
- * @param count 读取字节数
- * @param pos 偏移指针，NULL 表示使用 file 内部偏移
- *
- * @return 实际读取字节数
- */
-ssize_t vfs_read(struct file *file, char *buf, size_t count, off_t *pos) {
-    off_t offset;
-    ssize_t ret;
-
-    if (!(file->mode & MAY_READ))
-        return -EBADF;
-
-    if (!file->ops->read)
-        return -EINVAL;
-
-    // 确定读取偏移：外部传入优先，否则用文件内部偏移
-    offset = pos ? *pos : file->pos;
-    ret = file->ops->read(file, buf, count, &offset);
-    if (ret > 0) {
-        // 更新偏移量
-        if (pos)
-            *pos = offset;
-        else {
-            spin_lock(&file->lock);
-            file->pos = offset;
-            spin_unlock(&file->lock);
-        }
-    }
-
-    return ret;
-}
-
-/**
- * 写入文件
- *
- * @param file 打开的文件
- * @param buf 数据缓冲区
- * @param count 写入字节数
- * @param pos 偏移指针，NULL 表示使用 file 内部偏移
- *
- * @return 实际写入字节数
- */
-ssize_t vfs_write(struct file *file, const char *buf, size_t count, off_t *pos) {
-    off_t offset;
-    ssize_t ret;
-
-    if (!(file->mode & MAY_WRITE))
-        return -EBADF;
-
-    if (!file->ops->write)
-        return -EINVAL;
-
-    offset = pos ? *pos : file->pos;
-    ret = file->ops->write(file, buf, count, &offset);
-    if (ret > 0) {
-        if (pos)
-            *pos = offset;
-        else {
-            spin_lock(&file->lock);
-            file->pos = offset;
-            spin_unlock(&file->lock);
-        }
-    }
-
-    return ret;
-}
-
-/**
- * 关闭文件
- *
- * @param file 要关闭的文件
- */
-void vfs_close(struct file *file) {
-    if (file->ops->release)
-        file->ops->release(file->path.dentry->inode, file);
-
-    // 引用计数归零时释放 file 结构体
-    if (atomic_fetch_sub(&file->count, 1) == 1) {
-        vfs_path_put(&file->path);
-        kheap_free(file);
-    }
-}
