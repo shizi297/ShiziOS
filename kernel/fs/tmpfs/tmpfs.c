@@ -31,8 +31,10 @@ struct tmpfs_sb_info {
 // inode 私有数据
 struct tmpfs_inode {
     dynarr_t *pages;    // 文件数据页指针数组
+    char *symlink_target;   // 符号链接目标字符串
     uint64_t data_size; // 文件实际数据大小
     struct list_head dir_list;  // 目录项链表头（仅目录使用）
+    spinlock_t dir_lock;
 };
 
 // 目录项
@@ -187,6 +189,9 @@ static int tmpfs_inode_init(
     inode->key.sb = sb;
     inode->key.ino = new_ino;
 
+    // 插入 inode 哈希表
+    vfs_icache_add(inode);
+
     return 0;
 }
 
@@ -203,8 +208,10 @@ static struct inode *tmpfs_alloc_inode(struct super_block *sb) {
     }
 
     ti->pages = NULL;
+    ti->symlink_target = NULL;
     ti->data_size = 0;
     INIT_LIST_HEAD(&ti->dir_list);
+    spinlock_init(&ti->dir_lock);    
     inode->private = ti;
 
     return inode;
@@ -242,6 +249,9 @@ static void tmpfs_evict_inode(struct inode *inode) {
         kheap_free(de->name);
         kheap_free(de);
     }
+
+    // 释放符号链接的字符串
+    if (ti->symlink_target) kheap_free(ti->symlink_target);
 
     // 归还在超级块中占用的页数
     tmpfs_free_pages(sbi, page_count);
@@ -308,6 +318,12 @@ static struct super_operations tmpfs_super_operations = {
 static struct inode *tmpfs_iget(struct super_block *sb, ino_t ino) {
     struct inode *inode;
 
+    // 优先从 inode 哈希表查找
+    inode = vfs_icache_find(sb, ino);
+    if (inode)
+        return inode;
+
+    // 哈希表未命中，回退到链表遍历
     spin_lock(&sb->lock);
     list_for_each_entry(inode, &sb->inodes, sb_list) {
         if (inode->ino == ino) {
@@ -316,12 +332,11 @@ static struct inode *tmpfs_iget(struct super_block *sb, ino_t ino) {
             return inode;
         }
     }
-
     spin_unlock(&sb->lock);
     return ERR_PTR(-ENOENT);
 }
 
-// 在目录链表中按名称查找条目
+// 在目录链表中按名称查找条目(调用方需要有私有 inode 的 dir 锁)
 static struct tmpfs_dir_entry *tmpfs_dir_lookup(
     struct tmpfs_inode *ti,
     const char *name,
@@ -337,7 +352,7 @@ static struct tmpfs_dir_entry *tmpfs_dir_lookup(
     return NULL;
 }
 
-// 在目录链表尾部添加条目
+// 在目录链表尾部添加条目(调用方需要有私有 inode 的 dir 锁)
 static int tmpfs_dir_add(
     struct tmpfs_inode *ti,
     const char *name,
@@ -368,7 +383,7 @@ static int tmpfs_dir_add(
     return 0;
 }
 
-// 从目录链表中删除条目并释放其占用的内存
+// 从目录链表中删除条目并释放其占用的内存(调用方需要有私有 inode 的 dir 锁)
 static void tmpfs_dir_remove(struct tmpfs_dir_entry *de) {
     list_del(&de->list);
     kheap_free(de->name);
@@ -440,6 +455,9 @@ static int tmpfs_create(
     inode->fop = &tmpfs_file_operations;
     inode->nlink = 1;
 
+    // 设置操作表
+    inode->ops = &tmpfs_inode_operations;
+
     // 加入超级块的 inode 链表
     spin_lock(&dir->sb->lock);
     list_add_tail(&inode->sb_list, &dir->sb->inodes);
@@ -478,8 +496,9 @@ static int tmpfs_symlink(
     struct inode *inode;
     struct tmpfs_inode *ti;
     int err;
-    size_t target_len = strlen(target);
+    size_t target_len;
 
+    // 分配并初始化新 inode
     inode = tmpfs_alloc_inode(dir->sb);
     if (!inode)
         return -ENOMEM;
@@ -491,33 +510,28 @@ static int tmpfs_symlink(
         return err;
     }
 
-    // 设置指向同一个 inode 操作表
+    // 设置操作表及初始硬链接数
     inode->ops = &tmpfs_inode_operations;
     inode->nlink = 1;
 
-    // 分配数据页，将目标路径写入
     ti = inode->private;
-    ti->pages = dynarr_create(sizeof(void *), 0);
-    if (!ti->pages) {
+    target_len = strlen(target);
+
+    // 分配缓冲区存储目标路径
+    ti->symlink_target = kheap_alloc(PATH_MAX);
+    if (!ti->symlink_target) {
         tmpfs_destroy_inode(inode);
         return -ENOMEM;
     }
 
-    void *page = kheap_alloc(PAGE_SIZE);
-    if (!page) {
-        dynarr_destroy(ti->pages);
-        ti->pages = NULL;
-        tmpfs_destroy_inode(inode);
-        return -ENOMEM;
-    }
+    // 复制目标路径，避免溢出
+    strncpy(ti->symlink_target, target, PATH_MAX - 1);
+    ti->symlink_target[PATH_MAX - 1] = '\0';
 
-    memset(page, 0, PAGE_SIZE);
-    memcpy(page, target, target_len);
-    dynarr_append(ti->pages, &page);
     ti->data_size = target_len;
     inode->size = target_len;
 
-    // 同步更新以 512 字节为单位的块计数，用于 getattr
+    // 更新块计数，用于 getattr
     inode->blocks = (target_len + 511) >> 9;
 
     // 加入超级块 inode 链表
@@ -525,7 +539,7 @@ static int tmpfs_symlink(
     list_add_tail(&inode->sb_list, &dir->sb->inodes);
     spin_unlock(&dir->sb->lock);
 
-    // 在父目录中添加条目
+    // 在父目录的目录项链表中添加新条目
     err = tmpfs_dir_add(dir->private, dentry->name.name, dentry->name.len, inode->ino);
     if (err) {
         spin_lock(&dir->sb->lock);
@@ -536,6 +550,7 @@ static int tmpfs_symlink(
         return err;
     }
 
+    // 将新创建的 inode 关联到 dentry，清除负缓存标志
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
     return 0;
@@ -1007,15 +1022,16 @@ static ssize_t tmpfs_readlink(
     size_t copy_len;
 
     // 符号链接还没有写入数据
-    if (!ti->pages)
+    if (!ti->symlink_target)
         return -EINVAL;
 
-    // 目标路径保存在符号链接的第一个数据页中
+    // 目标路径长度
     copy_len = ti->data_size;
     if (copy_len > bufsiz)
         copy_len = bufsiz;
 
-    memcpy(buf, ti->pages->arr, copy_len);
+    // 复制目标路径到用户缓冲区
+    memcpy(buf, ti->symlink_target, copy_len);
     return copy_len;
 }
 
