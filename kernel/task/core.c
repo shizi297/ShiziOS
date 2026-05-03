@@ -21,6 +21,7 @@
 #include <asm/serial.h>
 #include <stdatomic.h>
 #include <rcu.h>
+#include <initcall.h>
 
 #define TASK_PRINT(fmt, ...) \
     printk("[TASK]" fmt, ##__VA_ARGS__)
@@ -726,6 +727,11 @@ void task_wait(void) {
     }
 }
 
+// 用于需要内核线程才能测试的测试组件
+static void kthread_test(void *arg) {
+    initcall(kthreadtest, 0);
+}
+
 // 设置下一次中断
 void task_set_next_timer(void) {
     sched_class_ptr->set_next_timer(smp_get_task_current());
@@ -922,8 +928,9 @@ void task_init(void) {
     // 初始化定时器回调
     clockevent_timer_init_callback(sched_timer, task_clock_event_handle, NULL);
     smp_set_sched_timer(sched_timer);
-
-    if (task_test) task_test();
+    
+    if (get_logical_id() == bootboot->bspid)
+        task_create_kernel_thread(kthread_test, NULL);
 
     TASK_PRINT("task init success\n");
 

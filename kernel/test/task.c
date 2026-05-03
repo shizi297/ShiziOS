@@ -16,13 +16,12 @@
 #include <heap.h>
 #include <stdbool.h>
 #include <klibc.h>
+#include <initcall.h>
 
 #define TASK_TEST_PRINT(fmt, ...) \
     printk("[TASK_TEST]" fmt, ##__VA_ARGS__)
 
 static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
-static void test(void);
-task_test_func_t task_test = test;
 
 #define RCU_TEST_THREADS      32
 #define RCU_TEST_ROUNDS       50
@@ -228,3 +227,5 @@ static void test(void) {
     for (int i = 0; i < RCU_TEST_THREADS; i++)
         task_create_kernel_thread(test_thread, (void *)(uintptr_t)i);
 }
+
+INITCALL(kthreadtest, 0, test);

@@ -18,10 +18,6 @@ typedef int task_id;
 typedef task_id id_t;
 
 typedef void (*sched_func_t)(void);
-typedef void (*task_test_func_t)(void);
-
-// 测试函数
-extern task_test_func_t task_test;
 
 // 任务状态
 typedef enum {
