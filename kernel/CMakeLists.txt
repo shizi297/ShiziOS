@@ -41,6 +41,12 @@ add_executable(kernel.elf ${EMPTY_SOURCE})
 # 设置内核链接选项
 target_link_options(kernel.elf PRIVATE -nostdlib -no-pie -T ${CMAKE_SOURCE_DIR}/linker.ld -Wl,-z,start-stop-visibility=default)
 
+# 需要强制完整链接的库列表（防止内部 INITCALL 段被丢弃）
+set(WHOLE_ARCHIVE_LIBS kernel_fs)
+if(TEST)
+    list(APPEND WHOLE_ARCHIVE_LIBS kernel_test)
+endif()
+
 target_link_libraries(kernel.elf
     "-Wl,--start-group"
     kernel_init
@@ -54,12 +60,8 @@ target_link_libraries(kernel.elf
     kernel_ipc
     kernel_sync
     "-Wl,--whole-archive"
-    kernel_fs
+    ${WHOLE_ARCHIVE_LIBS}
     "-Wl,--no-whole-archive"
     libc
     "-Wl,--end-group"
 )
-
-if(TEST)
-    target_link_libraries(kernel.elf kernel_test)
-endif()

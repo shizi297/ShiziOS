@@ -24,21 +24,21 @@ SECTIONS
         __start_initcall_fs_0 = .;
         KEEP(*(.initcall_fs_0))
         __stop_initcall_fs_0 = .;
+        __start_initcall_kthreadtest_0 = .;
+        KEEP(*(.initcall_kthreadtest_0))
+        __stop_initcall_kthreadtest_0 = .;
     } :all
 
     .data : {
         *(.data .data.*)
-        PROVIDE(task_test = 0);
     } :all
 
-    .bss : {  
-        . = ALIGN(16);
-        *(COMMON)
+    .bss : {
+        __bss_start = .;
         *(.bss .bss.*)
-        
+        *(COMMON)
         . = ALIGN(16);
-        kernel_stack_bottom = .;
-        kernel_stack_top = .;
+        __bss_end = .;
     } :all
 
     /DISCARD/ : { 
