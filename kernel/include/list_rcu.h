@@ -16,9 +16,9 @@
  *
  * 必须在 rcu_read_lock() 内使用，遍历期间不可睡眠。
  */
-#define list_for_each_rcu(pos, head)                  \
-    for (pos = rcu_dereference((head)->next);         \
-         pos != (head);                               \
+#define list_for_each_rcu(pos, head) \
+    for (pos = rcu_dereference((head)->next); \
+         pos != (head) && pos->next != pos; \
          pos = rcu_dereference(pos->next))
 
 /**
@@ -30,12 +30,10 @@
  *
  * 必须在 rcu_read_lock() 内使用，遍历期间不可睡眠。
  */
-#define list_for_each_entry_rcu(pos, head, member)                 \
-    for (pos = list_entry(rcu_dereference((head)->next),           \
-                          typeof(*pos), member);                   \
-         &pos->member != (head);                                   \
-         pos = list_entry(rcu_dereference(pos->member.next),       \
-                          typeof(*pos), member))
+#define list_for_each_entry_rcu(pos, head, member) \
+    for (pos = list_entry(rcu_dereference((head)->next), typeof(*pos), member); \
+         &pos->member != (head) && (&pos->member)->next != &pos->member; \
+         pos = list_entry(rcu_dereference(pos->member.next), typeof(*pos), member))
 
 /**
  * 在头部添加节点
@@ -115,7 +113,7 @@ static inline void list_replace_rcu(
  */
 #define hlist_for_each_rcu(pos, head)                    \
     for (pos = rcu_dereference((head)->first);           \
-         pos;                                            \
+         pos && pos->next != pos;                        \
          pos = rcu_dereference(pos->next))
 
 /**
@@ -127,12 +125,10 @@ static inline void list_replace_rcu(
  *
  * 必须在 rcu_read_lock() 内使用，遍历期间不可睡眠。
  */
-#define hlist_for_each_entry_rcu(pos, head, member)                \
-    for (pos = hlist_entry_safe(rcu_dereference((head)->first),    \
-                                typeof(*pos), member);             \
-         pos;                                                      \
-         pos = hlist_entry_safe(rcu_dereference(pos->member.next), \
-                                typeof(*pos), member))
+#define hlist_for_each_entry_rcu(pos, head, member) \
+    for (pos = hlist_entry_safe(rcu_dereference((head)->first), typeof(*pos), member); \
+         pos && (&pos->member)->next != &pos->member; \
+         pos = hlist_entry_safe(rcu_dereference(pos->member.next), typeof(*pos), member))
 
 /**
  * 在头部添加节点
