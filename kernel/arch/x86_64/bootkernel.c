@@ -9,6 +9,7 @@
 #include <spinlock.h>
 #include <processor.h>
 #include <apic.h>
+#include <klibc.h>
 
 #define SERIAL_FILE_INIT
 #include <asm/serial.h>
@@ -58,6 +59,12 @@ void _start(uint64_t logical_id_raw) {
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
     // bootboot在加载内核前已经初始化串口，这里不初始化
+
+    // 清0 bss
+    extern char __bss_start[], __bss_end[];
+    size_t bss_size = __bss_end - __bss_start;
+    if (bss_size) 
+        memset(__bss_start, 0, bss_size);
 
     spin_lock(&boot_init_spin);
     apic_boot_init();
