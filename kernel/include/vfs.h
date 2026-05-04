@@ -6,7 +6,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <drivers.h>
 #include <shizi/types.h>
 #include <time.h>
 
@@ -21,6 +20,12 @@ typedef uint64_t nlink_t;
 
 // 打开的文件描述符
 struct file;
+
+// 块计数类型
+typedef int64_t blkcnt_t;
+
+// 块大小
+typedef int64_t blksize_t;
 
 // 文件模式类型
 typedef enum mode_t : unsigned int {
@@ -62,6 +67,7 @@ typedef enum mode_t : unsigned int {
 typedef enum mount_flags {
     MS_NONE     = 0,       // 无特殊标志
     MS_RDONLY   = 1 << 0,  // 只读挂载
+    MS_NOUSER   = 1 << 1,  // 禁止用户卸载（仅内核内部可使用）
 } mount_flags_t;
 
 // 打开文件标志
@@ -84,12 +90,6 @@ typedef enum seek_whence {
     SEEK_CUR = 1,   // 从当前位置偏移
     SEEK_END = 2,   // 从文件末尾偏移
 } seek_whence_t;
-
-// 路径结构体，表示一个文件系统路径
-struct path {
-    struct vfsmount *mnt;
-    struct dentry *dentry;
-};
 
 // vfs 文件状态信息
 struct kstat {
@@ -130,6 +130,12 @@ struct statfs {
     uint64_t f_namemax; // 最大文件名长度
 };
 
+// 路径结构体，表示一个文件系统路径
+struct path {
+    struct vfsmount *mnt;
+    struct dentry *dentry;
+};
+
 /**
  * 挂载一个文件系统
  * 
@@ -138,6 +144,7 @@ struct statfs {
  * @param type 文件系统类型名称
  * @param flags 挂载标志
  * @param data 文件系统特定数据
+ * @param from_kernel 调用者是否为内核
  * 
  * @return 挂载点的 vfsmount 指针
  */
@@ -146,8 +153,18 @@ struct vfsmount *vfs_mount(
     const char *dir_name,
     const char *type,
     mount_flags_t flags,
-    void *data
+    void *data,
+    bool from_kernel
 );
+
+/**
+ * 卸载文件系统
+ *
+ * @param mountpoint 挂载点目录的 path（调用者需确保已持有引用）
+ * @param flags 标志位
+ * @param from_kernel 调用者是否为内核
+ */
+int vfs_umount(struct path *mountpoint, int flags, bool from_kernel);
 
 // 获取根目录path
 struct path *vfs_get_root_path(void);
@@ -285,3 +302,13 @@ int vfs_setattr(const char *path, struct iattr *attr, const struct path *pwd);
  * @return file 指针
  */
 struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const struct path *pwd);
+
+/**
+ * 创建设备节点
+ *
+ * @param path 路径字符串
+ * @param mode 文件类型和权限（必须包含 S_IFCHR 或 S_IFBLK）
+ * @param dev 设备号
+ * @param pwd 当前工作目录
+ */
+int vfs_mknod(const char *path, mode_t mode, dev_t dev, const struct path *pwd);
