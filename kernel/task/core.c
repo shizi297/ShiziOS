@@ -96,6 +96,9 @@ static migration_struct *migration_ptr = NULL;
 struct sched_class sched_class = {0};
 struct sched_class *sched_class_ptr = &sched_class;
 
+// 任务系统初始化完成标志
+static bool task_init_flag = false;
+
 // 初始化锁队列
 static void lock_queue_init(struct lock_queue *lq) {
     INIT_LIST_HEAD(&lq->head);
@@ -868,6 +871,13 @@ void task_submit_work(void (*func)(void *), void *data) {
 
 // 获取当前任务的文件系统上下文（使用后需要尽快增加path引用和拷贝）
 void task_get_current_fs(struct path **root, struct path **pwd) {
+    // 如果任务子系统还没有初始化，返回空指针
+    if (!task_init_flag) {
+        if (root) *root = NULL;
+        if (pwd) *pwd = NULL;
+        return;
+    }
+
     task_struct *current = smp_get_task_current();
 
     if (root) 
@@ -875,19 +885,21 @@ void task_get_current_fs(struct path **root, struct path **pwd) {
 
     if (pwd) 
         *pwd = current->fs.pwd;
-
 }
 
 // 获取当前任务的gid和uid
 void task_get_current_ugid(uid_t *uid, gid_t *gid) {
+    // 如果任务管理还没有初始化，返回 root 权限
+    if (!task_init_flag) {
+        if (uid) *uid = 0;
+        if (gid) *gid = 0;
+        return;
+    }
+
     task_struct *current = smp_get_task_current();
-
-    if (uid)
-        *uid = current->user_id.uid;
-        
-    if (gid)
-        *gid = current->user_id.gid;
-
+    
+    if (uid) *uid = current->user_id.uid;
+    if (gid) *gid = current->user_id.gid;
 }
 
 // 任务管理数据初始化
@@ -928,6 +940,9 @@ void task_init(void) {
     // 初始化定时器回调
     clockevent_timer_init_callback(sched_timer, task_clock_event_handle, NULL);
     smp_set_sched_timer(sched_timer);
+
+    // 设置任务管理初始化完成
+    task_init_flag = true;
     
     if (get_logical_id() == bootboot->bspid)
         task_create_kernel_thread(kthread_test, NULL);
