@@ -12,3 +12,6 @@ typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 
 typedef int64_t ssize_t;
+
+// 设备号
+typedef uint32_t dev_t; 
