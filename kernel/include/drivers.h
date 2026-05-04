@@ -5,14 +5,8 @@
 
 #pragma once
 
-// 设备号
-typedef uint32_t dev_t; 
-
-// 块计数类型
-typedef int64_t blkcnt_t;
-
-// 块大小
-typedef int64_t blksize_t;
+#include <vfs.h>
+#include <shizi/types.h>
 
 // 驱动框架初始化
 void drivers_init(void);
@@ -22,3 +16,6 @@ int drivers_get_anon_id(dev_t *dev);
 
 // 释放一个匿名对象 ID
 void drivers_free_anon_id(dev_t dev);
+
+// 查找对应驱动的文件操作表
+struct file_operations *drivers_dev_find(dev_t dev, mode_t mode);

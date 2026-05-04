@@ -110,3 +110,8 @@ void drivers_free_anon_id(dev_t dev) {
 
     spin_unlock(&anon_state.lock);
 }
+
+// 查找对应驱动的文件操作表
+struct file_operations *drivers_dev_find(dev_t dev, mode_t mode) {
+    return NULL;
+}
