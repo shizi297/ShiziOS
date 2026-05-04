@@ -166,6 +166,7 @@ static int tmpfs_inode_init(
     time_get(&now);
 
     inode->ino = new_ino;
+    inode->rdev = 0;
     inode->mode = mode;
     inode->uid = uid;
     inode->gid = gid;
@@ -907,7 +908,7 @@ static int tmpfs_getattr(
     stat->st_nlink = inode->nlink;
     stat->st_uid = inode->uid;
     stat->st_gid = inode->gid;
-    stat->st_rdev = 0;
+    stat->st_rdev = inode->rdev;;
     stat->st_size = inode->size;
     stat->st_atim = inode->atime;
     stat->st_mtim = inode->mtime;
@@ -1034,6 +1035,73 @@ static ssize_t tmpfs_readlink(
     memcpy(buf, ti->symlink_target, copy_len);
     return copy_len;
 }
+
+/**
+ * 创建设备节点
+ *
+ * @param dir 父目录 inode
+ * @param dentry 新设备节点的 dentry（name已填充）
+ * @param mode 文件类型和权限
+ * @param dev 设备号
+ */
+static int tmpfs_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev_t dev) {
+    struct inode *inode;
+    struct tmpfs_inode *ti;
+    int err;
+
+    // 分配并初始化新 inode
+    inode = tmpfs_alloc_inode(dir->sb);
+    if (!inode)
+        return -ENOMEM;
+
+    err = tmpfs_inode_init(inode, dir->sb, mode);
+    if (err) {
+        tmpfs_destroy_inode(inode);
+        return err;
+    }
+
+    // 设置设备号
+    inode->rdev = dev;
+
+    // 设备节点使用默认设备操作表（后面会动态绑定真正驱动）
+    inode->fop = &dev_fops;
+
+    // 加入超级块的 inode 链表
+    spin_lock(&dir->sb->lock);
+    list_add_tail(&inode->sb_list, &dir->sb->inodes);
+    spin_unlock(&dir->sb->lock);
+
+    // 在父目录的目录项链表中添加新条目
+    err = tmpfs_dir_add(dir->private, dentry->name.name, dentry->name.len, inode->ino);
+    if (err) {
+        spin_lock(&dir->sb->lock);
+        list_del(&inode->sb_list);
+        spin_unlock(&dir->sb->lock);
+        tmpfs_evict_inode(inode);
+        tmpfs_destroy_inode(inode);
+        return err;
+    }
+
+    // 将新创建的 inode 关联到 dentry，清除负缓存标志
+    dentry->inode = inode;
+    dentry->flags &= ~DCACHE_NEGATIVE;
+    return 0;
+}
+
+static struct inode_operations tmpfs_inode_operations = {
+    .lookup = tmpfs_lookup,
+    .create = tmpfs_create,
+    .symlink = tmpfs_symlink,
+    .link = tmpfs_link,
+    .unlink = tmpfs_unlink,
+    .mkdir = tmpfs_mkdir,
+    .rmdir = tmpfs_rmdir,
+    .rename = tmpfs_rename,
+    .setattr = tmpfs_setattr,
+    .getattr = tmpfs_getattr,
+    .readlink = tmpfs_readlink,
+    .mknod = tmpfs_mknod,
+};
 
 /**
  * 解析挂载参数中的 size 选项
@@ -1272,20 +1340,6 @@ void tmpfs_init(void) {
 
     vfs_register_filesystem(&tmpfs_type);
 }
-
-static struct inode_operations tmpfs_inode_operations = {
-    .lookup = tmpfs_lookup,
-    .create = tmpfs_create,
-    .symlink = tmpfs_symlink,
-    .link = tmpfs_link,
-    .unlink = tmpfs_unlink,
-    .mkdir = tmpfs_mkdir,
-    .rmdir = tmpfs_rmdir,
-    .rename = tmpfs_rename,
-    .setattr = tmpfs_setattr,
-    .getattr = tmpfs_getattr,
-    .readlink = tmpfs_readlink,
-};
 
 // 文件打开操作 
 static int tmpfs_open(struct inode *inode, struct file *file) {
