@@ -18,6 +18,12 @@
 #define VFS_PRINT(fmt, ...) \
     printk("[VFS] " fmt, ##__VA_ARGS__)
 
+#define VFS_PANIC(fmt, ...) \
+    printp("[VFS] " fmt, ##__VA_ARGS__)
+
+#define VFS_WARN(fmt, ...) \
+    printk("[VFS] WARNING : " fmt, ##__VA_ARGS__)
+
 // 文件系统锁链表头，用于管理已注册的文件系统
 static struct vfs_lock_list fs_list_head = {0};
 
@@ -856,7 +862,7 @@ static int vfs_root_mount(void) {
         return -ENODEV;
 
     // 调用 tmpfs 的 mount 回调，获取根 dentry
-    root_dentry = tmpfs->mount(tmpfs, MS_NONE, NULL, NULL);
+    root_dentry = tmpfs->mount(tmpfs, MS_NOUSER, NULL, NULL);
     if (IS_ERR(root_dentry))
         return PTR_ERR(root_dentry);
 
@@ -893,6 +899,66 @@ static int vfs_root_mount(void) {
     vfs_path_get(root_path);
     vfs_root = root_path;
 
+    return 0;
+}
+
+// 挂载 /dev 用于设备文件
+static int vfs_dev_mount(void) {
+    struct path *dev_path;
+    struct dentry *root_dentry;
+    struct vfsmount *mnt;
+    struct file_system_type *tmpfs;
+    int err;
+
+    // 创建 /dev 目录
+    err = vfs_mkdir("/dev", S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH, vfs_root);
+    if (err)
+        return err;
+
+    // 获取 /dev 的 path（已增加引用）
+    dev_path = vfs_path_lookup("/dev", LOOKUP_FOLLOW, vfs_root);
+    if (IS_ERR(dev_path))
+        return PTR_ERR(dev_path);
+
+    // 查找 tmpfs 文件系统类型
+    tmpfs = vfs_find_filesystem("tmpfs");
+    if (!tmpfs) {
+        vfs_path_put(dev_path);
+        return -ENODEV;
+    }
+
+    // 调用 tmpfs 的 mount 回调，创建根 dentry
+    root_dentry = tmpfs->mount(tmpfs, MS_NOUSER, NULL, NULL);
+    if (IS_ERR(root_dentry)) {
+        vfs_path_put(dev_path);
+        return PTR_ERR(root_dentry);
+    }
+
+    // 分配 vfsmount
+    mnt = kheap_alloc(sizeof(struct vfsmount));
+    if (!mnt) {
+        vfs_dput(root_dentry);
+        vfs_path_put(dev_path);
+        return -ENOMEM;
+    }
+
+    mnt->sb = root_dentry->inode->sb;
+    mnt->root = root_dentry;
+    mnt->mountpoint = dev_path->dentry;
+    mnt->parent = dev_path->mnt;
+    mnt->flags = MS_NOUSER;
+    atomic_init(&mnt->count, 1);
+    INIT_LIST_HEAD(&mnt->mnt_mounts);
+
+    // 增加引用
+    vfs_mntget(mnt->parent);
+    vfs_dget(mnt->mountpoint);
+    vfs_sb_get(mnt->sb);
+
+    // 将新挂载点加入挂载树
+    vfs_attach_mount(mnt, dev_path);
+
+    vfs_path_put(dev_path);
     return 0;
 }
 
@@ -1085,6 +1151,59 @@ struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t l
     return NULL;
 }
 
+/**
+ * 默认设备 open 函数
+ *
+ * @param inode 设备节点 inode
+ * @param file  文件结构体
+ */
+static int vfs_dev_open(struct inode *inode, struct file *file) {
+    struct file_operations *real_fops;
+
+    // 根据设备号和文件类型查找已注册的驱动操作表
+    real_fops = drivers_dev_find(inode->rdev, inode->mode);
+    if (!real_fops)
+        return -ENODEV;
+
+    // 替换文件操作表为真正的驱动操作表
+    file->ops = real_fops;
+
+    // 如果驱动有自己的 open 方法，则调用它
+    if (file->ops->open)
+        return file->ops->open(inode, file);
+
+    return 0;
+}
+
+// 默认设备 llseek 函数
+static off_t vfs_dev_llseek(struct file *file, off_t offset, seek_whence_t whence) {
+    return -ENODEV;
+}
+
+// 默认设备 read 函数
+static ssize_t vfs_dev_read(struct file *file, char *buf, size_t count, off_t *pos) {
+    return -ENODEV;
+}
+
+// 默认设备 write 函数
+static ssize_t vfs_dev_write(struct file *file, const char *buf, size_t count, off_t *pos) {
+    return -ENODEV;
+}
+
+// 默认设备 release 函数
+static int vfs_dev_release(struct inode *inode, struct file *file) {
+    return -ENODEV;
+}
+
+// 默认设备操作表，用于设备节点 inode->ops 的初始值
+struct file_operations dev_fops = {
+    .open    = vfs_dev_open,
+    .read    = vfs_dev_read,
+    .write   = vfs_dev_write,
+    .llseek  = vfs_dev_llseek,
+    .release = vfs_dev_release,
+};
+
 // 增加路径引用
 void vfs_path_get(struct path *path) {
     vfs_mntget(path->mnt);
@@ -1140,6 +1259,7 @@ uint32_t vfs_full_name_hash(const char *name, unsigned int len) {
  * @param type 文件系统类型名称
  * @param flags 挂载标志
  * @param data 文件系统特定数据
+ * @param from_kernel 调用者是否为内核
  * 
  * @return 挂载点的 vfsmount 指针
  */
@@ -1148,7 +1268,8 @@ struct vfsmount *vfs_mount(
     const char *dir_name,
     const char *type,
     mount_flags_t flags,
-    void *data
+    void *data,
+    bool from_kernel
 ) {
     struct path *mountpoint = NULL;
     struct vfsmount *mnt = NULL;
@@ -1160,6 +1281,14 @@ struct vfsmount *vfs_mount(
 
     // 校验 dir_name 非空
     if (!dir_name) return ERR_PTR(-EINVAL);
+
+    // 用户调用时不能指定 MS_NOUSER 标志
+    if (!from_kernel && (flags & MS_NOUSER))
+        return ERR_PTR(-EINVAL);
+
+    // 用户不能挂载 devtmpfs
+    if (!from_kernel && type && !strcmp(type, "devtmpfs"))
+        return ERR_PTR(-EPERM);
 
     // 获取当前任务的文件系统上下文
     vfs_get_current_fs(&root_path, &pwd_path);
@@ -1219,7 +1348,7 @@ struct vfsmount *vfs_mount(
     mnt->root = root_dentry;
     mnt->mountpoint = mountpoint->dentry;
     mnt->parent = mountpoint->mnt;
-    mnt->flags = flags;
+    mnt->flags = flags;               
     atomic_init(&mnt->count, 1);
     INIT_LIST_HEAD(&mnt->mnt_mounts);
 
@@ -1234,6 +1363,69 @@ struct vfsmount *vfs_mount(
     vfs_path_put(mountpoint);
     vfs_put_current_fs(&root_path, &pwd_path);
     return mnt;
+}
+
+/**
+ * 卸载文件系统
+ *
+ * @param mountpoint 挂载点目录的 path（调用者需确保已持有引用）
+ * @param flags 标志位
+ * @param from_kernel 调用者是否为内核
+ */
+int vfs_umount(struct path *mountpoint, int flags, bool from_kernel) {
+    struct vfsmount *mnt;
+    struct super_block *sb;
+    int err = 0;
+
+    if (!mountpoint || flags)
+        return -EINVAL;
+
+    mnt = mountpoint->mnt;
+    sb = mnt->sb;
+
+    // 如果挂载点标记为禁止用户卸载，且本次调用来自用户态，则拒绝
+    if (!from_kernel && (mnt->flags & MS_NOUSER)) {
+        err = -EPERM;
+        goto out_put;
+    }
+
+    mutex_lock(&mount_tree.lock);
+
+    // 检查是否有子挂载
+    if (!list_empty(&mnt->mnt_mounts)) {
+        err = -EBUSY;
+        goto out_unlock;
+    }
+
+    // 从父挂载点的子链表中移除
+    list_del(&mnt->list);
+
+    // 清除挂载点 dentry 的标志
+    spin_lock(&mountpoint->dentry->lock);
+    mountpoint->dentry->flags &= ~DCACHE_MOUNTED;
+    spin_unlock(&mountpoint->dentry->lock);
+
+    mutex_unlock(&mount_tree.lock);
+
+    // 减少超级块引用计数，若归零则销毁
+    if (atomic_fetch_sub(&sb->count, 1) == 1) {
+        if (sb->type->kill_sb)
+            sb->type->kill_sb(sb);
+    }
+
+    // 减少 vfsmount 引用计数并释放
+    vfs_mntput(mnt);
+
+    // 释放传入的 path 引用
+    vfs_path_put(mountpoint);
+
+    return 0;
+
+out_unlock:
+    mutex_unlock(&mount_tree.lock);
+out_put:
+    vfs_path_put(mountpoint);
+    return err;
 }
 
 // 获取根目录path
@@ -1262,7 +1454,16 @@ bool vfs_init(void) {
     initcall(fs, 0);
 
     // 挂载根文件系统
-    if (vfs_root_mount()) return false;
+    if (vfs_root_mount()) {
+        VFS_WARN("root mount failed\n");
+        return false;
+    }
+
+    // 挂载设备节点
+    if (vfs_dev_mount()) {
+        VFS_WARN("dev mount failed\n");
+        return false;
+    }
 
     VFS_PRINT("vfs init success\n");
 
@@ -1966,3 +2167,73 @@ out_err_ps:
     return ERR_PTR(err);
 }
 
+/**
+ * 创建设备节点
+ *
+ * @param path 路径字符串
+ * @param mode 文件类型和权限（必须包含 S_IFCHR 或 S_IFBLK）
+ * @param dev 设备号
+ * @param pwd 当前工作目录
+ */
+int vfs_mknod(const char *path, mode_t mode, dev_t dev, const struct path *pwd) {
+    struct path *parent_path = NULL;
+    struct dentry *dentry = NULL;
+    const char *name;
+    size_t namelen;
+    char *name_copy;
+    int err;
+
+    if (!path || !pwd)
+        return -EINVAL;
+
+    // 模式必须包含设备类型
+    if (!S_ISCHR(mode) && !S_ISBLK(mode))
+        return -EINVAL;
+
+    // 解析父目录路径和最后一个组件名
+    parent_path = vfs_path_parent(path, pwd, &name, &namelen);
+    if (IS_ERR(parent_path))
+        return PTR_ERR(parent_path);
+
+    // 权限检查
+    err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
+    if (err)
+        goto out_parent;
+
+    // 检查是否已存在同名文件
+    dentry = vfs_dlookup(parent_path->dentry, name, namelen);
+    if (dentry) {
+        vfs_dput(dentry);
+        err = -EEXIST;
+        goto out_parent;
+    }
+
+    // 复制组件名（因为 vfs_dalloc 需要以 '\0' 结尾）
+    name_copy = strndup(name, namelen);
+    if (!name_copy) {
+        err = -ENOMEM;
+        goto out_parent;
+    }
+
+    // 分配临时 dentry
+    dentry = vfs_dalloc(parent_path->dentry, name_copy);
+    kheap_free(name_copy);
+    if (!dentry) {
+        err = -ENOMEM;
+        goto out_parent;
+    }
+
+    // 调用文件系统的 mknod 回调
+    err = parent_path->dentry->inode->ops->mknod(parent_path->dentry->inode, dentry, mode, dev);
+    if (err) {
+        vfs_dput(dentry);
+        goto out_parent;
+    }
+
+    vfs_path_put(parent_path);
+    return 0;
+
+out_parent:
+    vfs_path_put(parent_path);
+    return err;
+}
