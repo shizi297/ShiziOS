@@ -19,11 +19,15 @@
 #include <drivers.h>
 #include <rcu.h>
 
+extern struct file_operations dev_fops;
+
 #define PATH_MAX 4096
 
 #define S_ISDIR(mode)  (((mode) & S_IFMT) == S_IFDIR)
 #define S_ISREG(mode)  (((mode) & S_IFMT) == S_IFREG)
 #define S_ISLNK(mode)  (((mode) & S_IFMT) == S_IFLNK)
+#define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
+#define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
 
 // 路径查找标志
 typedef enum lookup_flags {
@@ -118,6 +122,7 @@ struct super_block {
 // 索引节点
 struct inode {
     uint64_t ino;  // 索引节点号
+    dev_t rdev; // 设备号，对于非设备节点需要设置为0
     mode_t mode;  // 文件模式
     uid_t uid;    // 属主用户 ID
     gid_t gid;    // 属主组 ID
@@ -203,6 +208,7 @@ struct inode_operations {
     int (*setattr)(struct dentry *dentry, struct iattr *attr);    // 设置属性
     int (*getattr)(struct path *path, struct kstat *stat);    // 获取属性
     ssize_t (*readlink)(struct inode *inode, char *buf, size_t bufsiz); // 读取符号链接目标
+    int (*mknod)(struct inode *dir, struct dentry *dentry, mode_t mode, dev_t dev); // 创建设备节点
 };
 
 // 文件操作表
