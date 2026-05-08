@@ -34,7 +34,7 @@
     for (pos = list_entry(rcu_dereference((head)->next), typeof(*pos), member); \
          &pos->member != (head) && (&pos->member)->next != &pos->member; \
          pos = list_entry(rcu_dereference(pos->member.next), typeof(*pos), member))
-
+         
 /**
  * 在头部添加节点
  *
@@ -81,6 +81,10 @@ static inline void list_del_rcu(struct list_head *n) {
     struct list_head *next = rcu_dereference(n->next);
     rcu_assign_pointer(prev->next, next);
     next->prev = prev;
+#ifdef LIST_POISONING
+    n->prev = (struct list_head *)(0x00100100);
+    n->next = (struct list_head *)(0x00200200);
+#endif
 }
 
 /**
@@ -198,4 +202,8 @@ static inline void hlist_del_rcu(struct hlist_node *n) {
     if (next) {
         next->pprev = pprev;
     }
+#ifdef LIST_POISONING
+    n->next = (struct hlist_node *)(0x00200200);
+    n->pprev = (struct hlist_node **)(0x00100100);
+#endif
 }
