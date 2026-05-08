@@ -55,6 +55,7 @@ static bool tmpfs_alloc_pages(struct tmpfs_sb_info *sbi, uint64_t count) {
 
     if (used + count > sbi->max_pages) {
         spin_unlock(&sbi->used_lock);
+        
         return false;
     }
 
@@ -100,6 +101,7 @@ static bool tmpfs_alloc_ino(struct tmpfs_sb_info *sbi, ino_t *out_ino) {
     if (found >= total_bits) {
         if (!dynarr_expand_to(sbi->inode_bitmap, dynarr_capacity(sbi->inode_bitmap) * 2)) {
             spin_unlock(&sbi->inode_lock);
+
             return false;
         }
 
@@ -107,6 +109,7 @@ static bool tmpfs_alloc_ino(struct tmpfs_sb_info *sbi, ino_t *out_ino) {
         found = bitmap_find(sbi->inode_bitmap->arr, total_bits, 1, false);
         if (found >= total_bits) {
             spin_unlock(&sbi->inode_lock);
+
             return false;
         }
     }
@@ -126,8 +129,10 @@ static void tmpfs_free_ino(struct tmpfs_sb_info *sbi, ino_t ino) {
         return;
 
     spin_lock(&sbi->inode_lock);
+
     bitmap_clear(sbi->inode_bitmap->arr, ino);
     atomic_fetch_sub(&sbi->inode_count, 1);
+
     spin_unlock(&sbi->inode_lock);
 }
 
@@ -244,11 +249,17 @@ static void tmpfs_evict_inode(struct inode *inode) {
     }
 
     // 释放目录项（仅目录）
-    struct tmpfs_dir_entry *de, *tmp;
-    list_for_each_entry_safe(de, tmp, &ti->dir_list, list) {
-        list_del(&de->list);
-        kheap_free(de->name);
-        kheap_free(de);
+    if (S_ISDIR(inode->mode)) {
+        struct tmpfs_dir_entry *de, *tmp;
+        spin_lock(&ti->dir_lock);
+
+        list_for_each_entry_safe(de, tmp, &ti->dir_list, list) {
+            list_del(&de->list);
+            kheap_free(de->name);
+            kheap_free(de);
+        }
+
+        spin_unlock(&ti->dir_lock);
     }
 
     // 释放符号链接的字符串
@@ -326,13 +337,17 @@ static struct inode *tmpfs_iget(struct super_block *sb, ino_t ino) {
 
     // 哈希表未命中，回退到链表遍历
     spin_lock(&sb->lock);
+
     list_for_each_entry(inode, &sb->inodes, sb_list) {
         if (inode->ino == ino) {
             atomic_fetch_add(&inode->count, 1);
+
             spin_unlock(&sb->lock);
+
             return inode;
         }
     }
+
     spin_unlock(&sb->lock);
     return ERR_PTR(-ENOENT);
 }
@@ -408,14 +423,14 @@ static struct dentry *tmpfs_lookup(
     struct tmpfs_dir_entry *de;
     struct inode *inode = NULL;
 
-    spin_lock(&dir->lock);
+    spin_lock(&tdir->dir_lock);
 
     // 调用辅助函数在目录链表中查找匹配项
     de = tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len);
     if (de)
         inode = tmpfs_iget(sb, de->ino);
 
-    spin_unlock(&dir->lock);
+    spin_unlock(&tdir->dir_lock);
 
     // 命中则关联 inode，清除可能的负缓存标志
     if (inode) {
@@ -439,6 +454,7 @@ static int tmpfs_create(
     mode_t mode
 ) {
     struct inode *inode;
+    struct tmpfs_inode *tdir = dir->private;
     int err;
 
     // 分配并初始化新 inode，强制设置文件类型为普通文件
@@ -465,21 +481,33 @@ static int tmpfs_create(
     spin_unlock(&dir->sb->lock);
 
     // 在父目录的目录项链表中添加新条目
-    err = tmpfs_dir_add(dir->private, dentry->name.name, dentry->name.len, inode->ino);
-    if (err) {
-        // 添加失败，从超级块链表移除，释放 inode
-        spin_lock(&dir->sb->lock);
-        list_del(&inode->sb_list);
-        spin_unlock(&dir->sb->lock);
-        tmpfs_evict_inode(inode);
-        tmpfs_destroy_inode(inode);
-        return err;
+    spin_lock(&tdir->dir_lock);
+
+    if (tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len)) {
+        spin_unlock(&tdir->dir_lock);
+
+        err = -EEXIST;
+        goto fail;
     }
+
+    err = tmpfs_dir_add(tdir, dentry->name.name, dentry->name.len, inode->ino);
+
+    spin_unlock(&tdir->dir_lock);
+    if (err)
+        goto fail;
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
     return 0;
+
+fail:
+    spin_lock(&dir->sb->lock);
+    list_del(&inode->sb_list);
+    spin_unlock(&dir->sb->lock);
+    tmpfs_evict_inode(inode);
+    tmpfs_destroy_inode(inode);
+    return err;
 }
 
 /**
@@ -495,6 +523,7 @@ static int tmpfs_symlink(
     const char *target
 ) {
     struct inode *inode;
+    struct tmpfs_inode *tdir = dir->private;
     struct tmpfs_inode *ti;
     int err;
     size_t target_len;
@@ -518,16 +547,21 @@ static int tmpfs_symlink(
     ti = inode->private;
     target_len = strlen(target);
 
+    // 限制符号链接长度，避免过大
+    if (target_len >= PATH_MAX) {
+        tmpfs_destroy_inode(inode);
+        return -ENAMETOOLONG;
+    }
+
     // 分配缓冲区存储目标路径
-    ti->symlink_target = kheap_alloc(PATH_MAX);
+    ti->symlink_target = kheap_alloc(target_len + 1);
     if (!ti->symlink_target) {
         tmpfs_destroy_inode(inode);
         return -ENOMEM;
     }
 
-    // 复制目标路径，避免溢出
-    strncpy(ti->symlink_target, target, PATH_MAX - 1);
-    ti->symlink_target[PATH_MAX - 1] = '\0';
+    // 复制目标路径（包括结尾 '\0'）
+    memcpy(ti->symlink_target, target, target_len + 1);
 
     ti->data_size = target_len;
     inode->size = target_len;
@@ -541,20 +575,33 @@ static int tmpfs_symlink(
     spin_unlock(&dir->sb->lock);
 
     // 在父目录的目录项链表中添加新条目
-    err = tmpfs_dir_add(dir->private, dentry->name.name, dentry->name.len, inode->ino);
-    if (err) {
-        spin_lock(&dir->sb->lock);
-        list_del(&inode->sb_list);
-        spin_unlock(&dir->sb->lock);
-        tmpfs_evict_inode(inode);
-        tmpfs_destroy_inode(inode);
-        return err;
+    spin_lock(&tdir->dir_lock);
+
+    if (tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len)) {
+        spin_unlock(&tdir->dir_lock);
+
+        err = -EEXIST;
+        goto fail;
     }
+
+    err = tmpfs_dir_add(tdir, dentry->name.name, dentry->name.len, inode->ino);
+    spin_unlock(&tdir->dir_lock);
+
+    if (err)
+        goto fail;
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
     return 0;
+
+fail:
+    spin_lock(&dir->sb->lock);
+    list_del(&inode->sb_list);
+    spin_unlock(&dir->sb->lock);
+    tmpfs_evict_inode(inode);
+    tmpfs_destroy_inode(inode);
+    return err;
 }
 
 /**
@@ -570,13 +617,19 @@ static int tmpfs_link(
     struct dentry *new_dentry
 ) {
     struct inode *inode = old_dentry->inode;
+    struct tmpfs_inode *tdir = dir->private;
     int err;
 
-    err = tmpfs_dir_add(dir->private, new_dentry->name.name, new_dentry->name.len, inode->ino);
+    spin_lock(&tdir->dir_lock);
+    err = tmpfs_dir_add(tdir, new_dentry->name.name, new_dentry->name.len, inode->ino);
+    spin_unlock(&tdir->dir_lock);
     if (err)
         return err;
 
+    spin_lock(&inode->lock);
     inode->nlink++;
+    spin_unlock(&inode->lock);
+
     new_dentry->inode = inode;
     atomic_fetch_add(&inode->count, 1);
     new_dentry->flags &= ~DCACHE_NEGATIVE;
@@ -593,19 +646,25 @@ static int tmpfs_unlink(
     struct inode *dir,
     struct dentry *dentry
 ) {
+    struct tmpfs_inode *tdir = dir->private;
     struct tmpfs_dir_entry *de;
 
-    spin_lock(&dir->lock);
-    de = tmpfs_dir_lookup(dir->private, dentry->name.name, dentry->name.len);
+    spin_lock(&tdir->dir_lock);
+
+    de = tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len);
     if (!de) {
-        spin_unlock(&dir->lock);
+        spin_unlock(&tdir->dir_lock);
+
         return -ENOENT;
     }
 
     tmpfs_dir_remove(de);
-    spin_unlock(&dir->lock);
+    spin_unlock(&tdir->dir_lock);
 
+    spin_lock(&dentry->inode->lock);
     dentry->inode->nlink--;
+    spin_unlock(&dentry->inode->lock);
+
     dentry->inode = NULL;
     return 0;
 }
@@ -623,6 +682,7 @@ static int tmpfs_mkdir(
     mode_t mode
 ) {
     struct inode *inode;
+    struct tmpfs_inode *tdir = dir->private;
     struct tmpfs_inode *ti;
     int err;
 
@@ -647,50 +707,73 @@ static int tmpfs_mkdir(
     spin_unlock(&dir->sb->lock);
 
     // 在父目录中添加新条目
-    err = tmpfs_dir_add(dir->private, dentry->name.name, dentry->name.len, inode->ino);
-    if (err) {
-        spin_lock(&dir->sb->lock);
-        list_del(&inode->sb_list);
-        spin_unlock(&dir->sb->lock);
-        tmpfs_evict_inode(inode);
-        tmpfs_destroy_inode(inode);
-        return err;
+    spin_lock(&tdir->dir_lock);
+
+    if (tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len)) {
+        spin_unlock(&tdir->dir_lock);
+
+        err = -EEXIST;
+        goto fail;
     }
+
+    err = tmpfs_dir_add(tdir, dentry->name.name, dentry->name.len, inode->ino);
+
+    spin_unlock(&tdir->dir_lock);
+
+    if (err)
+        goto fail;
 
     ti = inode->private;
 
     // 添加 "." 条目，指向自己
+    spin_lock(&ti->dir_lock);
+
     err = tmpfs_dir_add(ti, ".", 1, inode->ino);
     if (err) {
-        tmpfs_dir_remove(tmpfs_dir_lookup(dir->private, dentry->name.name, dentry->name.len));
-        spin_lock(&dir->sb->lock);
-        list_del(&inode->sb_list);
-        spin_unlock(&dir->sb->lock);
-        tmpfs_evict_inode(inode);
-        tmpfs_destroy_inode(inode);
-        return err;
+        spin_unlock(&ti->dir_lock);
+
+        goto rollback_parent;
     }
 
     // 添加 ".." 条目，指向父目录
     err = tmpfs_dir_add(ti, "..", 2, dir->ino);
     if (err) {
-        tmpfs_dir_remove(tmpfs_dir_lookup(ti, ".", 1));
-        tmpfs_dir_remove(tmpfs_dir_lookup(dir->private, dentry->name.name, dentry->name.len));
-        spin_lock(&dir->sb->lock);
-        list_del(&inode->sb_list);
-        spin_unlock(&dir->sb->lock);
-        tmpfs_evict_inode(inode);
-        tmpfs_destroy_inode(inode);
-        return err;
+        struct tmpfs_dir_entry *dot = tmpfs_dir_lookup(ti, ".", 1);
+        if (dot)
+            tmpfs_dir_remove(dot);
+        spin_unlock(&ti->dir_lock);
+        goto rollback_parent;
     }
 
+    spin_unlock(&ti->dir_lock);
+
     // 增加父目录的硬链接引用
+    spin_lock(&dir->lock);
     dir->nlink++;
+    spin_unlock(&dir->lock);
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
     return 0;
+
+rollback_parent:
+    spin_lock(&tdir->dir_lock);
+
+    {
+        struct tmpfs_dir_entry *parent_de = tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len);
+        if (parent_de)
+            tmpfs_dir_remove(parent_de);
+    }
+
+    spin_unlock(&tdir->dir_lock);
+fail:
+    spin_lock(&dir->sb->lock);
+    list_del(&inode->sb_list);
+    spin_unlock(&dir->sb->lock);
+    tmpfs_evict_inode(inode);
+    tmpfs_destroy_inode(inode);
+    return err;
 }
 
 /**
@@ -705,40 +788,50 @@ static int tmpfs_rmdir(
 ) {
     struct inode *child = dentry->inode;
     struct tmpfs_inode *ti_child = child->private;
+    struct tmpfs_inode *tdir = dir->private;
     struct tmpfs_dir_entry *de;
     struct tmpfs_dir_entry *parent_de;
+    bool empty = true;
 
-    // 检查目标目录是否为空
-    spin_lock(&child->lock);
+    // 检查目标目录是否为空（忽略 . 和 ..）
+    spin_lock(&ti_child->dir_lock);
+
     list_for_each_entry(de, &ti_child->dir_list, list) {
         if (de->name_len == 1 && de->name[0] == '.')
             continue;
-
         if (de->name_len == 2 && de->name[0] == '.' && de->name[1] == '.')
             continue;
-
-        spin_unlock(&child->lock);
-        return -ENOTEMPTY;
+        empty = false;
+        break;
     }
 
-    spin_unlock(&child->lock);
+    spin_unlock(&ti_child->dir_lock);
+
+    if (!empty)
+        return -ENOTEMPTY;
 
     // 在父目录中查找并移除目标目录的条目
-    spin_lock(&dir->lock);
-    parent_de = tmpfs_dir_lookup(dir->private, dentry->name.name, dentry->name.len);
+    spin_lock(&tdir->dir_lock);
+    parent_de = tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len);
     if (!parent_de) {
-        spin_unlock(&dir->lock);
+        spin_unlock(&tdir->dir_lock);
+
         return -ENOENT;
     }
     
     tmpfs_dir_remove(parent_de);
-    spin_unlock(&dir->lock);
+
+    spin_unlock(&tdir->dir_lock);
 
     // 减少目标目录硬链接引用
+    spin_lock(&child->lock);
     child->nlink--;
+    spin_unlock(&child->lock);
 
     // 减少父目录的硬链接引用（目标目录的 ".." 不再指向它）
+    spin_lock(&dir->lock);
     dir->nlink--;
+    spin_unlock(&dir->lock);
 
     // 解除 dentry 与 inode 的关联
     dentry->inode = NULL;
@@ -761,6 +854,8 @@ static int tmpfs_rename(
 ) {
     struct inode *old_inode = old_dentry->inode;
     struct inode *new_inode = new_dentry->inode;
+    struct tmpfs_inode *ti_old_dir = old_dir->private;
+    struct tmpfs_inode *ti_new_dir = new_dir->private;
     struct tmpfs_dir_entry *old_de, *new_de;
     bool same_dir = (old_dir == new_dir);
     int err = 0;
@@ -775,21 +870,23 @@ static int tmpfs_rename(
     // 若目标是目录且非空，不能覆盖
     if (new_inode && S_ISDIR(new_inode->mode) && new_inode != old_inode) {
         struct tmpfs_inode *ti_new = new_inode->private;
-        struct tmpfs_dir_entry *de;
 
-        // 检查目标目录是否为空（忽略 . 和 ..）
-        spin_lock(&new_inode->lock);
-        list_for_each_entry(de, &ti_new->dir_list, list) {
-            if (
-                (de->name_len == 1 && de->name[0] == '.') ||
-                (de->name_len == 2 && de->name[0] == '.' && de->name[1] == '.')
-            ) continue;
+        bool empty = true;
+        spin_lock(&ti_new->dir_lock);
 
-            spin_unlock(&new_inode->lock);
-            return -ENOTEMPTY;
+        list_for_each_entry(new_de, &ti_new->dir_list, list) {
+            if (new_de->name_len == 1 && new_de->name[0] == '.')
+                continue;
+            if (new_de->name_len == 2 && new_de->name[0] == '.' && new_de->name[1] == '.')
+                continue;
+            empty = false;
+            break;
         }
 
-        spin_unlock(&new_inode->lock);
+        spin_unlock(&ti_new->dir_lock);
+
+        if (!empty)
+            return -ENOTEMPTY;
     }
 
     // 目标不能是源的后代
@@ -798,26 +895,27 @@ static int tmpfs_rename(
         while (p) {
             if (p->inode == old_inode)
                 return -EINVAL;
+
             p = p->parent;
         }
     }
 
     if (same_dir) {
         // 对于同一个目录，只需要获取一次锁
-        spin_lock(&old_dir->lock);
+        spin_lock(&ti_old_dir->dir_lock);
     } else {
         // 按内存地址获取锁，防止死锁
-        if ((uintptr_t)old_dir < (uintptr_t)new_dir) {
-            spin_lock(&old_dir->lock);
-            spin_lock(&new_dir->lock);
+        if ((uintptr_t)ti_old_dir < (uintptr_t)ti_new_dir) {
+            spin_lock(&ti_old_dir->dir_lock);
+            spin_lock(&ti_new_dir->dir_lock);
         } else {
-            spin_lock(&new_dir->lock);
-            spin_lock(&old_dir->lock);
+            spin_lock(&ti_new_dir->dir_lock);
+            spin_lock(&ti_old_dir->dir_lock);
         }
     }
 
     // 在源目录中查找旧条目
-    old_de = tmpfs_dir_lookup(old_dir->private, old_dentry->name.name, old_dentry->name.len);
+    old_de = tmpfs_dir_lookup(ti_old_dir, old_dentry->name.name, old_dentry->name.len);
     if (!old_de) {
         err = -ENOENT;
         goto out;
@@ -826,7 +924,7 @@ static int tmpfs_rename(
     // 如果目标已存在，删除目标条目
     new_de = NULL;
     if (new_inode) {
-        new_de = tmpfs_dir_lookup(new_dir->private, new_dentry->name.name, new_dentry->name.len);
+        new_de = tmpfs_dir_lookup(ti_new_dir, new_dentry->name.name, new_dentry->name.len);
         if (new_de) {
             // 如果是同一个条目，直接成功
             if (same_dir && old_de == new_de) {
@@ -835,26 +933,31 @@ static int tmpfs_rename(
             }
 
             tmpfs_dir_remove(new_de);
+
+            spin_lock(&new_inode->lock);
             new_inode->nlink--;
+            spin_unlock(&new_inode->lock);
         }
     }
 
     // 执行移动/重命名
     if (same_dir) {
-        // 对于同目录，只修改名字
-        kheap_free(old_de->name);
-        old_de->name = kheap_alloc(new_dentry->name.len + 1);
-        if (!old_de->name) {
+        // 对于同目录，先分配新名字，避免悬空指针
+        char *new_name = kheap_alloc(new_dentry->name.len + 1);
+        if (!new_name) {
             err = -ENOMEM;
             goto out;
         }
 
-        memcpy(old_de->name, new_dentry->name.name, new_dentry->name.len);
-        old_de->name[new_dentry->name.len] = '\0';
+        memcpy(new_name, new_dentry->name.name, new_dentry->name.len);
+        new_name[new_dentry->name.len] = '\0';
+
+        kheap_free(old_de->name);
+        old_de->name = new_name;
         old_de->name_len = new_dentry->name.len;
     } else {
         // 对于跨目录，在目标添加目录，在源目录删除
-        err = tmpfs_dir_add(new_dir->private, new_dentry->name.name, new_dentry->name.len, old_inode->ino);
+        err = tmpfs_dir_add(ti_new_dir, new_dentry->name.name, new_dentry->name.len, old_inode->ino);
         if (err)
             goto out;
 
@@ -863,13 +966,22 @@ static int tmpfs_rename(
         // 如果是目录，更新 .. 条目，并调整 nlink
         if (S_ISDIR(old_inode->mode)) {
             struct tmpfs_inode *ti_old = old_inode->private;
-            struct tmpfs_dir_entry *dotdot = tmpfs_dir_lookup(ti_old, "..", 2);
-            if (dotdot) {
-                dotdot->ino = new_dir->ino;
-            }
 
+            spin_lock(&ti_old->dir_lock);
+
+            struct tmpfs_dir_entry *dotdot = tmpfs_dir_lookup(ti_old, "..", 2);
+            if (dotdot)
+                dotdot->ino = new_dir->ino;
+
+            spin_unlock(&ti_old->dir_lock);
+
+            spin_lock(&old_dir->lock);
             old_dir->nlink--;
+            spin_unlock(&old_dir->lock);
+
+            spin_lock(&new_dir->lock);
             new_dir->nlink++;
+            spin_unlock(&new_dir->lock);
         }
     }
 
@@ -880,10 +992,11 @@ static int tmpfs_rename(
 
 out:
     if (same_dir) {
-        spin_unlock(&old_dir->lock);
+
+        spin_unlock(&ti_old_dir->dir_lock);
     } else {
-        spin_unlock(&old_dir->lock);
-        spin_unlock(&new_dir->lock);
+        spin_unlock(&ti_old_dir->dir_lock);
+        spin_unlock(&ti_new_dir->dir_lock);
     }
 
     return err;
@@ -946,19 +1059,31 @@ static int tmpfs_setattr(
             if (ti->pages && new_pages < dynarr_count(ti->pages)) {
                 for (uint64_t i = new_pages; i < dynarr_count(ti->pages); i++) {
                     void *page = dynarr_get(ti->pages, i);
-                    if (page)
+                    if (page) {
                         kheap_free(page);
+                        dynarr_set(ti->pages, i, NULL);
+                    }
                 }
             }
 
             // 归还已释放页面的使用计数
             tmpfs_free_pages(sbi, old_pages - new_pages);
         } else if (new_size > inode->size && new_pages > old_pages) {
+            // 先检查容量配额
+            if (!tmpfs_alloc_pages(sbi, new_pages - old_pages)) {
+                spin_unlock(&inode->lock);
+
+                return -ENOSPC;
+            }
+
             // 为空洞或新增部分分配并清零页面
             if (!ti->pages) {
                 ti->pages = dynarr_create(sizeof(void *), 0);
                 if (!ti->pages) {
+                    tmpfs_free_pages(sbi, new_pages - old_pages);
+
                     spin_unlock(&inode->lock);
+
                     return -ENOMEM;
                 }
             }
@@ -966,16 +1091,40 @@ static int tmpfs_setattr(
             for (uint64_t i = old_pages; i < new_pages; i++) {
                 void *page = kheap_alloc(PAGE_SIZE);
                 if (!page) {
+                    // 释放已分配的新页
+                    for (uint64_t j = old_pages; j < i; j++) {
+                        void *p = dynarr_get(ti->pages, j);
+                        if (p) kheap_free(p);
+                    }
+
+                    dynarr_destroy(ti->pages);
+                    ti->pages = NULL;
+                    tmpfs_free_pages(sbi, new_pages - old_pages);
+
                     spin_unlock(&inode->lock);
+
                     return -ENOMEM;
                 }
 
                 memset(page, 0, PAGE_SIZE);
-                dynarr_append(ti->pages, &page);
-            }
+                if (!dynarr_append(ti->pages, &page)) {
+                    kheap_free(page);
 
-            // 记录新分配页面的使用计数
-            tmpfs_alloc_pages(sbi, new_pages - old_pages);
+                    // 释放之前分配的页
+                    for (uint64_t j = old_pages; j < i; j++) {
+                        void *p = dynarr_get(ti->pages, j);
+                        if (p) kheap_free(p);
+                    }
+
+                    dynarr_destroy(ti->pages);
+                    ti->pages = NULL;
+                    tmpfs_free_pages(sbi, new_pages - old_pages);
+
+                    spin_unlock(&inode->lock);
+
+                    return -ENOMEM;
+                }
+            }
         }
 
         // 更新文件和私有数据中的大小字段
@@ -1072,7 +1221,11 @@ static int tmpfs_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, de
     spin_unlock(&dir->sb->lock);
 
     // 在父目录的目录项链表中添加新条目
+    spin_lock(&((struct tmpfs_inode *)dir->private)->dir_lock);
     err = tmpfs_dir_add(dir->private, dentry->name.name, dentry->name.len, inode->ino);
+
+    spin_unlock(&((struct tmpfs_inode *)dir->private)->dir_lock);
+
     if (err) {
         spin_lock(&dir->sb->lock);
         list_del(&inode->sb_list);
@@ -1237,18 +1390,30 @@ static struct dentry *tmpfs_mount(
     spin_unlock(&sb->lock);
 
     // 在根目录中添加 . 和 .. 条目，都指向自己
-    err = tmpfs_dir_add(root_inode->private, ".", 1, root_inode->ino);
-    if (err)
-        goto out_evict_root;
+    struct tmpfs_inode *root_ti = root_inode->private;
 
-    err = tmpfs_dir_add(root_inode->private, "..", 2, root_inode->ino);
+    spin_lock(&root_ti->dir_lock);
+
+    err = tmpfs_dir_add(root_ti, ".", 1, root_inode->ino);
     if (err) {
-        struct tmpfs_dir_entry *dot;
-        dot = tmpfs_dir_lookup(root_inode->private, ".", 1);
-        if (dot)
-            tmpfs_dir_remove(dot);
+        spin_unlock(&root_ti->dir_lock);
+
         goto out_evict_root;
     }
+
+    err = tmpfs_dir_add(root_ti, "..", 2, root_inode->ino);
+    if (err) {
+        struct tmpfs_dir_entry *dot;
+        dot = tmpfs_dir_lookup(root_ti, ".", 1);
+        if (dot)
+            tmpfs_dir_remove(dot);
+
+        spin_unlock(&root_ti->dir_lock);
+
+        goto out_evict_root;
+    }
+
+    spin_unlock(&root_ti->dir_lock);
 
     // 创建根 dentry
     root_dentry = kheap_alloc(sizeof(*root_dentry));
@@ -1478,13 +1643,15 @@ static ssize_t tmpfs_write(
     old_pages = (ti->data_size + PAGE_SIZE - 1) / PAGE_SIZE;
     new_pages = (end + PAGE_SIZE - 1) / PAGE_SIZE;
 
+    spin_lock(&inode->lock);
+
     // 若写入需要额外的页，先尝试预占容量配额
     if (new_pages > old_pages) {
-        if (!tmpfs_alloc_pages(sbi, new_pages - old_pages))
+        if (!tmpfs_alloc_pages(sbi, new_pages - old_pages)) {
+            spin_unlock(&inode->lock);
             return -ENOSPC;
+        }
     }
-
-    spin_lock(&inode->lock);
 
     // 确保页数组存在
     if (!ti->pages) {
@@ -1507,7 +1674,11 @@ static ssize_t tmpfs_write(
         }
 
         memset(page, 0, PAGE_SIZE);
-        dynarr_append(ti->pages, &page);
+        if (!dynarr_append(ti->pages, &page)) {
+            kheap_free(page);
+            err = -ENOMEM;
+            goto out;
+        }
     }
 
     // 逐页将用户数据拷贝到对应页面中
@@ -1545,7 +1716,7 @@ out:
                 kheap_free(page_ptr);
         }
 
-        // 若数组回退到初始的空状态，那么久销毁它
+        // 若数组回退到初始的空状态，那么就销毁它
         if (old_dynarr_count == 0) {
             dynarr_destroy(ti->pages);
             ti->pages = NULL;
@@ -1645,7 +1816,7 @@ static int tmpfs_dentry_compare(
     if (dentry->name.len != len)
         return (int)(dentry->name.len - len);
 
-    // 哈希值不等，肯定不匹配
+    // 哈希值不等，不匹配
     hash = vfs_full_name_hash(str, len);
     if (dentry->name.hash != hash)
         return 1;
