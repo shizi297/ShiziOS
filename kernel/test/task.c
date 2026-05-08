@@ -138,7 +138,7 @@ static void test_thread(void *arg) {
              */
             int delay = chaos_delay(tid, rounds);
             for (int i = 0; i < delay; i++)
-                cpu_halt();
+                cpu_pause();
 
             /*
              * 再次进入临界区检查：如果节点地址已变
