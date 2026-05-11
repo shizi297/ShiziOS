@@ -12,6 +12,7 @@
 #include <dynarr.h>
 #include <spinlock.h>
 #include <asm/serial.h>
+#include <drivers/base/drivers.h>
 
 #define DRIVERS_PRINT(fmt, ...) \
     printk("[DRIVERS] " fmt, ##__VA_ARGS__)
@@ -38,19 +39,13 @@ static struct {
 
 // 初始化匿名设备号位图
 static void drivers_anon_init(void) {
-    anon_state.bitmap = 
-        dynarr_create(
-            sizeof(bitmap_t),
-            BITMAP_BYTES(ANON_MAX_COUNT) / sizeof(bitmap_t)
-        );
-
+    anon_state.bitmap = dynarr_bitmap_create(ANON_MAX_COUNT);
     if (!anon_state.bitmap)
         return;
 
     // 保留 0 号设备号
-    bitmap_t zero = 0;
-    dynarr_set(anon_state.bitmap, 0, &zero);
-    bitmap_set(anon_state.bitmap->arr, 0);
+    uint32_t dummy;
+    dynarr_bitmap_alloc(anon_state.bitmap, 1, &dummy);
 }
 
 // 驱动框架初始化
@@ -66,32 +61,12 @@ int drivers_get_anon_id(dev_t *dev) {
 
     spin_lock(&anon_state.lock);
 
-    uint32_t total_bits = dynarr_capacity(anon_state.bitmap) * BITS_PER_UNIT;
-    uint32_t idx = bitmap_find(anon_state.bitmap->arr, total_bits, 1, false);
-
-    if (idx >= total_bits) {
-        // 位图已满，尝试扩容
-        if (total_bits >= ANON_MAX_COUNT) {
-            spin_unlock(&anon_state.lock);
-            return -ENOSPC;
-        }
-
-        uint64_t new_cap = dynarr_capacity(anon_state.bitmap) * 2;
-        if (!dynarr_expand_to(anon_state.bitmap, new_cap)) {
-            spin_unlock(&anon_state.lock);
-            return -ENOMEM;
-        }
-
-        // 扩容成功，新增区域已清零，重新查找
-        total_bits = dynarr_capacity(anon_state.bitmap) * BITS_PER_UNIT;
-        idx = bitmap_find(anon_state.bitmap->arr, total_bits, 1, false);
-        if (idx >= total_bits) {
-            spin_unlock(&anon_state.lock);
-            return -ENOSPC;
-        }
+    uint32_t idx;
+    if (!dynarr_bitmap_alloc(anon_state.bitmap, 1, &idx)) {
+        spin_unlock(&anon_state.lock);
+        return -ENOSPC;
     }
 
-    bitmap_set(anon_state.bitmap->arr, idx);
     spin_unlock(&anon_state.lock);
 
     *dev = MKDEV(ANON_DEV, idx);
@@ -104,10 +79,7 @@ void drivers_free_anon_id(dev_t dev) {
     if (!mi) return;
 
     spin_lock(&anon_state.lock);
-
-    if (anon_state.bitmap)
-        bitmap_clear(anon_state.bitmap->arr, mi);
-
+    dynarr_bitmap_free(anon_state.bitmap, mi);
     spin_unlock(&anon_state.lock);
 }
 
@@ -115,3 +87,4 @@ void drivers_free_anon_id(dev_t dev) {
 struct file_operations *drivers_dev_find(dev_t dev, mode_t mode) {
     return NULL;
 }
+

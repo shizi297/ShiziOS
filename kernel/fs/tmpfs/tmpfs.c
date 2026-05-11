@@ -72,14 +72,14 @@ static void tmpfs_free_pages(struct tmpfs_sb_info *sbi, uint64_t count) {
 
 // 初始化 inode 的分配器
 static bool tmpfs_ino_bitmap_init(struct tmpfs_sb_info *sbi) {
-    sbi->inode_bitmap = dynarr_create(sizeof(bitmap_t), 0);
+    sbi->inode_bitmap = dynarr_bitmap_create(sbi->max_inodes);
     if (!sbi->inode_bitmap)
         return false;
 
     // 预置第 0 个元素，保留 inode 0 不用
-    bitmap_t zero = 0;
-    dynarr_set(sbi->inode_bitmap, 0, &zero);
-    bitmap_set(sbi->inode_bitmap->arr, 0);
+    uint32_t dummy;
+    if (!dynarr_bitmap_alloc(sbi->inode_bitmap, 1, &dummy))
+        return false;  
 
     atomic_init(&sbi->inode_count, 0);
     spinlock_init(&sbi->inode_lock);
@@ -91,32 +91,15 @@ static bool tmpfs_ino_bitmap_init(struct tmpfs_sb_info *sbi) {
 static bool tmpfs_alloc_ino(struct tmpfs_sb_info *sbi, ino_t *out_ino) {
     spin_lock(&sbi->inode_lock);
 
-    uint32_t total_bits = dynarr_capacity(sbi->inode_bitmap) * BITS_PER_UNIT;
     uint32_t found;
+    if (!dynarr_bitmap_alloc(sbi->inode_bitmap, 1, &found)) {
+        spin_unlock(&sbi->inode_lock);
 
-    // 在当前位图中查找空闲位
-    found = bitmap_find(sbi->inode_bitmap->arr, total_bits, 1, false);
-
-    // 位图已满，扩容两倍后重试
-    if (found >= total_bits) {
-        if (!dynarr_expand_to(sbi->inode_bitmap, dynarr_capacity(sbi->inode_bitmap) * 2)) {
-            spin_unlock(&sbi->inode_lock);
-
-            return false;
-        }
-
-        total_bits = dynarr_capacity(sbi->inode_bitmap) * BITS_PER_UNIT;
-        found = bitmap_find(sbi->inode_bitmap->arr, total_bits, 1, false);
-        if (found >= total_bits) {
-            spin_unlock(&sbi->inode_lock);
-
-            return false;
-        }
+        return false;
     }
 
-    // 标记为已占用
-    bitmap_set(sbi->inode_bitmap->arr, found);
     atomic_fetch_add(&sbi->inode_count, 1);
+    
     spin_unlock(&sbi->inode_lock);
 
     *out_ino = (ino_t)found;
@@ -129,8 +112,9 @@ static void tmpfs_free_ino(struct tmpfs_sb_info *sbi, ino_t ino) {
         return;
 
     spin_lock(&sbi->inode_lock);
+    
+    dynarr_bitmap_free(sbi->inode_bitmap, (uint32_t)ino);
 
-    bitmap_clear(sbi->inode_bitmap->arr, ino);
     atomic_fetch_sub(&sbi->inode_count, 1);
 
     spin_unlock(&sbi->inode_lock);
