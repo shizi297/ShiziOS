@@ -50,7 +50,7 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     time_init();
 
     // 初始化驱动框架
-    drivers_init();
+    if (!drivers_init()) KERNEL_PANIC("drivers init failed");
 
     // 初始化vfs
     if (!vfs_init()) KERNEL_PANIC("vfs init failed");

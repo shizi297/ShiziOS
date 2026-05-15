@@ -6,10 +6,26 @@
 #pragma once
 
 #include <stdint.h>
-#include <rcu.h>
 #include <spinlock.h>
-#include <hash.h>
+#include <list.h>
 #include <shizi/types.h>
+#include <drivers/base/drivers.h>
+
+// 资源类型
+enum resource_flags {
+    IORESOURCE_MEM = 1ULL << 0,   // 内存区域（MMIO）
+    IORESOURCE_IO  = 1ULL << 1,   // I/O 端口
+    IORESOURCE_IRQ = 1ULL << 2,   // 中断号
+    IORESOURCE_DMA = 1ULL << 3,   // DMA 通道
+};
+
+// 用于设备资源描述
+struct resource {
+    uintptr_t start;            // 资源起始地址
+    uintptr_t end;              // 资源结束地址
+    const char *name;           // 资源名称
+    enum resource_flags flags;  // 资源类型
+};
 
 // 设备节点
 struct device {
@@ -33,7 +49,7 @@ struct device {
     dev_t devt;
 
     // 当前绑定的驱动
-    struct driver __rcu *driver;
+    struct driver *driver;
 
     // 父设备
     struct device *parent;
@@ -46,11 +62,6 @@ struct device {
 
     // 链表节点，挂入 bus->devices
     struct list_head node;
-
-    // 哈希节点，挂入 bus->dev_hash 的桶
-    struct hlist_node hash_node;
-
-    struct rcu_head rcu;
 
     bool registered;    // 是否已注册
 };
@@ -76,8 +87,6 @@ struct driver {
 
     // 链表节点，挂入 bus->drivers
     struct list_head node;
-
-    struct rcu_head rcu;        
 };
 
 // 总线节点
@@ -90,11 +99,8 @@ struct bus {
     // 设备链表头
     struct list_head devices;
 
-    // 驱动链表头，使用 RCU 保护。
+    // 驱动链表头
     struct list_head drivers;
-
-    // 设备名称哈希表，用于快速查找
-    struct hash_table dev_hash; 
 
     // 用于保护总线节点内字段的写操作
     spinlock_t lock;
@@ -102,3 +108,74 @@ struct bus {
     // 用于将总线挂入根节点的链表节点
     struct list_head node;
 };
+
+typedef struct drivers_minor_devt drivers_minor_devt;
+
+// 分配一个新的主设备号，返回一个次设备号分配器
+drivers_minor_devt *drivers_major_alloc(void);
+
+// 初始化次设备号分配器
+void drivers_minor_allocator_init(drivers_minor_devt *handle, bool is_dynamic);
+
+// 分配一个次设备号
+int drivers_minor_alloc(drivers_minor_devt *handle, dev_t *dev);
+
+// 释放一个次设备号
+void drivers_minor_free(drivers_minor_devt *handle, dev_t dev);
+
+// 释放主设备号和次设备号分配器
+void drivers_major_free(drivers_minor_devt *handle);
+
+// 注册 fops 到主设备号
+int drivers_register_fops(unsigned int major, struct file_operations *fops);
+
+// 注销主设备号的 fops
+void drivers_unregister_fops(unsigned int major);
+
+// 初始化总线
+void drivers_bus_init(
+    struct bus *bus, 
+    const char *name,
+    bool (*match)(struct device *, struct driver *)
+);
+
+// 添加一个总线
+bool drivers_add_bus(struct bus *bus);
+
+// 移除一个总线,调用者需要确保总线上的资源都被释放
+void drivers_remove_bus(struct bus *bus);
+
+// 初始化设备节点
+void drivers_device_init(
+    struct device *dev, 
+    struct bus *bus, 
+    const char *name, 
+    struct resource *res, 
+    int num_res,
+    void *priv,
+    dev_t devt,
+    struct device *parent
+);
+
+// 添加设备节点
+bool drivers_add_device(struct device *dev);
+
+// 移除设备节点
+void drivers_remove_device(struct device *dev);
+
+// 初始化驱动节点
+void drivers_driver_init(
+    struct driver *drv,
+    const char *name,
+    struct bus *bus,
+    int (*probe)(struct device *dev),
+    void (*remove)(struct device *dev),
+    const void *id_table
+);
+
+// 添加驱动节点
+bool drivers_add_driver(struct driver *drv);
+
+// 移除驱动节点
+void drivers_remove_driver(struct driver *drv);
+
