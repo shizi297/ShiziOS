@@ -20,7 +20,6 @@
 #include <time.h>
 #include <stdatomic.h>
 #include <apic.h>
-#include <rcu.h>
 
 #define SMP_PRINT(fmt, ...) \
     printk("[SMP] " fmt, ##__VA_ARGS__)
@@ -179,16 +178,6 @@ void smp_data_init(
 
     logicalid_to_apicid_struct_ptr->count = max_cpu_count;
 
-    // 初始化 RCU
-    rcu_init();
-
-    // 为所有 CPU 分配并初始化 RCU 每 CPU 数据
-    for (uint16_t i = 0; i < max_cpu_count; i++) {
-        struct per_cpu_rcu *pcpu_rcu = rcu_per_cpu_alloc();
-        if (!pcpu_rcu) SMP_PANIC("failed to allocate per_cpu_rcu\n");
-        per_cpu_ptr[i].rcu_ptr = pcpu_rcu;
-    }
-
     SMP_PRINT("smp data init succeed\n");
 }
 
@@ -288,6 +277,7 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
+        if (!vfs_init()) SMP_PANIC("vfs init failed");
         if (!task_data_init()) SMP_PANIC("task init failed\n");
 
         // 通知ap继续执行

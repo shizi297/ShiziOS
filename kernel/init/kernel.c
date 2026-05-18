@@ -10,7 +10,6 @@
 #include <asm/serial.h>  
 #include <time.h>
 #include <drivers.h>
-#include <vfs.h>
 #include <config.h>
 
 #define KERNEL_PRINT(fmt, ...) \
@@ -51,9 +50,6 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
 
     // 初始化驱动框架
     if (!drivers_init()) KERNEL_PANIC("drivers init failed");
-
-    // 初始化vfs
-    if (!vfs_init()) KERNEL_PANIC("vfs init failed");
 
     // 设置标志位让ap启动
     cpu_ready_flag = 1;

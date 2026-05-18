@@ -12,7 +12,6 @@
 #include <time.h>
 #include <bootboot.h>
 #include <list.h>
-#include <rcu.h>
 
 struct sched_class;
 
@@ -47,9 +46,6 @@ typedef struct {
     // 用于在中断返回时判断是否需要重新调度
     uint64_t need_sched;
 
-    // RCU 每 CPU 数据指针
-    struct per_cpu_rcu *rcu_ptr;
-
     // 用于任务迁移
     struct list_head migration;
 } __attribute__((aligned(64))) per_cpu;
@@ -67,7 +63,6 @@ enum per_cpu_offset {
     PER_CPU_CLOCKEVENT_OFFSET   = offsetof(per_cpu, clockevent),
     PER_CPU_SCHED_TIMER_OFFSET  = offsetof(per_cpu, sched_timer),
     PER_CPU_NEED_SCHED_OFFSET   = offsetof(per_cpu, need_sched),
-    PER_CPU_RCU_PTR_OFFSET      = offsetof(per_cpu, rcu_ptr),
 };
 
 /*
@@ -263,15 +258,4 @@ static inline struct list_head *smp_get_migration(void) {
 static inline struct list_head *smp_get_cpu_migration(uint64_t logical_id) {
     extern per_cpu *per_cpu_ptr;
     return &per_cpu_ptr[logical_id].migration;
-}
-
-// 获取当前 CPU 的 RCU 每 CPU 数据指针
-static inline struct per_cpu_rcu *smp_get_rcu(void) {
-    return (struct per_cpu_rcu *)PROCESSOR_READ_GS(PER_CPU_RCU_PTR_OFFSET);
-}
-
-// 获取指定 CPU 的 RCU 每 CPU 数据指针
-static inline struct per_cpu_rcu *smp_get_cpu_rcu(uint32_t logical_id) {
-    extern per_cpu *per_cpu_ptr;
-    return per_cpu_ptr[logical_id].rcu_ptr;
 }

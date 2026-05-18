@@ -68,8 +68,6 @@ void irq_entry(struct pt_regs *regs) {
         // 外部中断结束，只更新时间戳，不累加
         apic_eoi();
     }
-
-    rcu_state_run();
-
+    
     if (smp_check_need_sched()) task_sched();
 }

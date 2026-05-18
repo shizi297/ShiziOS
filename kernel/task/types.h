@@ -9,7 +9,6 @@
 #include <list.h>
 #include <libtree.h>
 #include <heap.h>
-#include <rcu.h>
 #include <vfs.h>
 #include <shizi/types.h>
 
@@ -50,8 +49,6 @@ typedef struct task_struct {
 
     id_t pid;  // 线程id，每个线程有一个
     id_t tgid; // 线程组id，每个进程有一个，同一进程的线程共享
-
-    rcu_task_struct rcu;  // RCU相关
 
     task_state state;  // 任务当前的状态
 
