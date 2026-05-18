@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.15)
+
+set(CMAKE_SYSTEM_NAME "Generic")
+set(CMAKE_SYSTEM_PROCESSOR "x86_64")
+
 project(ShiziOS)
 
 # 工具链配置
