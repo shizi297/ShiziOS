@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <list.h>
 #include <bitmap.h>
+#include <minmax.h>
 
 #define PMM_PRINT(fmt, ...) \
     printk("[PMM] " fmt, ##__VA_ARGS__)
@@ -80,9 +81,12 @@ static void calculate_max_pfn(void) {
 
 static void alloc_bitmap_init(void){
     // 计算创建位图所需的页数
-    size_t alloc_bitmap_size = BITMAP_BYTES(max_pfn + 1);
-    
-    void* alloc_bitmap = boot_alloc(alloc_bitmap_size);
+    size_t alloc_bitmap_bytes = BITMAP_BYTES(max_pfn + 1);
+
+    size_t alloc_bitmap_pages = (alloc_bitmap_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    void* alloc_bitmap = boot_alloc(alloc_bitmap_pages);
+    if (!alloc_bitmap) 
+        PMM_PANIC("Failed to allocate bitmap for PMM\n");
     
     bitmap64 = (uint64_t*)alloc_bitmap;
     
@@ -107,7 +111,7 @@ static void alloc_bitmap_init(void){
             uint64_t end_pfn = (end_addr + PAGE_SIZE - 1) / PAGE_SIZE;
             
             if (start_pfn > max_pfn) continue;
-            if (end_pfn > max_pfn + 1) end_pfn = max_pfn + 1;
+            end_pfn = min(end_pfn, max_pfn + 1);
             
             for (uint64_t pfn = start_pfn; pfn < end_pfn; pfn++) {
                 bitmap_clear((bitmap_t*)bitmap64, pfn);
