@@ -30,7 +30,7 @@ extern void kernel_main(uint32_t logical_id, uint32_t apic_id);
 extern void smp_init(uint32_t logical_id, uint32_t apic_id);
 
 // 对齐缓存行，防止伪共享
-__attribute__((aligned(64)))
+__attribute__((aligned(64), section(".data")))
 /*
  * CPU就绪标志
  * 所有CPU在启动时等待该标志被置位
@@ -60,11 +60,7 @@ void _start(uint64_t logical_id_raw) {
 
     // bootboot在加载内核前已经初始化串口，这里不初始化
 
-    // 清0 bss
-    extern char __bss_start[], __bss_end[];
-    size_t bss_size = __bss_end - __bss_start;
-    if (bss_size) 
-        memset(__bss_start, 0, bss_size);
+    irq_off();
 
     spin_lock(&boot_init_spin);
     apic_boot_init();
@@ -83,6 +79,11 @@ void _start(uint64_t logical_id_raw) {
     if (bpcpu_logical_flag) {
         BOOTKERNEL_PRINT("BP CPU logical_id : %d\n", logical_id);
         BOOTKERNEL_PRINT("BP CPU APIC_ID : %d\n", apic_id);
+
+        extern char __bss_start[], __bss_end[];
+        size_t bss_size = __bss_end - __bss_start;
+        if (bss_size) 
+            memset(__bss_start, 0, bss_size);
     } 
 
     // 数据错误
