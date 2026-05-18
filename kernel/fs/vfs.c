@@ -9,6 +9,7 @@
 #include <fs/vfs.h>
 #include <initcall.h>
 #include <klibc.h>
+#include <minmax.h>
 
 #define MAX_SYMLINKS 8
 
@@ -36,16 +37,15 @@ static struct vfs_hash_table dentry_cache = {0};
 
 // 用于挂载文件系统
 static struct {
-    struct vfsmount * __rcu root;  // 根挂载点
+    struct vfsmount *root;  // 根挂载点
     atomic_uint count;  // 挂载的文件系统数量
     mutex_t lock;   // 保护挂载树修改的互斥锁
 } mount_tree = {0};
 
-static struct path * __rcu vfs_root = NULL;   // 根路径对象
+static struct path *vfs_root = NULL;   // 根路径对象
 
 static uint64_t vfs_get_hash_size(uint64_t obj_size, uint64_t scale);
 static inline void vfs_dget(struct dentry *dentry);
-static inline struct dentry *vfs_dget_rcu(struct dentry *dentry);
 
 /**
  * dentry 哈希
@@ -159,7 +159,7 @@ static int vfs_dinit(void) {
         vfs_dentry_hash_fn, vfs_dentry_eq_fn
     );
 
-    spinlock_init(&cache->lock);
+    rwlock_init(&cache->lock);
 
     return 0;
 }
@@ -180,7 +180,7 @@ static int vfs_iinit(void) {
         vfs_inode_hash_fn, vfs_inode_eq_fn
     );
 
-    spinlock_init(&cache->lock);
+    rwlock_init(&cache->lock);
 
     return 0;
 }
@@ -192,10 +192,7 @@ static uint64_t vfs_get_hash_size(uint64_t obj_size, uint64_t scale) {
     uint64_t max_objs = total_pages * objs_per_page;
     uint64_t buckets = max_objs / scale;
 
-    if (buckets < VFS_HASH_MIN)
-        buckets = VFS_HASH_MIN;
-    if (buckets > VFS_HASH_MAX)
-        buckets = VFS_HASH_MAX;
+    buckets = clamp(buckets, (uint64_t)VFS_HASH_MIN, (uint64_t)VFS_HASH_MAX);
 
     // 向上取整到 2 的幂
     if (buckets == 0) {
@@ -268,7 +265,6 @@ static struct dentry *vfs_dalloc(struct dentry *parent, const char *name) {
     atomic_init(&dentry->count, 1);
     dentry->flags = DCACHE_NONE;
     spinlock_init(&dentry->lock);
-    INIT_LIST_HEAD(&dentry->rcu.node);
     dentry->key.parent = parent;
     dentry->key.name = dentry->name;
 
@@ -322,16 +318,6 @@ static inline void vfs_dget(struct dentry *dentry) {
     if (!old) {
         vfs_dlru_del(dentry);
     }
-}
-
-// 增加 dentry 引用计数(rcu 版本,调用者需要持有 rcu 读锁)
-static inline struct dentry *vfs_dget_rcu(struct dentry *dentry) {
-    if (atomic_fetch_add(&dentry->count, 1) == 0) {
-        atomic_fetch_sub(&dentry->count, 1);
-        return NULL;
-    }
-
-    return dentry;
 }
 
 // 减少 dentry 引用计数
@@ -1078,9 +1064,9 @@ static struct file_operations default_file_operations = {
 
 // 将 inode 添加到 inode 缓存哈希表
 void vfs_icache_add(struct inode *inode) {
-    spin_lock(&inode_cache.lock);
+    rwlock_write_lock(&inode_cache.lock);
     hash_add(&inode_cache.hash, &inode->hash, &inode->key);
-    spin_unlock(&inode_cache.lock);
+    rwlock_write_unlock(&inode_cache.lock);
 }
 
 /**
@@ -1096,25 +1082,25 @@ struct inode *vfs_icache_find(struct super_block *sb, ino_t ino) {
     struct hlist_node *node;
     struct inode *inode;
 
-    rcu_read_lock();
+    rwlock_read_lock(&inode_cache.lock);
 
-    node = hash_lookup_rcu(&inode_cache.hash, &key, vfs_inode_get_key);
+    node = hash_lookup(&inode_cache.hash, &key, vfs_inode_get_key);
     if (node) {
         inode = hlist_entry(node, struct inode, hash);
         atomic_fetch_add(&inode->count, 1);
-        rcu_read_unlock();
+        rwlock_read_unlock(&inode_cache.lock);
         return inode;
     }
 
-    rcu_read_unlock();
+    rwlock_read_unlock(&inode_cache.lock);
     return NULL;
 }
 
 // 将 dentry 添加到 dentry 缓存哈希表
 void vfs_dcache_add(struct dentry *dentry) {
-    spin_lock(&dentry_cache.lock);
+    rwlock_write_lock(&dentry_cache.lock);
     hash_add(&dentry_cache.hash, &dentry->hash_node, &dentry->key);
-    spin_unlock(&dentry_cache.lock);
+    rwlock_write_unlock(&dentry_cache.lock);
 }
 
 /**
@@ -1136,18 +1122,17 @@ struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t l
     key.name.len = len;
     key.name.hash = vfs_full_name_hash(name, len);
 
-    rcu_read_lock();
+    rwlock_read_lock(&dentry_cache.lock);
 
-    node = hash_lookup_rcu(&dentry_cache.hash, &key, vfs_dentry_get_key);
+    node = hash_lookup(&dentry_cache.hash, &key, vfs_dentry_get_key);
     if (node) {
         dentry = hlist_entry(node, struct dentry, hash_node);
-        if (vfs_dget_rcu(dentry)) {
-            rcu_read_unlock();
-            return dentry;
-        }
+        vfs_dget(dentry);
+        rwlock_read_unlock(&dentry_cache.lock);
+        return dentry;
     }
-    
-    rcu_read_unlock();
+
+    rwlock_read_unlock(&dentry_cache.lock);
     return NULL;
 }
 
@@ -1246,7 +1231,6 @@ uint32_t vfs_full_name_hash(const char *name, unsigned int len) {
     uint32_t hash = 0;
     while (len--) 
         hash = (hash << 5) + hash + *name++;
-    
 
     return hash;
 }

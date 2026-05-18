@@ -9,7 +9,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <list.h>
-#include <list_rcu.h>
 
 // 哈希函数类型：输入键指针，返回 32 位哈希值
 typedef uint32_t (*hash_fn)(const void *key);
@@ -67,7 +66,7 @@ static inline size_t hash_bucket_index(
  * @param node 待插入的 hlist_node
  * @param key 节点的键
  *
- * 调用者需确保键在表中尚不存在，本函数不检查重复。
+ * 调用者需确保键在表中尚不存在
  */
 static inline void hash_add(
     struct hash_table *ht,
@@ -107,55 +106,12 @@ static inline struct hlist_node *hash_lookup(
 }
 
 /**
- * 在哈希表中查找节点（RCU 读锁保护版本）
- *
- * @param ht 哈希表指针
- * @param key 待查找的键
- * @param get_key 回调：从 hlist_node 提取键指针
- *
- * @return 失败：NULL
- * @return 成功：hlist_node 指针
- *
- * 调用前必须持有 rcu_read_lock()，节点不可在宽限期结束前释放。
- */
-static inline struct hlist_node *hash_lookup_rcu(
-    struct hash_table *ht,
-    const void *key,
-    const void *(*get_key)(const struct hlist_node *node)
-) {
-    size_t idx = hash_bucket_index(ht, key);
-    struct hlist_node *pos;
-
-    hlist_for_each_rcu(pos, &ht->buckets[idx]) {
-        const void *node_key = get_key(pos);
-        if (ht->eq(key, node_key)) {
-            return pos;
-        }
-    }
-
-    return NULL;
-}
-
-/**
  * 从哈希表中删除节点
  *
  * @param node 要删除的 hlist_node
- *
- * 仅执行链表摘除，不释放节点内存。
  */
 static inline void hash_del(struct hlist_node *node) {
     hlist_del(node);
-}
-
-/**
- * 从哈希表中删除节点（RCU 版本）
- *
- * @param node 要删除的 hlist_node
- *
- * 摘除后需等待 RCU 宽限期才能释放节点内存。
- */
-static inline void hash_del_rcu(struct hlist_node *node) {
-    hlist_del_rcu(node);
 }
 
 // 遍历哈希表中所有节点

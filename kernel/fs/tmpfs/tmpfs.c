@@ -10,6 +10,7 @@
 #include <bitmap.h>
 #include <initcall.h>
 #include <klibc.h>
+#include <minmax.h>
 
 #define TMPFS_MAGIC 0xad661a3b
 
@@ -174,7 +175,6 @@ static int tmpfs_inode_init(
     INIT_LIST_HEAD(&inode->lru);
     INIT_HLIST_NODE(&inode->hash);
     INIT_LIST_HEAD(&inode->sb_list);
-    INIT_LIST_HEAD(&inode->rcu.node);
 
     inode->key.sb = sb;
     inode->key.ino = new_ino;
@@ -1161,8 +1161,7 @@ static ssize_t tmpfs_readlink(
 
     // 目标路径长度
     copy_len = ti->data_size;
-    if (copy_len > bufsiz)
-        copy_len = bufsiz;
+    copy_len = min(copy_len, bufsiz);
 
     // 复制目标路径到用户缓冲区
     memcpy(buf, ti->symlink_target, copy_len);
@@ -1427,7 +1426,6 @@ static struct dentry *tmpfs_mount(
     spinlock_init(&root_dentry->lock);
     INIT_LIST_HEAD(&root_dentry->child);
     INIT_LIST_HEAD(&root_dentry->subdirs);
-    INIT_LIST_HEAD(&root_dentry->rcu.node);
 
     root_dentry->key.parent = NULL;
     root_dentry->key.name = root_dentry->name;
@@ -1542,8 +1540,7 @@ static ssize_t tmpfs_read(
         // 如果页数组未分配或索引越界，剩余部分填充零
         if (!ti->pages || page_idx >= dynarr_count(ti->pages)) {
             size_t chunk = PAGE_SIZE - page_off;
-            if (chunk > remaining)
-                chunk = remaining;
+            chunk = min(chunk, remaining);
 
             memset(buf + done, 0, chunk);
             done += chunk;
@@ -1557,8 +1554,7 @@ static ssize_t tmpfs_read(
         // 对应页不存在，填充零
         if (!page) {
             size_t chunk = PAGE_SIZE - page_off;
-            if (chunk > remaining)
-                chunk = remaining;
+            chunk = min(chunk, remaining);
 
             memset(buf + done, 0, chunk);
             done += chunk;
@@ -1569,8 +1565,7 @@ static ssize_t tmpfs_read(
 
         // 拷贝页内数据
         size_t chunk = PAGE_SIZE - page_off;
-        if (chunk > remaining)
-            chunk = remaining;
+        chunk = min(chunk, remaining);
 
         memcpy(buf + done, (char *)page + page_off, chunk);
         done += chunk;
@@ -1675,8 +1670,7 @@ static ssize_t tmpfs_write(
         page = dynarr_get(ti->pages, page_idx);
 
         size_t chunk = PAGE_SIZE - page_off;
-        if (chunk > remaining)
-            chunk = remaining;
+        chunk = min(chunk, remaining);
 
         memcpy((char *)page + page_off, buf + done, chunk);
         done += chunk;

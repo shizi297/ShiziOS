@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <spinlock.h>
+#include <rwlock.h>
 #include <shizi/types.h>
 #include <vfs.h>
 #include <list.h>
@@ -17,7 +17,6 @@
 #include <vfs.h>
 #include <mutex.h>
 #include <drivers.h>
-#include <rcu.h>
 
 extern struct file_operations dev_fops;
 
@@ -146,7 +145,6 @@ struct inode {
     struct list_head lru;   // LRU 链表节点（用于回收）
     struct hlist_node hash; // 哈希表节点（用于 inode 缓存）
     struct list_head sb_list;   // 用于挂入 super_block->inodes 链表的节点
-    struct rcu_head rcu;    // 用于保护结构体实例占用的内存
     void *private;  // 文件系统私有数据
     struct inode_key key;   // 用于哈希缓存的键
 };
@@ -155,7 +153,7 @@ struct inode {
 struct dentry {
     struct dentry *parent;  // 父目录项指针
     struct qstr name;   
-    struct inode * __rcu inode;    // 目录项对应的 inode
+    struct inode *inode;    // 目录项对应的 inode
     struct dentry_operations *ops;  // 目录项操作表
     struct hlist_node hash_node; // 哈希表节点（用于dentry 缓存）
     struct list_head lru;   // LRU 链表节点
@@ -164,7 +162,6 @@ struct dentry {
     spinlock_t lock;    // 保护 parent, inode, flags
     struct list_head child;   // 父目录的子链表节点
     struct list_head subdirs; // 子目录项链表头（仅目录使用）
-    struct rcu_head rcu;    // 确保结构体实例占用的内存安全释放
     struct dentry_key key;    // 用于哈希缓存的键
 };
 
@@ -235,7 +232,7 @@ struct vfs_lock_list {
 // 用于vfs的哈希表
 struct vfs_hash_table {
     struct hash_table hash; // 哈希表
-    spinlock_t lock;    // 保护哈希表的锁
+    rwlock_t lock;    // 保护哈希表的锁
 };
 
 // 用于解析路径字符串的句柄，记录解析状态
