@@ -24,9 +24,14 @@ SECTIONS
         __start_initcall_fs_0 = .;
         KEEP(*(.initcall_fs_0))
         __stop_initcall_fs_0 = .;
+
         __start_initcall_kthreadtest_0 = .;
         KEEP(*(.initcall_kthreadtest_0))
         __stop_initcall_kthreadtest_0 = .;
+
+        __start_initcall_drivers_0 = .;
+        KEEP(*(.initcall_drivers_0))
+        __stop_initcall_drivers_0 = .;
     } :all
 
     .data : {

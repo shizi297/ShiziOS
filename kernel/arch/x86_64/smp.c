@@ -18,6 +18,7 @@
 #include <spinlock.h>
 #include <task.h>
 #include <time.h>
+#include <drivers.h>
 #include <stdatomic.h>
 #include <apic.h>
 
@@ -278,6 +279,7 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
         if (!vfs_init()) SMP_PANIC("vfs init failed");
+        if (!drivers_init()) SMP_PANIC("drivers init failed");
         if (!task_data_init()) SMP_PANIC("task init failed\n");
 
         // 通知ap继续执行

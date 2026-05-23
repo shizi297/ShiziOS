@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdatomic.h>
 #include <spinlock.h>
 #include <list.h>
 #include <shizi/types.h>
@@ -63,7 +64,11 @@ struct device {
     // 链表节点，挂入 bus->devices
     struct list_head node;
 
-    bool registered;    // 是否已注册
+    // 用于挂入待处理设备链表
+    struct list_head unmatched_node;  
+
+    // 引用计数，为 0 才能真正释放
+    atomic_int refcnt;
 };
 
 // 驱动节点
@@ -107,6 +112,9 @@ struct bus {
 
     // 用于将总线挂入根节点的链表节点
     struct list_head node;
+
+    // 释放总线私有数据
+    void (*free_device)(struct device *dev);
 };
 
 typedef struct drivers_minor_devt drivers_minor_devt;
@@ -132,50 +140,21 @@ int drivers_register_fops(unsigned int major, struct file_operations *fops);
 // 注销主设备号的 fops
 void drivers_unregister_fops(unsigned int major);
 
-// 初始化总线
-void drivers_bus_init(
-    struct bus *bus, 
-    const char *name,
-    bool (*match)(struct device *, struct driver *)
-);
-
 // 添加一个总线
 bool drivers_add_bus(struct bus *bus);
 
 // 移除一个总线,调用者需要确保总线上的资源都被释放
 void drivers_remove_bus(struct bus *bus);
 
-// 初始化设备节点
-void drivers_device_init(
-    struct device *dev, 
-    struct bus *bus, 
-    const char *name, 
-    struct resource *res, 
-    int num_res,
-    void *priv,
-    dev_t devt,
-    struct device *parent
-);
-
 // 添加设备节点
 bool drivers_add_device(struct device *dev);
 
 // 移除设备节点
-void drivers_remove_device(struct device *dev);
-
-// 初始化驱动节点
-void drivers_driver_init(
-    struct driver *drv,
-    const char *name,
-    struct bus *bus,
-    int (*probe)(struct device *dev),
-    void (*remove)(struct device *dev),
-    const void *id_table
-);
+bool drivers_remove_device(struct device *dev);
 
 // 添加驱动节点
 bool drivers_add_driver(struct driver *drv);
 
 // 移除驱动节点
-void drivers_remove_driver(struct driver *drv);
+bool drivers_remove_driver(struct driver *drv);
 
