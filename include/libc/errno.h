@@ -139,21 +139,3 @@
 #define ENOTRECOVERABLE 131  // 状态不可恢复
 #define ERFKILL         132  // 射频kill
 #define EHWPOISON       133  // 硬件内存错误
-
-// 判断值是否为错误码
-#define IS_ERR_VALUE(x) ((unsigned long)(x) >= (unsigned long)-4095)
-
-// 将错误码转换为指针
-#define ERR_PTR(error)   ((void *)(long)(error))
-
-// 从错误指针提取错误码
-#define PTR_ERR(ptr)     ((long)(ptr))
-
-// 将错误码转为指针
-#define ERR_CAST(x) ((void *)(long)(x))
-
-// 判断指针是否为错误指针
-#define IS_ERR(ptr)      IS_ERR_VALUE((unsigned long)(ptr))
-
-// 判断指针是否为NULL或错误指针
-#define IS_ERR_OR_NULL(ptr) (!(ptr) || IS_ERR(ptr))
