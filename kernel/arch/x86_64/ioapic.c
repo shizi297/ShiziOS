@@ -39,6 +39,11 @@ static struct {
     uint32_t gsi_count;
 } ioapic_info = {0};
 
+typedef struct{
+    uintptr_t base; // ioapic物理基址
+    uint32_t start_gsi; // gsi起始编号
+}acpi_ioapic_info_struct;
+
 /**
  * 向ioapic的内部寄存器写入32位值
  * 
@@ -67,15 +72,65 @@ static inline uint32_t ioapic_read(uint32_t reg) {
 }
 
 /**
+ * ioapic条目遍历回调
+ * 用于找到数据后停止继续寻找并保存信息
+ * 
+ * @param handle 填充数据的结构体
+ * @param hdr 当前条目的数据信息
+ * 
+ * @return 找到数据，退出遍历：UACPI_ITERATION_DECISION_BREAK
+ * @return 没找到数据，继续遍历：UACPI_ITERATION_DECISION_CONTINUE
+ */
+static uacpi_iteration_decision ioapic_info_callback(
+    uacpi_handle handle, 
+    struct acpi_entry_hdr *hdr
+) {
+    acpi_ioapic_info_struct *acpi_ioapic_info = (acpi_ioapic_info_struct *)handle;
+
+    if (hdr->type == ACPI_MADT_ENTRY_TYPE_IOAPIC) {
+        // 填充数据
+        struct acpi_madt_ioapic *ioapic = (struct acpi_madt_ioapic *)hdr;
+        acpi_ioapic_info_struct *ioapic_info = (acpi_ioapic_info_struct *)handle;
+        ioapic_info->base = ioapic->address;
+        ioapic_info->start_gsi = ioapic->gsi_base;
+
+        return UACPI_ITERATION_DECISION_BREAK;
+    }
+
+    return UACPI_ITERATION_DECISION_CONTINUE;
+}
+
+/**
+ * 获取ioapic信息
+ * 
+ * @param ioapic_info 数据存放的位置的指针
+ */
+static bool ioapic_get_info(acpi_ioapic_info_struct *acpi_ioapic_info) {
+    acpi_ioapic_info->base = 0;
+    acpi_ioapic_info->start_gsi = 0;
+
+    bool is_success = acpi_foreach_subtable(
+        ACPI_TABLE_MADT,
+        &ioapic_info_callback, 
+        (void *)acpi_ioapic_info
+    );
+
+    if (!is_success || !acpi_ioapic_info->base) return false;
+    
+    return true; 
+}
+
+/**
  * 初始化ioapic
  * 
  * @return 成功：true
  * @return 失败：false
  */
+__attribute__((optnone))
 bool ioapic_init(void) {
     acpi_ioapic_info_struct acpi_ioapic_info = {0};
 
-    bool is_success = acpi_get_ioapic_info(&acpi_ioapic_info);
+    bool is_success = ioapic_get_info(&acpi_ioapic_info);
     if (!is_success) return false;
 
     // 映射虚拟地址
