@@ -28,11 +28,14 @@ void apic_send_ipi_all(uint32_t vector);
 // 用于通知apic当前中断已完成，需要在所有中断处理后面添加
 void apic_eoi(void);
 
+// 获取当前cpu的apicid
+uint32_t apic_get_id(void);
+
+// 获取 APIC 物理基地址
+uintptr_t apic_get_base(void);
+
 // 早期初始化，用于启动x2apic模式，让系统可以使用一些东西
 void apic_boot_init(void);
 
 // 初始化apic
 bool apic_init(void);
-
-// 获取当前cpu的apicid
-uint32_t apic_get_id(void);

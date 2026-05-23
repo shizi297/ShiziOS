@@ -12,6 +12,7 @@
 #include <asm/smp.h>
 #include <asm/io.h>
 #include <heap.h>
+#include <uacpi/uacpi.h>
 
 // 广播IPI的目标范围
 typedef enum {
@@ -134,6 +135,11 @@ void apic_eoi(void) {
 // 获取当前CPU的APIC ID
 uint32_t apic_get_id(void) {
     return (uint32_t)msr_read(X2APIC_MSR_APIC_ID);
+}
+
+// 获取 APIC 物理基地址
+uintptr_t apic_get_base(void) {
+    return msr_read(MSR_IA32_APIC_BASE) & 0xFFFFF000;
 }
 
 // 早期初始化，用于启动x2apic模式，让系统可以使用一些东西
