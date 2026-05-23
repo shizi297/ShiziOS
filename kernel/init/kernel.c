@@ -32,7 +32,7 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     bp_logical_id = logical_id;
     bp_apic_id = bp_apic_id;
 
-    uint64_t bp_stack_top = (uint64_t)(bp_stack + INIT_STACK_BYTE);
+    uint64_t bp_stack_top = (uint64_t)(bp_stack + INIT_STACK_BYTE) - 128;
 
     processor_set_stack(bp_stack_top);
 
@@ -48,8 +48,8 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     // 初始化time系统
     time_init();
 
-    // 初始化驱动框架
-    if (!drivers_init()) KERNEL_PANIC("drivers init failed");
+    // 初始化驱动框架的数据
+    if (!drivers_data_init()) KERNEL_PANIC("drivers data init failed");
 
     // 设置标志位让ap启动
     cpu_ready_flag = 1;
