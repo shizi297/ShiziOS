@@ -21,6 +21,7 @@
 #include <asm/serial.h>
 #include <stdatomic.h>
 #include <initcall.h>
+#include <wait.h>
 
 #define TASK_PRINT(fmt, ...) \
     printk("[TASK]" fmt, ##__VA_ARGS__)
@@ -31,7 +32,7 @@
 #define INIT_TIME_SLICE_NS timecycle_msec_to_ns(20)
 
 // worker 线程数量
-#define WORKER_THREAD_COUNT 1
+#define WORKER_THREAD_COUNT 2
 
 extern void ret_from_kernel_thread(void);
 
@@ -50,16 +51,24 @@ static struct lock_queue stopped_queue;
 static struct lock_queue zombie_queue;
 static struct lock_queue sleep_queue;
 
-// worker 队列（存放 worker 线程句柄）
-static struct lock_queue worker_queue;
-
 // 工作任务队列（存放工作项）
 struct work_item {
     void (*func)(void *data);
     void *data;
     struct list_head node;
 };
+
 static struct lock_queue work_queue;
+
+// worker线程池，负责处理工作任务队列中的工作项
+static struct {
+    wait_queue_head_t waitq;    // 工作线程等待队列
+    spinlock_t lock;    // 保护所有字段
+    int idle_workers;   // 空闲的 worker 线程数量
+    int active_workers; // 活跃的 worker 线程数量
+    int pending_work;   // 待处理的工作项数量
+    bool shutdown;  // 是否正在关闭线程池
+} worker_pool = {0};
 
 typedef struct {
     /*
@@ -148,17 +157,18 @@ static void task_release(struct task_struct *task) {
     if (task->signal) signal_destroy(task->signal);
 }
 
-// 将 worker 句柄加入 worker 队列
-static void worker_enqueue(struct task_struct *worker) {
-    lock_queue_add_tail(&worker_queue, &worker->sched.list);
-}
+// 用于 woeker 线程自适应唤醒的函数，计算 pending 工作项数量对应的期望活跃 worker 数量
+static inline int worker_calc_expected(uint32_t x) {
+    if (!x)
+        return -1;   // 不应该调用这个函数，返回-1表示错误
 
-// 从 worker 队列中取出一个 worker 句柄
-static struct task_struct *worker_dequeue(void) {
-    struct list_head *node = lock_queue_pop(&worker_queue);
-    if (node)
-        return list_entry(node, struct task_struct, sched.list);
-    return NULL;
+    if (x > WORKER_THREAD_COUNT) 
+        return WORKER_THREAD_COUNT; // 超过线程池容量，返回最大值
+
+    if (x == 1) 
+        return 1;   // 确保 pending 工作项为1时至少唤醒一个线程
+        
+    return 31 - __builtin_clz((unsigned int)x);
 }
 
 // 将工作项加入工作任务队列
@@ -203,24 +213,56 @@ static void zombie_enqueue(struct task_struct *task) {
 // 通用 worker 线程
 static void task_worker(void *arg) {
     while (1) {
-        // 将自己的 worker 句柄加入队列
-        worker_enqueue(smp_get_task_current());
+        // 进入空闲状态
+        spin_lock(&worker_pool.lock);
 
-        // 睡眠，等待唤醒
-        task_sleep(true);
+        worker_pool.idle_workers++;
+        if (worker_pool.shutdown && worker_pool.pending_work == 0) {
+            worker_pool.idle_workers--;
+            spin_unlock(&worker_pool.lock);
+            break;
+        }
 
-        // 被唤醒后处理工作任务
+        spin_unlock(&worker_pool.lock);
+
+        // 等待直到有工作项或 shutdown
+        waitqueue_event(
+            &worker_pool.waitq, 
+            worker_pool.pending_work > 0 || worker_pool.shutdown
+        );
+
+        // 离开空闲，变为活跃
+        spin_lock(&worker_pool.lock);
+        worker_pool.idle_workers--;
+        worker_pool.active_workers++;
+        spin_unlock(&worker_pool.lock);
+
+        // 处理所有待处理的工作项
         struct work_item *item;
         while ((item = work_dequeue()) != NULL) {
+            spin_lock(&worker_pool.lock);
+            worker_pool.pending_work--;
+            spin_unlock(&worker_pool.lock);
             item->func(item->data);
             kheap_free(item);
         }
+
+        // 变为空闲（循环顶部会再次增加 idle_workers，所以这里只减少 active_workers）
+        spin_lock(&worker_pool.lock);
+        worker_pool.active_workers--;
+        spin_unlock(&worker_pool.lock);
     }
 }
 
 // 初始化 worker 线程池
 static inline void task_worker_init(void) {
-    lock_queue_init(&worker_queue);
+    waitqueue_head_init(&worker_pool.waitq);
+    spinlock_init(&worker_pool.lock);
+    worker_pool.idle_workers = 0;
+    worker_pool.active_workers = 0;
+    worker_pool.pending_work = 0;
+    worker_pool.shutdown = false;
+
     lock_queue_init(&work_queue);
 
     for (int i = 0; i < WORKER_THREAD_COUNT; i++) {
@@ -845,18 +887,35 @@ void task_exit(void) {
 
 // 提交一个工作任务
 void task_submit_work(void (*func)(void *), void *data) {
-    struct work_item *item = kheap_alloc(sizeof(struct work_item));
-    if (!item) TASK_PANIC("out of memory\n");
+    struct work_item *item = kheap_alloc(sizeof(*item));
+    if (!item) TASK_PANIC("out of memory");
     item->func = func;
     item->data = data;
     INIT_LIST_HEAD(&item->node);
 
+    // 加入工作队列
     work_enqueue(item);
 
-    // 唤醒一个 worker
-    struct task_struct *worker = worker_dequeue();
-    if (worker) {
-        task_wakeup(worker);
+    spin_lock(&worker_pool.lock);
+    worker_pool.pending_work++;
+    int pending = worker_pool.pending_work;
+    int active = worker_pool.active_workers;
+    int idle = worker_pool.idle_workers;
+    spin_unlock(&worker_pool.lock);
+
+    // 计算期望活跃 worker 数量
+    int expected = worker_calc_expected(pending);
+    if (expected < 0) {
+        // 不应该发生
+        return;
+    }
+
+    int need = expected - active;
+    if (need > idle) need = idle;
+    if (need <= 0) return;
+
+    for (int i = 0; i < need; i++) {
+        waitqueue_wake_up(&worker_pool.waitq);
     }
 }
 
