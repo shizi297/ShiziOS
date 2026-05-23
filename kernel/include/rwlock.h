@@ -39,7 +39,7 @@ static inline void rwlock_read_unlock(rwlock_t *rw) {
 // 获取写锁
 static inline void rwlock_write_lock(rwlock_t *rw) {
     mutex_lock(&rw->write_mutex);
-    waitqueue_event(rw->write_wait, atomic_load(&rw->readers) == 0);
+    waitqueue_event(&rw->write_wait, atomic_load(&rw->readers) == 0);
 }
 
 // 释放写锁

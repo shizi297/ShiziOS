@@ -36,12 +36,12 @@ static inline void waitqueue_head_init(wait_queue_head_t *wq) {
  * 
  * @param wq 目标等待队列
  * @param entry 待插入的队列项
+ * 
+ * 假设调用者已经有 wp->lock 锁
  */
 static inline void waitqueue_add(wait_queue_head_t *wq, wait_queue_entry_t *entry) {
     entry->task = smp_get_task_current();
-    spin_lock(&wq->lock);
     list_add_tail(&entry->node, &wq->head);
-    spin_unlock(&wq->lock);
 }
 
 /**
@@ -49,11 +49,11 @@ static inline void waitqueue_add(wait_queue_head_t *wq, wait_queue_entry_t *entr
  * 
  * @param wq 目标等待队列
  * @param entry 待移除的队列项
+ * 
+ * 假设调用者已经有 wp->lock 锁
  */
 static inline void waitqueue_del(wait_queue_head_t *wq, wait_queue_entry_t *entry) {
-    spin_lock(&wq->lock);
     list_del_init(&entry->node);
-    spin_unlock(&wq->lock);
 }
 
 /**
@@ -76,23 +76,6 @@ static inline void waitqueue_wake_up(wait_queue_head_t *wq) {
 }
 
 /**
- * 让当前任务进入不可中断睡眠并让出 CPU
- * 
- * @param wq 等待队列
- * @param entry 对应的等待队列项
- *
- * 调用此函数前必须已经将任务加入等待队列
- * 唤醒后返回
- * 但任务需要自行从等待队列中移除
- */
-static inline void waitqueue_sleep(wait_queue_head_t *wq, wait_queue_entry_t *entry) {
-    (void)wq;
-    (void)entry;
-    smp_set_need_sched();
-    task_sched();
-}
-
-/**
  * 将当前任务加入等待队列并进入睡眠
  * 
  * @param wq 等待队列
@@ -101,15 +84,14 @@ static inline void waitqueue_sleep(wait_queue_head_t *wq, wait_queue_entry_t *en
 #define waitqueue_event(wq, condition) \
 do { \
     wait_queue_entry_t __entry; \
-    waitqueue_add(&(wq), &__entry); \
-    if (condition) { \
-        waitqueue_del(&(wq), &__entry); \
-        break; \
+    spin_lock(&(wq)->lock); \
+    waitqueue_add((wq), &__entry); \
+    while (!(condition)) { \
+        spin_unlock(&(wq)->lock); \
+        task_sleep(true); \
+        task_sched(); \
+        spin_lock(&(wq)->lock); \
     } \
-    for (;;) { \
-        waitqueue_sleep(&(wq), &__entry); \
-        if (condition) \
-            break; \
-    } \
-    waitqueue_del(&(wq), &__entry); \
+    waitqueue_del((wq), &__entry); \
+    spin_unlock(&(wq)->lock); \
 } while (0)
