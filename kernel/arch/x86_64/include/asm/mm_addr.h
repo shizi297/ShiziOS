@@ -13,7 +13,7 @@
 #define LINEAR_MAP_SIZE     (8ULL << 40)    
 
 // mmio地址
-#define MMIO_MAP    BOOTBOOT_MMIO
+#define MMIO_MAP  (0xFFFF000000000000ULL | ((uint64_t)384 << 39))
 
 /* 线性映射地址转物理地址 */
 #define LINEAR_TO_PHYS(va) ((uintptr_t)(va) - LINEAR_MAP_START)
