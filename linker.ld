@@ -21,6 +21,9 @@ SECTIONS
 
     .rodata : {
         *(.rodata .rodata.*)
+    } :all
+
+    .initcall : ALIGN(8) {
         __start_initcall_fs_0 = .;
         KEEP(*(.initcall_fs_0))
         __stop_initcall_fs_0 = .;
