@@ -1,7 +1,7 @@
 # 内核主构建文件
 
 # 内核专用编译选项
-set(KERNEL_ARCH_FLAGS -mno-red-zone -mcmodel=kernel -mgeneral-regs-only -fno-pic)
+set(KERNEL_ARCH_FLAGS -mno-red-zone -mcmodel=kernel -mgeneral-regs-only -fno-pic -ffunction-sections -fdata-sections)
 add_compile_options(${BASE_FLAGS} ${EXTRA_FLAGS} ${KERNEL_ARCH_FLAGS})
 add_compile_definitions(KERNEL)
 
@@ -16,7 +16,6 @@ include_directories(
 
 # 添加模块子目录
 add_subdirectory(arch/x86_64)      # x86_64架构模块
-add_subdirectory(arch/x86_64/mm)   # x86_64架构特定内存管理
 add_subdirectory(drivers)          # 通用驱动模块
 add_subdirectory(mm)               # 通用内存管理模块
 add_subdirectory(lib)              # 库模块
@@ -35,23 +34,16 @@ endif()
 # 链接生成内核
 set(EMPTY_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/empty.c)
 file(WRITE ${EMPTY_SOURCE} "// Empty source file for linking libraries\n")
-
 add_executable(kernel.elf ${EMPTY_SOURCE})
 
 # 设置内核链接选项
-target_link_options(kernel.elf PRIVATE -nostdlib -no-pie -T ${CMAKE_SOURCE_DIR}/linker.ld -Wl,-z,start-stop-visibility=default)
+target_link_options(kernel.elf PRIVATE -nostdlib -no-pie -T ${CMAKE_SOURCE_DIR}/linker.ld -Wl,--gc-sections -Wl,-z,start-stop-visibility=default)
 
-# 需要强制完整链接的库列表（防止内部 INITCALL 段被丢弃）
-set(WHOLE_ARCHIVE_LIBS kernel_fs)
-if(TEST)
-    list(APPEND WHOLE_ARCHIVE_LIBS kernel_test)
-endif()
-
+# 链接库到内核
 target_link_libraries(kernel.elf
-    "-Wl,--start-group"
+    -Wl,--whole-archive
     kernel_init
     x86_64_arch
-    x86_64_mm
     kernel_drivers
     kernel_mm
     kernel_lib
@@ -59,9 +51,8 @@ target_link_libraries(kernel.elf
     kernel_task
     kernel_ipc
     kernel_sync
-    "-Wl,--whole-archive"
-    ${WHOLE_ARCHIVE_LIBS}
-    "-Wl,--no-whole-archive"
+    kernel_fs
+    $<$<BOOL:${TEST}>:kernel_test>
+    -Wl,--no-whole-archive
     libc
-    "-Wl,--end-group"
 )
