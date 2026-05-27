@@ -1,6 +1,6 @@
 # kernel/fs 文件系统模块
 
-# 创建空的主文件系统库
+# 创建主文件系统静态库
 add_library(kernel_fs STATIC)
 
 # 添加当前目录源文件

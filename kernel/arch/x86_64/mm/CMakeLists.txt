@@ -4,8 +4,8 @@
 file(GLOB_RECURSE X86_MM_SOURCES "*.c")
 file(GLOB_RECURSE X86_MM_ASM_SOURCES "*.asm" "*.S" "*.s")
 
-# 创建架构特定内存管理模块静态库
-add_library(x86_64_mm STATIC 
+# 创建架构特定内存管理模块 OBJECT 库
+add_library(x86_64_mm OBJECT 
     ${X86_MM_SOURCES}
     ${X86_MM_ASM_SOURCES}
 )
@@ -16,3 +16,5 @@ if(X86_MM_ASM_SOURCES)
 endif()
 
 target_include_directories(x86_64_mm PRIVATE .)
+
+target_sources(x86_64_arch PRIVATE $<TARGET_OBJECTS:x86_64_mm>)

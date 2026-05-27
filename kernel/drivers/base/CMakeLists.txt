@@ -2,4 +2,5 @@
 
 file(GLOB_RECURSE BASE_SOURCES "*.c")
 add_library(base_objects OBJECT ${BASE_SOURCES})
-target_sources(kernel_drivers PRIVATE $<TARGET_OBJECTS:base_objects>)
+
+set(ALL_DRIVER_OBJECTS ${ALL_DRIVER_OBJECTS} $<TARGET_OBJECTS:base_objects> CACHE INTERNAL "" FORCE)
