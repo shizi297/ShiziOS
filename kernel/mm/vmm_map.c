@@ -11,7 +11,7 @@
 #include <mm/vmm_mmu.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <klibc.h>
  
 #define VMM_PANIC(fmt, ...) \
@@ -125,7 +125,11 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
 
     // 设置下一次映射的虚拟起始地址
     mmio_addr += page_count * PAGE_SIZE;
+
+    // 每次映射的地址都不同且没有条目，不需要刷新tlb    
+
     spin_unlock(&mmio_map_lock);
+
     return current_mmio;
 
     fail:

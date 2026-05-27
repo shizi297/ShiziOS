@@ -7,7 +7,7 @@
 #include <asm/smp.h>
 #include <asm/processor.h>
 #include <kernel.h>
-#include <asm/serial.h>  
+#include <kio.h>  
 #include <time.h>
 #include <drivers.h>
 #include <config.h>

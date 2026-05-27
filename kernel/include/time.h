@@ -7,10 +7,10 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <asm/serial.h>
+#include <kio.h>
 
 #define TIME_PRINT(str) \
-    serial_puts("[TIME]" str "\n")
+    printk("[TIME]" str "\n")
 
 typedef enum {
     CLOCKEVENT_MODE_SHUTDOWN,   // 关闭定时器

@@ -4,7 +4,7 @@
  */
  
 #include <bootboot.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <mm/boot_allot.h>
 #include <mm/linear_map.h>
 

@@ -6,7 +6,7 @@
 #include <bootboot.h>
 #include <asm/mm_addr.h>
 #include <heap.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <time.h>
 #include <spinlock.h>
 #include <timecycle.h> 

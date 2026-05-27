@@ -4,7 +4,7 @@
  */
 
 #include <fault.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <processor.h>
 
 static void print_regs(const struct pt_regs *regs) {

@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <uacpi/uacpi.h>
 #include <uacpi/acpi.h>
 #include <uacpi/tables.h>

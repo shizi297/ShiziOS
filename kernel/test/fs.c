@@ -4,7 +4,7 @@
  */
 
 #include <stdbool.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <heap.h>
 #include <fs/vfs.h>
 #include <initcall.h>

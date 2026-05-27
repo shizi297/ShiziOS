@@ -18,7 +18,7 @@
 #include <bitmap.h>
 #include <libtree.h>
 #include <dynarr.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <stdatomic.h>
 #include <initcall.h>
 #include <wait.h>

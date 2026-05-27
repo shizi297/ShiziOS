@@ -11,6 +11,7 @@
 #include <heap.h>
 #include <vfs.h>
 #include <shizi/types.h>
+#include <spinlock.h>
 
 // 用于线程id与线程组id
 typedef int task_id; 

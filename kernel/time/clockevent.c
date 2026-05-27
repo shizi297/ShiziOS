@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <klibc.h>
 #include <bootboot.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <asm/smp.h>
 #include <list.h>
 #include <heap.h>

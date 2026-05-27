@@ -4,7 +4,7 @@
  */
  
 #include <bootboot.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <mm/linear_map.h>
 
 static temp_linear_map_t temp_map = {0};

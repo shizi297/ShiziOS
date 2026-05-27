@@ -5,7 +5,7 @@
 
 #include <fault.h>
 #include <processor.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <apic.h>
 #include <time.h>
 #include <task.h>

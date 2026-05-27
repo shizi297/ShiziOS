@@ -10,6 +10,7 @@
 #include <processor.h>
 #include <apic.h>
 #include <klibc.h>
+#include <kio.h>
 
 #define SERIAL_FILE_INIT
 #include <asm/serial.h>

@@ -11,7 +11,7 @@
 #include <list.h>
 #include <bootboot.h>
 #include <heap.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <asm/smp.h>
 
 #define CLOCKSOURCE_INFO(name, hz) \

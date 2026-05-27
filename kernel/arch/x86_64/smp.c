@@ -9,7 +9,7 @@
 #include <heap.h>
 #include <stdint.h>
 #include <config.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <acpi.h>
 #include <pit.h>
 #include <ioapic.h>
