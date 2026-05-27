@@ -27,6 +27,9 @@ typedef int64_t blkcnt_t;
 // 块大小
 typedef int64_t blksize_t;
 
+struct inode;
+struct file;
+
 // 文件模式类型
 typedef enum mode_t : unsigned int {
     // 文件类型
@@ -134,6 +137,15 @@ struct statfs {
 struct path {
     struct vfsmount *mnt;
     struct dentry *dentry;
+};
+
+// 文件操作表
+struct file_operations {
+    int (*open)(struct inode *inode, struct file *file); // 打开文件
+    int (*release)(struct inode *inode, struct file *file);  // 关闭文件
+    ssize_t (*read)(struct file *file, char *buf, size_t count, off_t *pos);   // 读取文件数据
+    ssize_t (*write)(struct file *file, const char *buf, size_t count, off_t *pos);    // 写入文件数据
+    off_t (*llseek)(struct file *file, off_t offset, seek_whence_t whence);   // 调整文件偏移
 };
 
 /**

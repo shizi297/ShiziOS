@@ -208,15 +208,6 @@ struct inode_operations {
     int (*mknod)(struct inode *dir, struct dentry *dentry, mode_t mode, dev_t dev); // 创建设备节点
 };
 
-// 文件操作表
-struct file_operations {
-    int (*open)(struct inode *inode, struct file *file); // 打开文件
-    int (*release)(struct inode *inode, struct file *file);  // 关闭文件
-    ssize_t (*read)(struct file *file, char *buf, size_t count, off_t *pos);   // 读取文件数据
-    ssize_t (*write)(struct file *file, const char *buf, size_t count, off_t *pos);    // 写入文件数据
-    off_t (*llseek)(struct file *file, off_t offset, seek_whence_t whence);   // 调整文件偏移
-};
-
 // 目录项操作表
 struct dentry_operations {
     int (*compare)(const struct dentry *dentry, uint32_t len, const char *str);    // 比较目录项名称

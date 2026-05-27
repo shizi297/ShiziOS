@@ -4,7 +4,7 @@
  */
 
 #include <stdbool.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <heap.h>
 #include <fs/vfs.h>
 #include <initcall.h>
@@ -24,6 +24,9 @@
 
 #define VFS_WARN(fmt, ...) \
     printk("[VFS] WARNING : " fmt, ##__VA_ARGS__)
+
+#define VFS_INFO_PRINT(name) \
+    VFS_PRINT("register filesystem : [\"name\" = \"%s\"]\n", name)
 
 // 文件系统锁链表头，用于管理已注册的文件系统
 static struct vfs_lock_list fs_list_head = {0};
@@ -1220,6 +1223,7 @@ int vfs_register_filesystem(struct file_system_type *fs) {
     }
 
     list_add_tail(&fs->list, &fs_list_head.list);
+    VFS_INFO_PRINT(fs->name);
 
 out:
     spin_unlock_irqrestore(&fs_list_head.lock, flags);
