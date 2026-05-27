@@ -12,7 +12,7 @@
 #define ZONE_DMA32   1    
 #define ZONE_NORMAL  2    
 
-#define MAX_ORDER 11
+#define MAX_ORDER 16
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
 
