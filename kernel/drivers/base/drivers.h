@@ -10,7 +10,7 @@
 #include <spinlock.h>
 #include <list.h>
 #include <shizi/types.h>
-#include <drivers/base/drivers.h>
+#include <drivers.h>
 
 // 资源类型
 enum resource_flags {
@@ -18,6 +18,7 @@ enum resource_flags {
     IORESOURCE_IO  = 1ULL << 1,   // I/O 端口
     IORESOURCE_IRQ = 1ULL << 2,   // 中断号
     IORESOURCE_DMA = 1ULL << 3,   // DMA 通道
+    IORESOURCE_PREFETCHABLE = 1ULL << 4,    // 可预取
 };
 
 // 用于设备资源描述
@@ -38,8 +39,8 @@ struct device {
     struct resource *res;
     int num_res;    // 数组元素数量
 
-    // 总线私有资源
-    void *priv; 
+    // 驱动私有资源
+    void *driver_data; 
 
     /*
      * 设备号
@@ -112,8 +113,11 @@ struct bus {
 
     // 用于将总线挂入根节点的链表节点
     struct list_head node;
+    
+   // 总线私有数据
+   void *priv;
 
-    // 释放总线私有数据
+    // 释放设备的驱动私有数据
     void (*free_device)(struct device *dev);
 };
 

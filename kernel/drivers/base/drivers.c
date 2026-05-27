@@ -6,12 +6,11 @@
 #include <stdint.h>
 #include <drivers.h>
 #include <stdatomic.h>
-#include <asm/serial.h>
+#include <kio.h>
 #include <errno.h>
 #include <bitmap.h>
 #include <dynarr.h>
 #include <spinlock.h>
-#include <asm/serial.h>
 #include <klibc.h>
 #include <heap.h>
 #include <initcall.h>
@@ -23,6 +22,16 @@
 
 #define DRIVERS_WARN(fmt, ...) \
     printk("[DRIVERS] WARN: " fmt, ##__VA_ARGS__)
+
+#define BUS_INFO_PRINT(name) \
+    DRIVERS_PRINT("register bus : [\"name\" = \"%s\"]\n", name)
+
+#define DRIVER_INFO_PRINT(name, bus) \
+    DRIVERS_PRINT("register driver : [\"name\" = \"%s\", \"bus\" = \"%s\"]\n", name, bus)
+
+#define DEVICE_INFO_PRINT(_name, _bus, _parent) \
+    DRIVERS_PRINT("add device : [\"name\" = \"%s\", \"bus\" = \"%s\", \"parent\" = \"%s\"]\n", \
+                  _name, _bus, (_parent) ? (_parent)->name : "null")
 
 // 次设备号分配的最大值
 #define DEVT_BIT_WIDTH 20
@@ -473,6 +482,8 @@ bool drivers_add_bus(struct bus *bus) {
     list_add_tail(&bus->node, &bus_list.head);
     spin_unlock(&bus_list.lock);
 
+    BUS_INFO_PRINT(bus->name);
+
     return true;
 }
 
@@ -519,8 +530,18 @@ bool drivers_add_device(struct device *dev) {
             // 创建 probe 节点
             struct probe_process_node *node = kheap_alloc(sizeof(*node));
             if (!node) {
+                // 回滚：从总线链表移除设备
+                list_del_init(&dev->node);
                 spin_unlock(&bus->lock);
-                return false;   // 内存分配失败，无法处理匹配
+
+                // 从父设备链表移除设备
+                if (dev->parent) {
+                    spin_lock(&device_tree.lock);
+                    list_del_init(&dev->sibling);
+                    spin_unlock(&device_tree.lock);
+                }
+
+                return false;
             }
 
             node->dev = dev;
@@ -548,6 +569,8 @@ bool drivers_add_device(struct device *dev) {
         spin_unlock(&devices_unmatched_list.lock);
     }
 
+    DEVICE_INFO_PRINT(dev->name, dev->bus->name, dev->parent);
+
     return true;
 }
 
@@ -556,13 +579,20 @@ bool drivers_remove_device(struct device *dev) {
     if (!dev)
         return false;
 
-    // 断开设备与树和总线的连接，防止访问
+    // 断开设备与父设备的连接（从父设备 children 链表摘除）
     spin_lock(&device_tree.lock);
+    
     if (dev->parent)
-        list_del_init(&dev->sibling);   // 从父设备的 children 链表摘除
+        list_del_init(&dev->sibling);
 
-    list_del_init(&dev->node);  // 从 bus->devices 链表摘除
     spin_unlock(&device_tree.lock);
+
+    // 断开设备与总线的连接（从 bus->devices 链表摘除）
+    if (dev->bus) {
+        spin_lock(&dev->bus->lock);
+        list_del_init(&dev->node);
+        spin_unlock(&dev->bus->lock);
+    }
 
     // 后序遍历子树并释放
     struct device *curr = dev;
@@ -582,7 +612,15 @@ bool drivers_remove_device(struct device *dev) {
         if (curr->driver) {
             if (curr->driver->remove)
                 curr->driver->remove(curr);
+                
             curr->driver = NULL;    // 表示当前设备节点无用
+        }
+
+        // 从总线链表中摘除当前节点（如果尚未摘除）
+        if (curr->bus) {
+            spin_lock(&curr->bus->lock);
+            list_del_init(&curr->node);
+            spin_unlock(&curr->bus->lock);
         }
 
         // 释放设备自身的引用
@@ -631,11 +669,12 @@ bool drivers_add_driver(struct driver *drv) {
             // 创建 probe 节点
             struct probe_process_node *node = kheap_alloc(sizeof(*node));
             if (!node) {
-                // 内存分配失败，将设备放回未匹配链表
+                // 内存分配失败，将设备放回未匹配链表，并继续尝试其他设备
                 spin_lock(&devices_unmatched_list.lock);
                 list_add_tail(&dev->unmatched_node, &devices_unmatched_list.head);
-                spin_unlock(&devices_unmatched_list.lock);
-                return false;   // 内存分配失败，无法处理匹配
+                
+                // 不释放锁，继续遍历
+                continue;
             }
 
             node->dev = dev;
@@ -656,6 +695,8 @@ bool drivers_add_driver(struct driver *drv) {
     }
 
     spin_unlock(&devices_unmatched_list.lock);
+
+    DRIVER_INFO_PRINT(drv->name, drv->bus->name);
 
     return true;
 }
