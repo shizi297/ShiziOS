@@ -11,20 +11,22 @@
 #include <minmax.h>
 #include <bootboot.h>
 #include <apic.h>
+#include <asm/smp.h>
+#include <shizi/types.h>
 
 // 用于构建 msi 消息
-struct _msi_msg {
+_arch struct _msi_msg {
     uint64_t addr;
     uint32_t data;
 } __attribute__((packed));
 
 // 构建 msi 的 addr 字段
-static inline uint64_t _msi_create_addr(uint32_t apic_id) {
+_arch static inline uint64_t _msi_create_addr(uint32_t apic_id) {
     return apic_get_base() | ((uint64_t)apic_id << 12); 
 }
 
 // 构建 msi 的 data 字段
-static inline uint32_t _msi_create_data(uint32_t vector) {
+_arch static inline uint32_t _msi_create_data(uint32_t vector) {
     return 
         (vector & 0xFF) |   // 向量号
         (0 << 8) |  // 传送模式：固定
@@ -53,7 +55,7 @@ static inline bool msi_create_msg(uint32_t cpuid, uint32_t vector, struct _msi_m
         return false; // 向量号必须在0-255范围内
     
     // 获取目标 CPU 的 APIC ID
-    uint32_t apicid = smp_get_apic_id(cpuid);
+    uint32_t apicid = smp_get_apicid(cpuid);
 
     if (apicid >= msi_max_cpu()) 
         return false; // 超出支持的CPU数量
