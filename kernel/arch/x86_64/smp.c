@@ -20,7 +20,7 @@
 #include <time.h>
 #include <drivers.h>
 #include <stdatomic.h>
-#include <apic.h>
+#include <shizi/types.h>
 
 #define SMP_PRINT(fmt, ...) \
     printk("[SMP] " fmt, ##__VA_ARGS__)
@@ -48,11 +48,6 @@ struct logicalid_to_apicid_struct {
     uint16_t count;
     uint16_t logicalid_to_apicid_arr[];
 };
-
-// 获取逻辑cpuid的apicid
-static inline uint32_t smp_get_apicid(uint64_t logical_id) {
-    return logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id];
-}
 
 /*
  * 初始化gdt
@@ -130,6 +125,11 @@ static inline void tss_init(
     }
 }
 
+// 获取逻辑cpuid的apicid
+_arch uint32_t smp_get_apicid(uint64_t logical_id) {
+    return logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id];
+}
+
 /*
  * 多核数据结构初始化
  * 负责给所有核心cpu提供基础数据结构
@@ -159,6 +159,7 @@ void smp_data_init(
         
         if (!gdt_ptr || !idt_ptr || !tss_ptr) SMP_PANIC("memory allocation failed\n");
     }
+
     // 给每个cpu分配内核栈
     void *kernel_stack = kheap_alloc(KERNEL_START_SIZE * max_cpu_count);
     

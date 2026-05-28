@@ -12,10 +12,11 @@
 #include <time.h>
 #include <bootboot.h>
 #include <list.h>
+#include <shizi/types.h>
 
 struct sched_class;
 
-typedef struct {
+_arch typedef struct {
     uint64_t (*timestamp)(void);    // 时间戳获取
     task_struct *current;
 
@@ -64,6 +65,9 @@ enum per_cpu_offset {
     PER_CPU_SCHED_TIMER_OFFSET  = offsetof(per_cpu, sched_timer),
     PER_CPU_NEED_SCHED_OFFSET   = offsetof(per_cpu, need_sched),
 };
+
+// 获取逻辑cpuid的apicid
+_arch uint32_t smp_get_apicid(uint64_t logical_id);
 
 /*
  * 多核数据结构初始化
