@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <heap.h>
-#include <shizi/uint4_512t.h>
 #include <stddef.h>
 #include <mm/vmm_as.h>
 #include <kio.h>
