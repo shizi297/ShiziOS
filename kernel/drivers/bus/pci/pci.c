@@ -9,6 +9,8 @@
 #include <initcall.h>
 #include <drivers/base/drivers.h>
 #include <klibc.h>
+#include <asm/msi.h>
+#include <drivers/pci.h>
 
 // 每个总线 8MB (256 devices * 8 functions * 4KB)
 #define PCI_ECAM_BUS_SIZE  (8ULL * 1024 * 1024)   
@@ -836,7 +838,7 @@ static void pci_parse_bars(
  * 
  * @return 找到时返回 Capability 在配置空间中的偏移（字节），未找到返回 0
  */
-static uint8_t pci_find_capability(
+static uint8_t _pci_find_capability(
     struct pci_bus_priv *priv,
     struct pci_dev_priv *pdev,
     uint8_t cap_id
@@ -959,7 +961,7 @@ static void pci_parse_msix_capability(
     uint8_t cap_ptr;
 
     // 查找 MSI-X Capability
-    cap_ptr = pci_find_capability(priv, pdev, PCI_CAP_ID_MSIX);
+    cap_ptr = _pci_find_capability(priv, pdev, PCI_CAP_ID_MSIX);
     if (cap_ptr == 0)
         return;
 
@@ -1214,7 +1216,7 @@ static void pci_free_device(struct device *dev) {
     if (!pdev)
         return;
 
-    // MSI-X 表映射通过 vheap_map_mmio 分配，无需单独释放
+    vheap_unmap_mmio(dev->driver_data);
     kheap_free(pdev);
     dev->driver_data = NULL;
 }
@@ -1287,3 +1289,196 @@ static struct bus pci_bus_type = {
 };
 
 INITCALL(drivers, 0, pci_init);
+
+/**
+ * 获取 PCI 设备的厂商 ID
+ * 
+ * @param dev pci设备
+ */
+uint16_t pci_get_vendor_id(struct device *dev) {
+    struct pci_dev_priv *pdev;
+
+    if (!dev || !dev->driver_data)
+        return 0xFFFF;
+
+    pdev = dev->driver_data;
+    return pdev->vendor_id;
+}
+
+/**
+ * 获取 PCI 设备的设备 ID
+ * 
+ * @param dev pci设备
+ */
+uint16_t pci_get_device_id(struct device *dev) {
+    struct pci_dev_priv *pdev;
+
+    if (!dev || !dev->driver_data)
+        return 0xFFFF;
+
+    pdev = dev->driver_data;
+    return pdev->device_id;
+}
+
+/*
+ * 查找指定 Capability ID 在 PCI 配置空间中的偏移
+ *
+ * @param dev PCI 设备结构体
+ * @param cap_id 要查找的 Capability ID
+ *
+ * @return 找到时返回 Capability 在配置空间中的偏移（字节），未找到返回 0
+ */
+uint8_t pci_find_capability(struct device *dev, uint8_t cap_id) {
+    struct pci_dev_priv *pdev;
+    struct pci_bus_priv *priv;
+
+    if (!dev || !dev->driver_data)
+        return 0;
+
+    pdev = dev->driver_data;
+    if (!dev->bus || !dev->bus->priv)
+        return 0;
+
+    if (cap_id == PCI_CAP_ID_MSIX) {
+        return pdev->msix_cap_offset;
+    }
+
+    priv = dev->bus->priv;
+    return _pci_find_capability(priv, pdev, cap_id);
+}
+
+/*
+ * 启用 MSI‑X 中断
+ *
+ * @param dev PCI 设备
+ * @param vectors 要启用的中断向量数
+ * @param logical_id 目标 CPU 的逻辑 ID
+ * @param vector_start 起始中断向量号
+ */
+int pci_msix_enable(
+    struct device *dev, 
+    int vectors, 
+    uint32_t logical_id, 
+    uint8_t vector_start
+) {
+    struct pci_dev_priv *pdev;
+    struct pci_bus_priv *priv;
+    struct resource *bar;
+    uint64_t table_phys;
+    void *table_virt;
+    int i, max_vectors;
+    uint32_t ctrl;
+    struct _msi_msg msg;
+    uintptr_t entry_addr;
+
+    if (!dev || !dev->driver_data)
+        return -ENODEV;
+
+    pdev = dev->driver_data;
+    priv = dev->bus->priv;
+
+    if (!pdev->msix_cap_offset)
+        return -ENODEV;
+
+    // 检查请求的向量数是否超过表容量
+    max_vectors = (pdev->msix_control & PCI_MSIX_CTRL_TABLE_SIZE_MASK) + 1;
+    if (vectors <= 0 || vectors > max_vectors)
+        return -EINVAL;
+
+    // 获取 MSI‑X 表所在的 BAR
+    if (pdev->msix_table_bir >= PCI_MAX_BARS)
+        return -EINVAL;
+
+    bar = &dev->res[pdev->msix_table_bir];
+    if (bar->start == 0 || bar->end < bar->start)
+        return -ENXIO;
+
+    // 计算 MSI‑X 表物理地址
+    table_phys = bar->start + pdev->msix_table_offset;
+    if (pdev->msix_table_size == 0)
+        return -ENXIO;
+
+    // 映射 MSI‑X 表到内核虚拟地址
+    table_virt = vheap_map_mmio(table_phys, pdev->msix_table_size);
+    if (!table_virt)
+        return -ENOMEM;
+
+    pdev->msix_table_virt = table_virt;
+
+    // 对每个向量配置 MSI‑X 表项
+    for (i = 0; i < vectors; i++) {
+        if (!msi_create_msg(logical_id, vector_start + i, &msg)) {
+            pci_msix_disable(dev);
+            return -EIO;
+        }
+
+        entry_addr = (uintptr_t)table_virt + i * 16;
+        *(volatile uint64_t *)entry_addr = msg.addr;
+        *(volatile uint32_t *)(entry_addr + 8) = msg.data;
+    }
+
+    // 读取 Message Control 寄存器，设置 Enable 位
+    if (!pci_ecam_read(
+            priv,
+            pdev->segment, pdev->bus,
+            pdev->dev, pdev->func,
+            pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, &ctrl
+        )
+    ) {
+        pci_msix_disable(dev);
+        return -EIO;
+    }
+
+    ctrl |= PCI_MSIX_CTRL_ENABLE_BIT;
+    pci_ecam_write(
+        priv,
+        pdev->segment, pdev->bus,
+        pdev->dev, pdev->func,
+        pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, ctrl
+    );
+
+    return 0;
+}
+
+/*
+ * 禁用 MSI‑X 中断
+ *
+ * @param dev PCI 设备
+ */
+void pci_msix_disable(struct device *dev) {
+    struct pci_dev_priv *pdev;
+    struct pci_bus_priv *priv;
+    uint32_t ctrl;
+
+    if (!dev || !dev->driver_data)
+        return;
+
+    pdev = dev->driver_data;
+    priv = dev->bus->priv;
+
+    if (!pdev->msix_cap_offset)
+        return;
+
+    // 清除 Message Control 的 Enable 位
+    if (pci_ecam_read(
+            priv,
+            pdev->segment, pdev->bus,
+            pdev->dev, pdev->func,
+            pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, &ctrl
+        )
+    ) {
+        ctrl &= ~PCI_MSIX_CTRL_ENABLE_BIT;
+        pci_ecam_write(
+            priv,
+            pdev->segment, pdev->bus,
+            pdev->dev, pdev->func,
+            pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, ctrl
+        );
+    }
+
+    // 释放 MSI‑X 表映射
+    if (pdev->msix_table_virt) {
+        vheap_unmap_mmio(pdev->msix_table_virt);
+        pdev->msix_table_virt = NULL;
+    }
+}
