@@ -289,6 +289,19 @@ void *vheap_map_mmio(uint64_t phy_addr, uint64_t len) {
     return (void *)vmm_map_mmio(phy_addr, page_count);
 }
 
+/**
+ * 释放通过 MMIO 区域（调用者需要自己管理物理内存生命周期）
+ * 
+ * @param virt_addr MMIO 的虚拟地址
+ */
+void vheap_unmap_mmio(void *virt_addr) {
+    (void)virt_addr;
+
+    // TODO
+
+    return;
+}
+
 /*
  * 创建一个新的进程地址空间
  * 自动分配页全局目录
