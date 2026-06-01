@@ -4,6 +4,7 @@
  */
 
 #include <asm/smp.h>
+#include <asm/platform_dev.h>
 #include <processor.h>
 #include <bootboot.h>
 #include <heap.h>
@@ -17,6 +18,7 @@
 #include <apic.h>
 #include <spinlock.h>
 #include <task.h>
+#include <desc.h>
 #include <time.h>
 #include <drivers.h>
 #include <stdatomic.h>
@@ -191,23 +193,42 @@ void smp_data_init(
  */
 __attribute__((noreturn))
 void smp_init(uint32_t logical_id, uint32_t apic_id) {
-    // 保存参数到寄存器中，让这些变量在切换栈的时候还能继续使用
-    register uint32_t reg_logical_id asm("rbx") = logical_id;
-    register uint32_t reg_apic_id asm("r12") = apic_id;
+    // 获取当前cpu的栈
+    uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
 
-    // 设置当前cpu的栈
-    uint64_t new_stack_top = tss_ptr[reg_logical_id].rsp0;
+    // 在新栈上预留空间并写入参数
+    new_stack_top -= 16;
+    __asm__ volatile(
+        "mov %1, 0(%0)\n\t"
+        "mov %2, 4(%0)"
+        : : "r"(new_stack_top), "r"(logical_id), "r"(apic_id)
+        : "memory"
+    );
 
     // 切换栈
     processor_set_stack(new_stack_top);
 
+    // 从当前栈读取参数
+    uint32_t new_logical_id, new_apic_id;
+    __asm__ volatile(
+        "mov 0(%%rsp), %0\n\t"
+        "mov 4(%%rsp), %1"
+        : "=r"(new_logical_id), "=r"(new_apic_id)
+        :
+        : "memory"
+    );
+
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
-    logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[reg_logical_id] = reg_apic_id;
+    logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[new_logical_id] = new_apic_id;
 
-    // 计算当前CPU在数组中的偏移
-    uint64_t gdt_offset = reg_logical_id * GDT_ENTRY_COUNT;
-    uint64_t idt_offset = reg_logical_id * IDT_ENTRY_COUNT;
+    // 计算索引
+    uint64_t gdt_index = new_logical_id * GDT_ENTRY_COUNT;
+    uint64_t idt_index = new_logical_id * IDT_ENTRY_COUNT;
+
+    // 强制读取指针值
+    uintptr_t gdt_base = (uintptr_t)gdt_ptr;
+    uintptr_t idt_base = (uintptr_t)idt_ptr;
 
     // 加载GDT
     struct {
@@ -215,27 +236,32 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         uint64_t base;
     } __attribute__((packed)) gdtr = {
         .limit = GDT_ENTRY_COUNT * sizeof(gdte) - 1,
-        .base = (uint64_t)&gdt_ptr[gdt_offset]
+        .base = gdt_base + gdt_index * sizeof(gdte)
     };
     __asm__ volatile("lgdt %0" : : "m"(gdtr));
 
-    // 刷新CS
+    // 刷新数据段寄存器为内核数据段选择子
+    __asm__ volatile(
+        "movw %0, %%ax\n\t"
+        "movw %%ax, %%ds\n\t"
+        "movw %%ax, %%es\n\t"
+        "movw %%ax, %%ss\n\t"
+        "movw %%ax, %%fs\n\t"
+        "movw %%ax, %%gs\n\t"
+        :
+        : "i"(GDT_KERNEL_DATA_SELECTOR)  
+        : "ax", "memory"
+    );
+
+    // 刷新CS为内核代码段选择子
     __asm__ volatile(
         "pushq %0\n\t"
         "pushq $1f\n\t"
         "lretq\n"
         "1:\n\t"
-        : : "r"((uint64_t)GDT_KERNEL_CODE_SELECTOR)
-    );
-
-    // 刷新数据段寄存器
-    __asm__ volatile(
-        "mov %0, %%ds\n\t"
-        "mov %0, %%es\n\t"
-        "mov %0, %%ss\n\t"
-        "mov %0, %%fs\n\t"
-        "mov %0, %%gs\n\t"
-        : : "r"((uint16_t)GDT_KERNEL_DATA_SELECTOR)
+        :
+        : "i"((uint64_t)GDT_KERNEL_CODE_SELECTOR)  
+        : "memory"
     );
 
     // 加载IDT
@@ -244,43 +270,37 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
         uint64_t base;
     } __attribute__((packed)) idtr = {
         .limit = IDT_ENTRY_COUNT * sizeof(struct idt_gate) - 1,
-        .base = (uint64_t)&idt_ptr[idt_offset]
+        .base = idt_base + idt_index * sizeof(struct idt_gate)
     };
     __asm__ volatile("lidt %0" : : "m"(idtr));
 
     // 加载tss
     uint16_t tss_selector = (GDT_TSS_LOW_INDEX * 8);
-    __asm__ volatile("ltr %w0" : : "r"(tss_selector));
+    __asm__ volatile("ltr %w0" : : "r"(tss_selector) : "memory");
 
     // 设置per_cpu的逻辑cpuid
-    per_cpu_ptr[reg_logical_id].logical_id = reg_logical_id;
+    per_cpu_ptr[new_logical_id].logical_id = new_logical_id;
 
     // 初始化canary
-    per_cpu_ptr[reg_logical_id].cancry = 0x28;
+    per_cpu_ptr[new_logical_id].cancry = 0x28;
 
-    INIT_LIST_HEAD(&per_cpu_ptr[reg_logical_id].migration);
+    INIT_LIST_HEAD(&per_cpu_ptr[new_logical_id].migration);
 
     // 设置当前cpu的gs到per_cpu
-    set_gs_base((uint64_t)&per_cpu_ptr[reg_logical_id]);
+    set_gs_base((uint64_t)&per_cpu_ptr[new_logical_id]);
 
     // 开启中断
     irq_on();
 
-    // 定义一个静态自旋锁，保护串口输出
-    static spinlock_t init_print_lock = SPIN_LOCK_INIT;
-
-    spin_lock(&init_print_lock);
     if (!tsc_init()) SMP_PANIC("tsc init failed\n");
     if (!apic_init()) SMP_PANIC("apic init failed\n");
-    spin_unlock(&init_print_lock);
 
     // 如果是bp，执行特定初始化
-    if (reg_logical_id == bootboot->bspid) {
+    if (new_logical_id == bootboot->bspid) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
         if (!vfs_init()) SMP_PANIC("vfs init failed");
-        if (!drivers_init()) SMP_PANIC("drivers init failed");
         if (!task_data_init()) SMP_PANIC("task init failed\n");
 
         // 通知ap继续执行
@@ -299,9 +319,29 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     uint64_t (*ts)(void) = &clocksource_default_read;
     smp_set_timestamp(ts);
 
+    if (!task_init()) SMP_PANIC("task init failed\n");
+
+    static atomic_bool bp_post_init = false;
+
+    // 如果是bp，执行特定初始化
+    if (new_logical_id == bootboot->bspid) {
+        if (!acpi_namespace_load()) SMP_PANIC("acpi namespace load failed\n");
+        if (!acpi_namespace_init()) SMP_PANIC("acpi namespace init failed\n");
+        if (!platform_dev_init()) SMP_PANIC("acpi init failed\n");
+        if (!drivers_init()) SMP_PANIC("drivers init failed");
+
+        // 通知ap继续执行
+        atomic_store_explicit(&bp_post_init, true, memory_order_relaxed);
+    } else {
+        // 等待bp完成初始化
+        while (!atomic_load_explicit(&bp_post_init, memory_order_acquire)) {
+            cpu_pause();  
+        }
+    }
+
     SMP_PRINT("smp init succeed\n");
 
-    task_init();
+    task_run();
 
     SMP_PANIC("system error\n");
 
