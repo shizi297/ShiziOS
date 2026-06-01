@@ -8,6 +8,8 @@
 #include <vfs.h>
 #include <shizi/types.h>
 
+struct device;
+
 // 驱动框架数据初始化
 bool drivers_data_init(void);
 
