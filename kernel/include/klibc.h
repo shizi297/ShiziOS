@@ -29,6 +29,10 @@
 // 判断指针是否为NULL或错误指针
 #define IS_ERR_OR_NULL(ptr) (!(ptr) || IS_ERR(ptr))
 
+#define container_of(ptr, type, member) __extension__ ({ \
+	const __typeof__(((type *)0)->member) *__pmember = (ptr); \
+	(type *)((char *)__pmember - offsetof(type, member)); })
+
 static inline char *strdup(const char *s) {
     size_t l = strlen(s);
     char *d = kheap_alloc(l + 1);
