@@ -12,10 +12,7 @@
 #include <vfs.h>
 #include <shizi/types.h>
 #include <spinlock.h>
-
-// 用于线程id与线程组id
-typedef int task_id; 
-typedef task_id id_t;
+#include <task.h>
 
 typedef void (*sched_func_t)(void);
 

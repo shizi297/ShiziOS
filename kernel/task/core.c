@@ -952,6 +952,12 @@ void task_get_current_ugid(uid_t *uid, gid_t *gid) {
     if (gid) *gid = current->user_id.gid;
 }
 
+// 获取当前任务的线程id
+id_t task_get_current_thread_id(void) {
+    task_struct *curr = smp_get_task_current();
+    return curr->pid;
+}
+
 // 任务管理数据初始化
 bool task_data_init(void) {
     lock_queue_init(&stopped_queue);
@@ -975,17 +981,17 @@ bool task_data_init(void) {
 }
 
 // 任务管理初始化
-void task_init(void) {
+bool task_init(void) {
     task_struct *idle = task_create_idle();
 
-    if (!idle) goto error; 
+    if (!idle) return false;
     smp_set_idle(idle);
 
     if (sched_class_ptr && sched_class_ptr->init) sched_class_ptr->init();
 
     // 为当前CPU分配调度定时器句柄
     struct clockevent_timer *sched_timer = clockevent_timer_alloc();
-    if (!sched_timer) goto error;
+    if (!sched_timer) return false;
     
     // 初始化定时器回调
     clockevent_timer_init_callback(sched_timer, task_clock_event_handle, NULL);
@@ -999,10 +1005,16 @@ void task_init(void) {
 
     TASK_PRINT("task init success\n");
 
+    return true;
+}
+
+// 启动任务调度
+void task_run(void) {
+    TASK_PRINT("Start task scheduling");
+
     task_set_next_timer();
     task_boot_sched();
 
     // 不应该返回，如果返回说明代码错误
-    error:
-        TASK_PANIC("system error\n");
+    TASK_PANIC("system error\n");
 }

@@ -15,6 +15,10 @@ struct task_struct;
 typedef struct per_cpu_sched per_cpu_sched;
 typedef struct task_struct task_struct;
 
+// 用于线程id与线程组id
+typedef int task_id; 
+typedef task_id id_t;
+
 // 任务标志，用于任务创建时指定行为
 typedef enum {
     TASK_NONE       = 0,            // 无特殊标志
@@ -78,8 +82,14 @@ void task_get_current_fs(struct path **root, struct path **pwd);
 // 获取当前任务的gid和uid
 void task_get_current_ugid(uid_t *uid, gid_t *gid);
 
+// 获取当前任务的线程id
+id_t task_get_current_thread_id(void);
+
 // 任务管理数据初始化
 bool task_data_init(void);
 
 // 任务管理初始化
-void task_init(void);
+bool task_init(void);
+
+// 启动任务调度
+void task_run(void);
