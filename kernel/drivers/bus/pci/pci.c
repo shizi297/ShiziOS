@@ -11,6 +11,7 @@
 #include <klibc.h>
 #include <asm/msi.h>
 #include <drivers/pci.h>
+#include <asm/platform_dev.h>
 
 // 每个总线 8MB (256 devices * 8 functions * 4KB)
 #define PCI_ECAM_BUS_SIZE  (8ULL * 1024 * 1024)   
@@ -135,10 +136,25 @@
 #define PCI_PRINT(fmt, ...) \
     printk("[PCI] " fmt, ##__VA_ARGS__)
 
+// ECAM 区域信息
+struct pci_ecam_region {
+    uint64_t base_addr; // ECAM 区域的物理基地址
+    void *base_virt;    // 映射后的内核虚拟基地址
+    uint16_t segment;   // PCI 段组号
+    uint8_t start_bus;  // 该区域覆盖的起始总线号
+    uint8_t end_bus;    // 该区域覆盖的结束总线号
+};
+
 // PCI 总线私有数据
 struct pci_bus_priv {
-    struct pci_ecam_region *regions;
-    int num_regions;
+    spinlock_t lock;             
+    int num_regions;            
+    struct pci_ecam_region regions[];  
+};
+
+// PCI 总线私有数据
+struct pci_bus_dev_priv {
+    struct pci_ecam_region ecam;
 };
 
 // PCI 设备私有结构体
@@ -173,15 +189,6 @@ struct scan_entry {
     struct device *parent_dev;
 };
 
-// ECAM 区域信息
-struct pci_ecam_region {
-    uint64_t base_addr; // ECAM 区域的物理基地址
-    void *base_virt;    // 映射后的内核虚拟基地址
-    uint16_t segment;   // PCI 段组号
-    uint8_t start_bus;  // 该区域覆盖的起始总线号
-    uint8_t end_bus;    // 该区域覆盖的结束总线号
-};
-
 // 用于 PCI 设备的 ID 描述
 struct pci_device_id {
     uint16_t vendor;      // 厂商 ID
@@ -205,21 +212,19 @@ static spinlock_t ecam_lock = SPIN_LOCK_INIT;
  * @param segment PCI 段组号
  * @param bus 总线号
  *
- * @return 找到的 ECAM 区域指针，失败返回NULL
+ * @return 找到的 ECAM 区域指针
  */
 static inline struct pci_ecam_region *pci_ecam_find_region(
-    struct pci_bus_priv *priv, 
+    struct pci_bus_dev_priv *priv, 
     uint16_t segment, 
     uint8_t bus
 ) {
-    for (int i = 0; i < priv->num_regions; i++) {
-        struct pci_ecam_region *reg = &priv->regions[i];
-        if (
-            reg->segment == segment && 
-            bus >= reg->start_bus && 
-            bus <= reg->end_bus
-        ) return reg;
-    }
+    struct pci_ecam_region *reg = &priv->ecam;
+    
+    if (reg->segment == segment &&
+        bus >= reg->start_bus && 
+        bus <= reg->end_bus)
+        return reg;
     
     return NULL;
 }
@@ -237,7 +242,7 @@ static inline struct pci_ecam_region *pci_ecam_find_region(
  * @param val 输出缓冲区（至少 size 字节）
  */
 static bool pci_ecam_read(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     uint16_t segment,
     uint8_t bus,
     uint8_t dev,
@@ -309,7 +314,7 @@ static bool pci_ecam_read(
  * @param val 要写入的值
  */
 static void pci_ecam_write(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     uint16_t segment,
     uint8_t bus,
     uint8_t dev,
@@ -447,6 +452,72 @@ out:
     return regions;
 }
 
+/**
+ * 根据段组号在 MCFG 表中查找对应的 ECAM 区域
+ * 
+ * @param segment PCI 段组号
+ *
+ * @return 动态分配的 ECAM 区域指针（调用者负责释放）
+ */
+static struct pci_ecam_region *pci_ecam_find_by_segment(uint16_t segment) {
+    uacpi_table table;
+    uacpi_status status;
+    struct acpi_mcfg *mcfg;
+    struct pci_ecam_region *region = NULL;
+    size_t entry_count, i;
+
+    // 查找 MCFG 表
+    status = uacpi_table_find_by_signature("MCFG", &table);
+    if (status != UACPI_STATUS_OK) {
+        PCI_PRINT("Failed to find MCFG table: %s\n", uacpi_status_to_string(status));
+        return NULL;
+    }
+
+    mcfg = (struct acpi_mcfg *)table.ptr;
+
+    // 计算 entries 数量
+    entry_count = (mcfg->hdr.length - sizeof(*mcfg)) / sizeof(mcfg->entries[0]);
+    if (entry_count == 0) {
+        PCI_PRINT("No ECAM entries in MCFG\n");
+        goto out;
+    }
+
+    // 遍历条目，查找匹配段组号的条目
+    for (i = 0; i < entry_count; i++) {
+        struct acpi_mcfg_allocation *entry = &mcfg->entries[i];
+
+        if (!entry->address)
+            continue;
+
+        if (entry->start_bus > entry->end_bus)
+            continue;
+
+        if (entry->segment != segment)
+            continue;
+
+        // 找到匹配的条目
+        region = kheap_alloc(sizeof(*region));
+        if (!region) {
+            PCI_PRINT("Failed to allocate ECAM region\n");
+            goto out;
+        }
+
+        region->base_addr = entry->address;
+        region->base_virt = NULL;
+        region->segment   = entry->segment;
+        region->start_bus = entry->start_bus;
+        region->end_bus   = entry->end_bus;
+
+        goto out;
+    }
+
+    PCI_PRINT("No ECAM region found for segment %u\n", segment);
+
+out:
+    uacpi_table_unref(&table);
+    return region;
+}
+
 /** 
  * 检查 PCI 设备是否存在
  *
@@ -458,7 +529,7 @@ out:
  * @return true 存在，false 不存在
  */
 static bool pci_device_exists(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     uint16_t segment,
     uint8_t bus,
     uint8_t dev,
@@ -489,7 +560,7 @@ static bool pci_device_exists(
  * @return 返回 pci_dev_priv 指针，失败返回 NULL
  */
 static struct pci_dev_priv *pci_alloc_device_priv(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     uint16_t segment,
     uint8_t bus,
     uint8_t dev,
@@ -584,7 +655,7 @@ static void pci_format_device_name(
  * @param val 输出值
  */
 static bool pci_bar_read_raw(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
     uint8_t offset,
     uint32_t *val
@@ -607,7 +678,7 @@ static bool pci_bar_read_raw(
  * @param mask 输出掩码
  */
 static bool pci_get_bar_mask(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
     uint8_t offset,
     uint32_t orig_val,
@@ -663,7 +734,7 @@ static bool pci_get_bar_mask(
  * @param flags 输出资源标志
  */
 static bool pci_get_bar_info(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
     int bar_idx,
     bool is_64bit,
@@ -768,7 +839,7 @@ static bool pci_get_bar_info(
  */
 static void pci_parse_bars(
     struct device *dev,
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev
 ) {
     int bar_count = 0;
@@ -839,7 +910,7 @@ static void pci_parse_bars(
  * @return 找到时返回 Capability 在配置空间中的偏移（字节），未找到返回 0
  */
 static uint8_t _pci_find_capability(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
     uint8_t cap_id
 ) {
@@ -900,7 +971,7 @@ static uint8_t _pci_find_capability(
  * @param cap_offset MSI‑X Capability 在配置空间中的偏移
  */
 static bool pci_read_msix_info(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
     uint8_t cap_offset
 ) {
@@ -955,7 +1026,7 @@ static bool pci_read_msix_info(
  * @param pdev 设备私有结构体
  */
 static void pci_parse_msix_capability(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev
 ) {
     uint8_t cap_ptr;
@@ -980,7 +1051,7 @@ static void pci_parse_msix_capability(
  * @param parent 父设备
  */
 static struct device *pci_create_device(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
     struct device *parent
 ) {
@@ -1049,7 +1120,7 @@ static struct device *pci_create_device(
  * @param top 栈顶指针（入栈时增加）
  */
 static void pci_handle_bridge(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     struct device *bridge_dev,
     struct pci_dev_priv *pdev,
     struct scan_entry *stack,
@@ -1103,7 +1174,7 @@ static void pci_handle_bridge(
  * @param top 栈顶指针
  */
 static void pci_scan_bus(
-    struct pci_bus_priv *priv,
+    struct pci_bus_dev_priv *priv,
     uint16_t segment,
     uint8_t bus,
     struct device *parent,
@@ -1148,44 +1219,69 @@ static void pci_scan_bus(
     }
 }
 
-// PCI 设备枚举
-static void pci_enumerate_devices(void) {
-    struct pci_bus_priv *priv = pci_bus_type.priv;
+// PCI 主桥平台驱动的 probe 函数
+static int pci_platform_probe(struct device *dev) {
+    uint16_t seg = platform_get_segment(dev);
+    struct pci_ecam_region *ecam = pci_ecam_find_by_segment(seg);
+    if (!ecam) {
+        PCI_PRINT("No ECAM region for segment %u\n", seg);
+        return -ENODEV;
+    }
+
+    // 计算 ECAM 区域大小并映射
+    uint64_t size = (ecam->end_bus - ecam->start_bus + 1) * PCI_ECAM_BUS_SIZE;
+    void *virt = vheap_map_mmio(ecam->base_addr, size);
+    if (!virt) {
+        PCI_PRINT("Failed to map ECAM region for segment %u\n", seg);
+        kheap_free(ecam);
+        return -ENOMEM;
+    }
+    ecam->base_virt = virt;
+
+    // 分配总线私有数据
+    struct pci_bus_dev_priv *priv = kheap_alloc(sizeof(*priv));
+    if (!priv) {
+        PCI_PRINT("Failed to allocate PCI bus private data for segment %u\n", seg);
+        vheap_unmap_mmio(virt);
+        kheap_free(ecam);
+        return -ENOMEM;
+    }
+
+    // 将 ECAM 信息复制到 priv->ecam（不再使用数组）
+    memcpy(&priv->ecam, ecam, sizeof(*ecam));
+    kheap_free(ecam);
+
+    // 保存 priv 到设备驱动数据，供后续查找
+    dev->driver_data = priv;
+
+    // 构建扫描栈并开始枚举
     struct scan_entry stack[PCI_SCAN_STACK_DEPTH];
     int top = 0;
 
-    if (!priv)
-        return;
+    stack[top].segment = seg;
+    stack[top].bus = priv->ecam.start_bus;
+    stack[top].parent_dev = dev;
+    top++;
 
-    // 初始压栈：每个 ECAM 区域的起始总线（去重）
-    for (int i = 0; i < priv->num_regions; i++) {
-        struct pci_ecam_region *reg = &priv->regions[i];
-        bool dup = false;
-        for (int j = 0; j < top; j++) {
-            if (stack[j].segment == reg->segment && stack[j].bus == reg->start_bus) {
-                dup = true;
-                break;
-            }
-        }
-
-        if (!dup && top < PCI_SCAN_STACK_DEPTH) {
-            stack[top].segment = reg->segment;
-            stack[top].bus = reg->start_bus;
-            stack[top].parent_dev = NULL;
-            top++;
-        }
-    }
-
-    // 循环处理栈中的总线
     while (top > 0) {
         top--;
         struct scan_entry entry = stack[top];
         pci_scan_bus(priv, entry.segment, entry.bus, entry.parent_dev, stack, &top);
     }
+
+    PCI_PRINT("Host bridge segment %u enumeration complete\n", seg);
+    return 0;
 }
 
+// PCI 主桥平台驱动
+static struct driver pci_platform_driver = {
+    .name = "PNP0A08",
+    .bus = &platform_bus_type,
+    .probe = pci_platform_probe,
+};
+
 /*
- * PCI 总线 match 函数，用于匹配设备与驱动
+ * 用于匹配设备与驱动
  *
  * @param dev 设备结构体
  * @param drv 驱动结构体
@@ -1216,7 +1312,12 @@ static void pci_free_device(struct device *dev) {
     if (!pdev)
         return;
 
-    vheap_unmap_mmio(dev->driver_data);
+    // 释放 MSI-X 表映射
+    if (pdev->msix_table_virt) {
+        vheap_unmap_mmio(pdev->msix_table_virt);
+        pdev->msix_table_virt = NULL;
+    }
+
     kheap_free(pdev);
     dev->driver_data = NULL;
 }
@@ -1224,57 +1325,49 @@ static void pci_free_device(struct device *dev) {
 // PCI 总线初始化
 static void pci_init(void) {
     int num_regions;
-    struct pci_ecam_region *regions = NULL;
-    struct pci_bus_priv *priv = NULL;
-    
+    struct pci_ecam_region *regions;
+
     INIT_LIST_HEAD(&pci_bus_type.devices);
     INIT_LIST_HEAD(&pci_bus_type.drivers);
     INIT_LIST_HEAD(&pci_bus_type.node);
-    
+
+    // 解析 MCFG 获取所有 ECAM 区域
     regions = pci_get_ecam_info(&num_regions);
     if (!regions) {
         PCI_PRINT("No ECAM regions, PCI disabled\n");
         return;
     }
 
-    // 映射每个 ECAM 区域
-    for (int i = 0; i < num_regions; i++) {
-        struct pci_ecam_region *reg = &regions[i];
-        uint64_t size = (reg->end_bus - reg->start_bus + 1) * PCI_ECAM_BUS_SIZE;
-        void *virt = vheap_map_mmio(reg->base_addr, size);
-        if (!virt) {
-            PCI_PRINT("Failed to map ECAM region [%d], PCI disabled\n", i);
-            goto out_free_regions;
-        }
-        
-        reg->base_virt = virt;
-    }
-
-    // 缓存到总线私有数据
-    priv = kheap_alloc(sizeof(*priv));
+    // 分配总线私有数据
+    size_t priv_size = sizeof(struct pci_bus_priv) + sizeof(struct pci_ecam_region) * num_regions;
+    struct pci_bus_priv *priv = kheap_alloc(priv_size);
     if (!priv) {
-        PCI_PRINT("Failed to allocate PCI private data\n");
-        goto out_free_regions;
+        kheap_free(regions);
+        return;
     }
-
-    priv->regions = regions;
+    
+    // 复制解析好的数据到总线私有数据
+    memset(priv, 0, priv_size);
+    spinlock_init(&priv->lock);
     priv->num_regions = num_regions;
+    memcpy(priv->regions, regions, sizeof(struct pci_ecam_region) * num_regions);
+    kheap_free(regions);
+
     pci_bus_type.priv = priv;
 
-    // 注册 PCI 总线
+    // 注册 PCI 总线类型
     if (!drivers_add_bus(&pci_bus_type)) {
         PCI_PRINT("Failed to register PCI bus\n");
-        goto out_free_priv;
+        kheap_free(priv);
+        pci_bus_type.priv = NULL;
+        return;
     }
 
-    // 枚举所有 PCI 设备
-    pci_enumerate_devices();
-    return;
-
-out_free_priv:
-    kheap_free(priv);
-out_free_regions:
-    kheap_free(regions);
+    // 注册 PCI 主桥平台驱动
+    if (!drivers_add_driver(&pci_platform_driver)) {
+        PCI_PRINT("Failed to register PCI platform driver\n");
+        return;
+    }
 }
 
 static struct bus pci_bus_type = {
@@ -1287,6 +1380,100 @@ static struct bus pci_bus_type = {
     .priv = NULL,
     .free_device = pci_free_device,
 };
+
+/**
+ * 通过 BDF 读取 PCI 配置空间
+ *
+ * @param segment PCI 段组号
+ * @param bus 总线号
+ * @param dev 设备号
+ * @param func 功能号
+ * @param offset 配置空间偏移（字节）
+ * @param size 读取字节数（1、2 或 4）
+ *
+ * @return 读取到的值（失败返回 0xFFFFFFFF）
+ */
+uint32_t pci_config_read(
+    uint16_t segment, uint8_t bus, 
+    uint8_t dev, uint8_t func, 
+    uint16_t offset, int size
+) {
+    struct pci_bus_priv *bus_priv = pci_bus_type.priv;
+    uint32_t val = 0xFFFFFFFF;
+
+    if (!bus_priv)
+        return val;
+
+    spin_lock(&bus_priv->lock);
+
+    // 遍历 ECAM 区域，查找匹配的段组号和总线号
+    for (int i = 0; i < bus_priv->num_regions; i++) {
+        struct pci_ecam_region *reg = &bus_priv->regions[i];
+        if (reg->segment != segment)
+            continue;
+
+        if (bus < reg->start_bus || bus > reg->end_bus)
+            continue;
+
+        // 构造私有数据
+        struct pci_bus_dev_priv tmp_priv;
+        memcpy(&tmp_priv.ecam, reg, sizeof(*reg));
+
+        spin_unlock(&bus_priv->lock);
+        pci_ecam_read(&tmp_priv, segment, bus, dev, func, offset, size, &val);
+        return val;
+    }
+
+    spin_unlock(&bus_priv->lock);
+    PCI_PRINT("No ECAM region found for segment %u, bus %u\n", segment, bus);
+    return val;
+}
+
+/**
+ * 通过 BDF 写入 PCI 配置空间
+ *
+ * @param segment PCI 段组号
+ * @param bus 总线号
+ * @param dev 设备号
+ * @param func 功能号
+ * @param offset 配置空间偏移（字节）
+ * @param size 写入字节数（1、2 或 4）
+ * @param val 要写入的值
+ */
+void pci_config_write(
+    uint16_t segment, uint8_t bus, 
+    uint8_t dev, uint8_t func, 
+    uint16_t offset, int size, 
+    uint32_t val
+) {
+    struct pci_bus_priv *bus_priv = pci_bus_type.priv;
+
+    if (!bus_priv)
+        return;
+
+    spin_lock(&bus_priv->lock);
+
+    // 遍历 ECAM 区域，查找匹配的段组号和总线号
+    for (int i = 0; i < bus_priv->num_regions; i++) {
+        struct pci_ecam_region *reg = &bus_priv->regions[i];
+        if (reg->segment != segment)
+            continue;
+
+        if (bus < reg->start_bus || bus > reg->end_bus)
+            continue;
+
+        // 构造私有数据
+        struct pci_bus_dev_priv tmp_priv;
+        memcpy(&tmp_priv.ecam, reg, sizeof(*reg));
+
+        spin_unlock(&bus_priv->lock);
+        pci_ecam_write(&tmp_priv, segment, bus, dev, func, offset, size, val);
+        return;
+    }
+
+    spin_unlock(&bus_priv->lock);
+    PCI_PRINT("No ECAM region found for segment %u, bus %u\n", segment, bus);
+}
 
 INITCALL(drivers, 0, pci_init);
 
@@ -1330,20 +1517,22 @@ uint16_t pci_get_device_id(struct device *dev) {
  */
 uint8_t pci_find_capability(struct device *dev, uint8_t cap_id) {
     struct pci_dev_priv *pdev;
-    struct pci_bus_priv *priv;
+    struct pci_bus_dev_priv *priv;
 
     if (!dev || !dev->driver_data)
         return 0;
 
     pdev = dev->driver_data;
-    if (!dev->bus || !dev->bus->priv)
-        return 0;
 
     if (cap_id == PCI_CAP_ID_MSIX) {
         return pdev->msix_cap_offset;
     }
 
-    priv = dev->bus->priv;
+    // 通过父设备获取总线私有数据
+    if (!dev->parent || !dev->parent->driver_data)
+        return 0;
+
+    priv = dev->parent->driver_data;
     return _pci_find_capability(priv, pdev, cap_id);
 }
 
@@ -1362,7 +1551,7 @@ int pci_msix_enable(
     uint8_t vector_start
 ) {
     struct pci_dev_priv *pdev;
-    struct pci_bus_priv *priv;
+    struct pci_bus_dev_priv *priv;
     struct resource *bar;
     uint64_t table_phys;
     void *table_virt;
@@ -1375,7 +1564,12 @@ int pci_msix_enable(
         return -ENODEV;
 
     pdev = dev->driver_data;
-    priv = dev->bus->priv;
+
+    // 通过父设备获取总线私有数据
+    if (!dev->parent || !dev->parent->driver_data)
+        return -ENODEV;
+
+    priv = dev->parent->driver_data;
 
     if (!pdev->msix_cap_offset)
         return -ENODEV;
@@ -1447,14 +1641,19 @@ int pci_msix_enable(
  */
 void pci_msix_disable(struct device *dev) {
     struct pci_dev_priv *pdev;
-    struct pci_bus_priv *priv;
+    struct pci_bus_dev_priv *priv;
     uint32_t ctrl;
 
     if (!dev || !dev->driver_data)
         return;
 
     pdev = dev->driver_data;
-    priv = dev->bus->priv;
+
+    // 通过父设备获取总线私有数据
+    if (!dev->parent || !dev->parent->driver_data)
+        return;
+
+    priv = dev->parent->driver_data;
 
     if (!pdev->msix_cap_offset)
         return;
