@@ -22,6 +22,9 @@
  * @return 失败： false
  */
 bool acpi_init(void) {
+    extern void uacpi_kernel_api_init(void);
+    uacpi_kernel_api_init();
+
     // 传0表示使用默认选项
     uacpi_status status = uacpi_initialize(0);
     if (status != UACPI_STATUS_OK) {

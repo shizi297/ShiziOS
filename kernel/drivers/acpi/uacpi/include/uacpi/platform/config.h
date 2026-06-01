@@ -101,7 +101,7 @@ UACPI_BUILD_BUG_ON_WITH_MSG(
  * ACPI support code at compile-time, including the event subsystem, the global
  * lock, and other full-hardware features.
  */
-// #define UACPI_REDUCED_HARDWARE
+#define UACPI_REDUCED_HARDWARE
 
 /*
  * Switches uACPI into tables-subsystem-only mode and strips all other code.
