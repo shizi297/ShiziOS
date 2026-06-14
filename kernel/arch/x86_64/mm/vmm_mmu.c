@@ -370,44 +370,44 @@ pte_t* mmu_walk(uintptr_t pgd, uintptr_t addr, bool create, vm_prot_t prot, uint
      */
     while (walk != WALK_BREAK) {
         switch (walk) {
-        case WALK_START:
-            walk = walk_start(pgd, create, out_blocks);
-            break;
+            case WALK_START:
+                walk = walk_start(pgd, create, out_blocks);
+                break;
             
-        case WALK_PML4:
-            walk = walk_pml4(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
-            break;
+            case WALK_PML4:
+                walk = walk_pml4(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
+                break;
             
-        case WALK_PDPT:
-            walk = walk_pdpt(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
-            break;
+            case WALK_PDPT:
+                walk = walk_pdpt(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
+                break;
             
-        case WALK_PD:
-            walk = walk_pd(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
-            break;
+            case WALK_PD:
+                walk = walk_pd(&current_phys, &pte_ptr, addr, create, intermediate_prot, out_blocks);
+                break;
             
-        case WALK_PT:
-            walk = walk_pt(&current_phys, &pte_ptr, addr);
-            break;
+            case WALK_PT:
+                walk = walk_pt(&current_phys, &pte_ptr, addr);
+                break;
             
-        case WALK_DONE:
-            walk = walk_done();
-            break;
+            case WALK_DONE:
+                walk = walk_done();
+                break;
             
-        case WALK_ERROR:
-            walk = walk_error(create, out_blocks, &pte_ptr);
-            break;
+            case WALK_ERROR:
+                walk = walk_error(create, out_blocks, &pte_ptr);
+                break;
             
-        case WALK_PANIC:
-            walk = walk_panic(&pte_ptr);
-            break;
+            case WALK_PANIC:
+                walk = walk_panic(&pte_ptr);
+                break;
             
-        default:
-            // 不应该到达这里
-            printp("[MMU] ERROR: invalid walk state\n");
-            walk = WALK_BREAK;
-            pte_ptr = NULL;
-            break;
+            default:
+                // 不应该到达这里
+                printp("[MMU] ERROR: invalid walk state\n");
+                walk = WALK_BREAK;
+                pte_ptr = NULL;
+                break;
         }
     }
     
