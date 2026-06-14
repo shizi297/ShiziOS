@@ -7,17 +7,15 @@
 #include <kio.h>
 #include <acpi.h>
 #include <initcall.h>
-#include <drivers/base/drivers.h>
+#include <drivers/drivers.h>
 #include <klibc.h>
 #include <asm/msi.h>
 #include <drivers/pci.h>
+#include <bitmap.h>
 #include <asm/platform_dev.h>
 
 // 每个总线 8MB (256 devices * 8 functions * 4KB)
 #define PCI_ECAM_BUS_SIZE  (8ULL * 1024 * 1024)   
-
-// 表示该驱动可以匹配任意厂商或任意设备 ID
-#define PCI_ANY_ID 0xFFFF
 
 // ID 无效
 #define PCI_VENDOR_ID_INVALID   0x0000
@@ -25,6 +23,9 @@
 // PCI 配置空间标准寄存器偏移
 #define PCI_VENDOR_ID_OFFSET    0x00    // 厂商 ID
 #define PCI_DEVICE_ID_OFFSET    0x02    // 设备 ID
+#define PCI_CLASS_CODE_OFFSET   0x08    // 设备类别代码，描述设备功能类型
+#define PCI_SUBSYSTEM_VENDOR_OFFSET   0x2C    // 子系统厂商 ID，驱动匹配时用于筛选特定子设备
+#define PCI_SUBSYSTEM_DEVICE_OFFSET   0x2E    // 子系统设备 ID，驱动匹配时用于筛选特定子设备
 /**
  * Header Type 寄存器
  * bit7=1 表示多功能设备
@@ -165,6 +166,9 @@ struct pci_dev_priv {
     uint8_t func;   // 功能号
     uint16_t vendor_id; // 厂商 ID，0xFFFF 表示设备不存在
     uint16_t device_id; // 设备 ID
+    uint16_t subsystem_vendor;  // 子系统厂商 ID
+    uint16_t subsystem_device;  // 子系统设备 ID
+    uint32_t class_code;    // 设备类别
     uint8_t header_type;    // 配置空间头类型
 
     // BAR 资源
@@ -180,6 +184,9 @@ struct pci_dev_priv {
     uint32_t msix_pba_offset;   // PBA 在对应 BAR 中的偏移
     void *msix_table_virt;  // MSI‑X 表映射到内核的虚拟地址  
     size_t msix_table_size; // MSI‑X 表的总大小（字节）
+
+    bitmap_t *msix_bitmap;  // 向量分配位图
+    int msix_vectors;       // 设备实际支持的向量数
 };
 
 // 扫描栈条目，用于记录待扫描的总线及对应的父设备
@@ -188,19 +195,6 @@ struct scan_entry {
     uint8_t bus;
     struct device *parent_dev;
 };
-
-// 用于 PCI 设备的 ID 描述
-struct pci_device_id {
-    uint16_t vendor;      // 厂商 ID
-    uint16_t device;      // 设备 ID
-    uint16_t subvendor;   // 子系统厂商 ID
-    uint16_t subdevice;   // 子系统设备 ID
-    uint32_t class;       // 设备类别
-    uint32_t class_mask;  // 类别掩码
-    uintptr_t driver_data; // 驱动私有数据
-};
-
-static struct bus pci_bus_type;
 
 // 保护 ecam 的访问
 static spinlock_t ecam_lock = SPIN_LOCK_INIT;
@@ -596,6 +590,24 @@ static struct pci_dev_priv *pci_alloc_device_priv(
 
     pdev->device_id = val & 0xFFFF;
 
+    // 读取 class_code
+    if (!pci_ecam_read(priv, segment, bus, dev, func, PCI_CLASS_CODE_OFFSET, 4, &val))
+        goto fail;
+
+    pdev->class_code = val >> 8;
+
+    // 读取 subsystem vendor
+    if (!pci_ecam_read(priv, segment, bus, dev, func, PCI_SUBSYSTEM_VENDOR_OFFSET, 2, &val))
+        goto fail;
+
+    pdev->subsystem_vendor = val & 0xFFFF;
+
+    // 读取 subsystem device
+    if (!pci_ecam_read(priv, segment, bus, dev, func, PCI_SUBSYSTEM_DEVICE_OFFSET, 2, &val))
+        goto fail;
+
+    pdev->subsystem_device = val & 0xFFFF;
+
     // 读取 header type
     if (!pci_ecam_read(priv, segment, bus, dev, func, PCI_HEADER_TYPE_OFFSET, 1, &val))
         goto fail;
@@ -842,17 +854,21 @@ static void pci_parse_bars(
     struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev
 ) {
-    int bar_count = 0;
+    bool reserved[PCI_MAX_BARS] = {0};
 
-    for (int i = 0; i < PCI_MAX_BARS; ) {
+    for (int i = 0; i < PCI_MAX_BARS; i++) {
+        if (reserved[i])
+            continue;
+
         uint32_t bar_low;
         uint8_t offset = PCI_BAR_OFFSET(i);
 
         // 读取 BAR 低 32 位原始值
-        if (!pci_bar_read_raw(priv, pdev, offset, &bar_low)) {
-            i++;
+        if (!pci_bar_read_raw(priv, pdev, offset, &bar_low))
             continue;
-        }
+
+        if (bar_low == 0)
+            continue;
 
         // 判断 BAR 类型
         bool is_io = (bar_low & 1);
@@ -869,10 +885,7 @@ static void pci_parse_bars(
                 bar_type == PCI_BAR_TYPE_RESERVED1 ||
                 bar_type == PCI_BAR_TYPE_RESERVED3
             )
-        ) {
-            i++;
-            continue;
-        }
+        ) continue;
 
         bool is_64bit = (!is_io && bar_type == PCI_BAR_TYPE_64BIT);
         uint64_t base, size;
@@ -880,24 +893,18 @@ static void pci_parse_bars(
 
         // 解析当前 BAR
         if (pci_get_bar_info(priv, pdev, i, is_64bit, &base, &size, &flags)) {
-            if (bar_count < PCI_MAX_BARS) {
-                struct resource *res = &pdev->bars[bar_count];
-                res->start = base;
-                res->end = base + size - 1;
-                res->flags = flags;
-                bar_count++;
-            }
+            pdev->bars[i].start = base;
+            pdev->bars[i].end = base + size - 1;
+            pdev->bars[i].flags = flags;
 
             // 64 位 BAR 占用两个索引，跳过下一个
-            i += is_64bit ? 2 : 1;
-        } else {
-            i++;
+            if (is_64bit && (i + 1 < PCI_MAX_BARS))
+                reserved[i + 1] = true;
         }
     }
 
-    pdev->num_bars = bar_count;
     dev->res = pdev->bars;
-    dev->num_res = bar_count;
+    dev->num_res = PCI_MAX_BARS;
 }
 
 /**
@@ -906,30 +913,37 @@ static void pci_parse_bars(
  * @param priv PCI 总线私有数据
  * @param pdev 设备私有结构体
  * @param cap_id 要查找的 Capability ID
+ * @param start 起始查找偏移（0 表示从链表头开始）
  * 
  * @return 找到时返回 Capability 在配置空间中的偏移（字节），未找到返回 0
  */
 static uint8_t _pci_find_capability(
     struct pci_bus_dev_priv *priv,
     struct pci_dev_priv *pdev,
-    uint8_t cap_id
+    uint8_t cap_id,
+    uint8_t start
 ) {
     uint32_t val;
     uint8_t cap_ptr;
     int loop = PCI_MAX_CAP_LOOP;
 
-    // 读取 Capability 指针寄存器
-    if (!pci_ecam_read(
-            priv,
-            pdev->segment, pdev->bus,
-            pdev->dev, pdev->func,
-            PCI_CAP_PTR_OFFSET, 1, &val
-        )
-    ) return 0;
+    if (start == 0) {
+        // 读取 Capability 指针寄存器
+        if (!pci_ecam_read(
+                priv,
+                pdev->segment, pdev->bus,
+                pdev->dev, pdev->func,
+                PCI_CAP_PTR_OFFSET, 1, &val
+            )
+        ) return 0;
 
-    cap_ptr = val & 0xFF;
-    if (cap_ptr == 0)
-        return 0;
+        cap_ptr = val & 0xFF;
+        if (cap_ptr == 0)
+            return 0;
+    } else {
+        // 从指定偏移开始
+        cap_ptr = start;
+    }
 
     // 遍历 Capability 链表
     while (cap_ptr != 0 && loop-- > 0) {
@@ -1032,7 +1046,7 @@ static void pci_parse_msix_capability(
     uint8_t cap_ptr;
 
     // 查找 MSI-X Capability
-    cap_ptr = _pci_find_capability(priv, pdev, PCI_CAP_ID_MSIX);
+    cap_ptr = _pci_find_capability(priv, pdev, PCI_CAP_ID_MSIX, 0);
     if (cap_ptr == 0)
         return;
 
@@ -1041,6 +1055,12 @@ static void pci_parse_msix_capability(
     // 读取 MSI-X 详细信息
     if (!pci_read_msix_info(priv, pdev, cap_ptr))
         return;
+
+    // 填充向量总数并分配位图
+    pdev->msix_vectors = (pdev->msix_control & PCI_MSIX_CTRL_TABLE_SIZE_MASK) + 1;
+    pdev->msix_bitmap = kheap_alloc(BITMAP_BYTES(pdev->msix_vectors));
+    if (pdev->msix_bitmap)
+        bitmap_zero(pdev->msix_bitmap, pdev->msix_vectors);
 }
 
 /**
@@ -1085,7 +1105,7 @@ static struct device *pci_create_device(
     }
 
     dev->driver_data = pdev;
-    atomic_init(&dev->refcnt, 1);
+    atomic_init(&dev->refcnt, 0);
     INIT_LIST_HEAD(&dev->children);
     INIT_LIST_HEAD(&dev->sibling);
     INIT_LIST_HEAD(&dev->node);
@@ -1247,9 +1267,17 @@ static int pci_platform_probe(struct device *dev) {
         return -ENOMEM;
     }
 
-    // 将 ECAM 信息复制到 priv->ecam（不再使用数组）
     memcpy(&priv->ecam, ecam, sizeof(*ecam));
     kheap_free(ecam);
+
+    // 同步 ECAM 虚拟地址到全局数组，供 pci_config_read 等公开接口使用
+    struct pci_bus_priv *bus_priv = pci_bus_type.priv;
+    for (int i = 0; i < bus_priv->num_regions; i++) {
+        if (bus_priv->regions[i].segment == seg) {
+            bus_priv->regions[i].base_virt = priv->ecam.base_virt;
+            break;
+        }
+    }
 
     // 保存 priv 到设备驱动数据，供后续查找
     dev->driver_data = priv;
@@ -1273,11 +1301,35 @@ static int pci_platform_probe(struct device *dev) {
     return 0;
 }
 
+/*
+ * 用于释放总线私有数据
+ *
+ * @param dev 主桥平台设备
+ */
+static void pci_platform_remove(struct device *dev) {
+    struct pci_bus_dev_priv *priv = dev->driver_data;
+    if (!priv)
+        return;
+
+    // 释放 ECAM MMIO 映射
+    if (priv->ecam.base_virt) {
+        vheap_unmap_mmio(priv->ecam.base_virt);
+        priv->ecam.base_virt = NULL;
+    }
+
+    // 释放总线私有数据
+    kheap_free(priv);
+    dev->driver_data = NULL;
+}
+
 // PCI 主桥平台驱动
 static struct driver pci_platform_driver = {
     .name = "PNP0A08",
     .bus = &platform_bus_type,
     .probe = pci_platform_probe,
+    .remove = pci_platform_remove,
+    .id_table = NULL,
+    .node = {0},
 };
 
 /*
@@ -1293,10 +1345,20 @@ static bool pci_match(struct device *dev, struct driver *drv) {
         return false;
 
     for (const struct pci_device_id *id = id_table; id->vendor != 0 || id->device != 0; id++) {
-        if ((id->vendor == PCI_ANY_ID || id->vendor == pdev->vendor_id) &&
-            (id->device == PCI_ANY_ID || id->device == pdev->device_id)) {
-            return true;
+        if (id->vendor != PCI_ANY_ID && id->vendor != pdev->vendor_id)
+            continue;
+        if (id->device != PCI_ANY_ID && id->device != pdev->device_id)
+            continue;
+        if (id->subvendor != PCI_ANY_ID && id->subvendor != pdev->subsystem_vendor)
+            continue;
+        if (id->subdevice != PCI_ANY_ID && id->subdevice != pdev->subsystem_device)
+            continue;
+        if (id->class_mask != 0) {
+            if ((pdev->class_code & id->class_mask) != (id->class & id->class_mask))
+                continue;
         }
+
+        return true;
     }
 
     return false;
@@ -1312,15 +1374,36 @@ static void pci_free_device(struct device *dev) {
     if (!pdev)
         return;
 
-    // 释放 MSI-X 表映射
+    // 释放 MSI‑X 表映射
     if (pdev->msix_table_virt) {
         vheap_unmap_mmio(pdev->msix_table_virt);
         pdev->msix_table_virt = NULL;
     }
 
+    // 释放 MSI‑X 向量分配位图
+    if (pdev->msix_bitmap) {
+        kheap_free(pdev->msix_bitmap);
+        pdev->msix_bitmap = NULL;
+    }
+
+    // 释放 PCI 设备私有数据结构
     kheap_free(pdev);
     dev->driver_data = NULL;
+
+    // 释放设备名
+    kheap_free((void *)dev->name);
 }
+
+struct bus pci_bus_type = {
+    .name = "pci",
+    .match = pci_match,
+    .devices = {0},
+    .drivers = {0},
+    .lock = SPIN_LOCK_INIT,
+    .node = {0},
+    .priv = NULL,
+    .free_device = pci_free_device,
+};
 
 // PCI 总线初始化
 static void pci_init(void) {
@@ -1369,17 +1452,6 @@ static void pci_init(void) {
         return;
     }
 }
-
-static struct bus pci_bus_type = {
-    .name = "pci",
-    .match = pci_match,
-    .devices = {0},
-    .drivers = {0},
-    .lock = SPIN_LOCK_INIT,
-    .node = {0},
-    .priv = NULL,
-    .free_device = pci_free_device,
-};
 
 /**
  * 通过 BDF 读取 PCI 配置空间
@@ -1512,10 +1584,11 @@ uint16_t pci_get_device_id(struct device *dev) {
  *
  * @param dev PCI 设备结构体
  * @param cap_id 要查找的 Capability ID
+ * @param start 起始查找偏移（0 表示从链表头开始）
  *
  * @return 找到时返回 Capability 在配置空间中的偏移（字节），未找到返回 0
  */
-uint8_t pci_find_capability(struct device *dev, uint8_t cap_id) {
+uint8_t pci_find_capability(struct device *dev, uint8_t cap_id, uint8_t start) {
     struct pci_dev_priv *pdev;
     struct pci_bus_dev_priv *priv;
 
@@ -1533,151 +1606,134 @@ uint8_t pci_find_capability(struct device *dev, uint8_t cap_id) {
         return 0;
 
     priv = dev->parent->driver_data;
-    return _pci_find_capability(priv, pdev, cap_id);
+    return _pci_find_capability(priv, pdev, cap_id, start);
 }
 
-/*
- * 启用 MSI‑X 中断
+/**
+ * 从 MSI‑X 向量池中分配一个空闲向量
  *
  * @param dev PCI 设备
- * @param vectors 要启用的中断向量数
  * @param logical_id 目标 CPU 的逻辑 ID
- * @param vector_start 起始中断向量号
+ * @param vector 中断向量号
+ *
+ * @return 向量索引，失败返回 -1
  */
-int pci_msix_enable(
-    struct device *dev, 
-    int vectors, 
-    uint32_t logical_id, 
-    uint8_t vector_start
+int pci_msix_alloc_vector(
+    struct device *dev,
+    uint32_t logical_id,
+    uint32_t vector
 ) {
     struct pci_dev_priv *pdev;
-    struct pci_bus_dev_priv *priv;
-    struct resource *bar;
-    uint64_t table_phys;
-    void *table_virt;
-    int i, max_vectors;
-    uint32_t ctrl;
+    uint32_t index;
+    uintptr_t entry_addr;
     struct _msi_msg msg;
+
+    if (!dev || !dev->driver_data)
+        return -1;
+
+    pdev = dev->driver_data;
+
+    if (pdev->msix_vectors <= 0 || !pdev->msix_bitmap || !pdev->msix_table_virt)
+        return -1;
+
+    index = bitmap_find(pdev->msix_bitmap, pdev->msix_vectors, 0, false);
+    if (index >= (uint32_t)pdev->msix_vectors)
+        return -1;
+
+    bitmap_set(pdev->msix_bitmap, index);
+
+    if (!msi_create_msg(logical_id, vector, &msg)) {
+        bitmap_clear(pdev->msix_bitmap, index);
+        return -1;
+    }
+
+    entry_addr = (uintptr_t)pdev->msix_table_virt + index * 16;
+    *(volatile uint64_t *)entry_addr = msg.addr;
+    *(volatile uint32_t *)(entry_addr + 8) = msg.data;
+
+    return (int)index;
+}
+
+/**
+ * 释放一个已分配的 MSI‑X 向量
+ *
+ * @param dev PCI 设备
+ * @param index 向量索引
+ */
+void pci_msix_free_vector(struct device *dev, int index) {
+    struct pci_dev_priv *pdev;
     uintptr_t entry_addr;
 
     if (!dev || !dev->driver_data)
-        return -ENODEV;
+        return;
 
     pdev = dev->driver_data;
 
-    // 通过父设备获取总线私有数据
-    if (!dev->parent || !dev->parent->driver_data)
-        return -ENODEV;
+    if (index < 0 || index >= pdev->msix_vectors || !pdev->msix_table_virt)
+        return;
 
-    priv = dev->parent->driver_data;
+    entry_addr = (uintptr_t)pdev->msix_table_virt + index * 16;
+    *(volatile uint32_t *)(entry_addr + 12) |= (1U << 0);
 
-    if (!pdev->msix_cap_offset)
-        return -ENODEV;
-
-    // 检查请求的向量数是否超过表容量
-    max_vectors = (pdev->msix_control & PCI_MSIX_CTRL_TABLE_SIZE_MASK) + 1;
-    if (vectors <= 0 || vectors > max_vectors)
-        return -EINVAL;
-
-    // 获取 MSI‑X 表所在的 BAR
-    if (pdev->msix_table_bir >= PCI_MAX_BARS)
-        return -EINVAL;
-
-    bar = &dev->res[pdev->msix_table_bir];
-    if (bar->start == 0 || bar->end < bar->start)
-        return -ENXIO;
-
-    // 计算 MSI‑X 表物理地址
-    table_phys = bar->start + pdev->msix_table_offset;
-    if (pdev->msix_table_size == 0)
-        return -ENXIO;
-
-    // 映射 MSI‑X 表到内核虚拟地址
-    table_virt = vheap_map_mmio(table_phys, pdev->msix_table_size);
-    if (!table_virt)
-        return -ENOMEM;
-
-    pdev->msix_table_virt = table_virt;
-
-    // 对每个向量配置 MSI‑X 表项
-    for (i = 0; i < vectors; i++) {
-        if (!msi_create_msg(logical_id, vector_start + i, &msg)) {
-            pci_msix_disable(dev);
-            return -EIO;
-        }
-
-        entry_addr = (uintptr_t)table_virt + i * 16;
-        *(volatile uint64_t *)entry_addr = msg.addr;
-        *(volatile uint32_t *)(entry_addr + 8) = msg.data;
-    }
-
-    // 读取 Message Control 寄存器，设置 Enable 位
-    if (!pci_ecam_read(
-            priv,
-            pdev->segment, pdev->bus,
-            pdev->dev, pdev->func,
-            pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, &ctrl
-        )
-    ) {
-        pci_msix_disable(dev);
-        return -EIO;
-    }
-
-    ctrl |= PCI_MSIX_CTRL_ENABLE_BIT;
-    pci_ecam_write(
-        priv,
-        pdev->segment, pdev->bus,
-        pdev->dev, pdev->func,
-        pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, ctrl
-    );
-
-    return 0;
+    bitmap_clear(pdev->msix_bitmap, (uint32_t)index);
 }
 
-/*
- * 禁用 MSI‑X 中断
+/**
+ * 从 PCI 配置空间读取 32 位双字
  *
- * @param dev PCI 设备
+ * @param dev PCI 设备结构体
+ * @param offset 配置空间偏移
+ *
+ * @return 读取到的 32 位值，失败返回 0xFFFFFFFF
  */
-void pci_msix_disable(struct device *dev) {
-    struct pci_dev_priv *pdev;
-    struct pci_bus_dev_priv *priv;
-    uint32_t ctrl;
+uint32_t pci_config_read_dword(struct device *dev, uint16_t offset) {
+    struct pci_dev_priv *pdev = dev->driver_data;
+    if (!pdev)
+        return 0xFFFFFFFF;
+        
+    return pci_config_read(
+        pdev->segment, pdev->bus,
+        pdev->dev, pdev->func,
+        offset, 4
+    );
+}
 
-    if (!dev || !dev->driver_data)
-        return;
+/**
+ * 从 PCI 配置空间读取 16 位字
+ *
+ * @param dev PCI 设备结构体
+ * @param offset 配置空间偏移
+ *
+ * @return 读取到的 16 位值，失败返回 0xFFFF
+ */
+uint16_t pci_config_read_word(struct device *dev, uint16_t offset) {
+    struct pci_dev_priv *pdev = dev->driver_data;
+    if (!pdev)
+        return 0xFFFF;
 
-    pdev = dev->driver_data;
+    return (uint16_t)pci_config_read(
+        pdev->segment, pdev->bus,
+        pdev->dev, pdev->func,
+        offset, 2
+    );
+}
 
-    // 通过父设备获取总线私有数据
-    if (!dev->parent || !dev->parent->driver_data)
-        return;
+/**
+ * 从 PCI 配置空间读取 8 位字节
+ *
+ * @param dev PCI 设备结构体
+ * @param offset 配置空间偏移
+ *
+ * @return 读取到的 8 位值，失败返回 0xFF
+ */
+uint8_t pci_config_read_byte(struct device *dev, uint16_t offset) {
+    struct pci_dev_priv *pdev = dev->driver_data;
+    if (!pdev)
+        return 0xFF;
 
-    priv = dev->parent->driver_data;
-
-    if (!pdev->msix_cap_offset)
-        return;
-
-    // 清除 Message Control 的 Enable 位
-    if (pci_ecam_read(
-            priv,
-            pdev->segment, pdev->bus,
-            pdev->dev, pdev->func,
-            pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, &ctrl
-        )
-    ) {
-        ctrl &= ~PCI_MSIX_CTRL_ENABLE_BIT;
-        pci_ecam_write(
-            priv,
-            pdev->segment, pdev->bus,
-            pdev->dev, pdev->func,
-            pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, ctrl
-        );
-    }
-
-    // 释放 MSI‑X 表映射
-    if (pdev->msix_table_virt) {
-        vheap_unmap_mmio(pdev->msix_table_virt);
-        pdev->msix_table_virt = NULL;
-    }
+    return (uint8_t)pci_config_read(
+        pdev->segment, pdev->bus,
+        pdev->dev, pdev->func,
+        offset, 1
+    );
 }
