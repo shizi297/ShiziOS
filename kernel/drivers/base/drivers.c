@@ -15,7 +15,7 @@
 #include <heap.h>
 #include <initcall.h>
 #include <task.h>
-#include <drivers/base/drivers.h>
+#include <drivers/drivers.h>
 
 #define DRIVERS_PRINT(fmt, ...) \
     printk("[DRIVERS] " fmt, ##__VA_ARGS__)
@@ -132,19 +132,6 @@ static void device_release(struct device *dev) {
 
     // 释放设备自身内存
     kheap_free(dev);
-}
-
-// 增加设备引用计数
-static inline void device_ref_get(struct device *dev) {
-    atomic_fetch_add(&dev->refcnt, 1);
-}
-
-// 减少设备引用计数，归零时释放设备
-static inline void device_ref_put(struct device *dev) {
-    if (atomic_fetch_sub(&dev->refcnt, 1) == 1) {
-        // 引用计数从 1 变为 0，释放设备
-        device_release(dev);
-    }
 }
 
 // 探测设备处理
@@ -337,6 +324,19 @@ struct file_operations *drivers_dev_find(dev_t dev, mode_t mode) {
         return *fops_ptr;
         
     return NULL;
+}
+
+// 增加设备引用计数
+void device_ref_get(struct device *dev) {
+    atomic_fetch_add(&dev->refcnt, 1);
+}
+
+// 减少设备引用计数，归零时释放设备
+void device_ref_put(struct device *dev) {
+    if (atomic_fetch_sub(&dev->refcnt, 1) == 1) {
+        // 引用计数从 1 变为 0，释放设备
+        device_release(dev);
+    }
 }
 
 // 分配一个新的主设备号，返回一个次设备号分配器
