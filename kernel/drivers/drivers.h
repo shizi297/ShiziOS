@@ -115,13 +115,19 @@ struct bus {
     struct list_head node;
     
    // 总线私有数据
-   void *priv;
+    void *priv;
 
     // 释放设备的驱动私有数据
     void (*free_device)(struct device *dev);
 };
 
 typedef struct drivers_minor_devt drivers_minor_devt;
+
+// 增加设备引用计数
+void device_ref_get(struct device *dev);
+
+// 减少设备引用计数，归零时释放设备
+void device_ref_put(struct device *dev); 
 
 // 分配一个新的主设备号，返回一个次设备号分配器
 drivers_minor_devt *drivers_major_alloc(void);
