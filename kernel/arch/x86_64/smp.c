@@ -185,46 +185,37 @@ void smp_data_init(
     SMP_PRINT("smp data init succeed\n");
 }
 
+// smp 初始化入口，负责切换栈后跳转真正的执行函数
+__attribute__((naked, noreturn))
+void smp_init(uint32_t logical_id, uint32_t apic_id) {
+    __asm__ volatile (
+        "movq    tss_ptr(%%rip), %%rax\n"
+        "movl    %%edi, %%ecx\n"
+        "imulq   $104, %%rcx, %%rcx\n"
+        "movq    4(%%rax,%%rcx), %%rsp\n"
+        "xorq    %%rbp, %%rbp\n"
+        "jmp     smp_init_raw\n"
+        :
+        :
+        : "rax", "rcx", "memory"
+    );
+}
+
 /*
  * 初始化所有核心
  *
  * @param logical_id 当前cpu的逻辑cpuid
  * @param apic_id 当前cpu的apicid
  */
-__attribute__((noreturn))
-void smp_init(uint32_t logical_id, uint32_t apic_id) {
-    // 获取当前cpu的栈
-    uint64_t new_stack_top = tss_ptr[logical_id].rsp0;
-
-    // 在新栈上预留空间并写入参数
-    new_stack_top -= 16;
-    __asm__ volatile(
-        "mov %1, 0(%0)\n\t"
-        "mov %2, 4(%0)"
-        : : "r"(new_stack_top), "r"(logical_id), "r"(apic_id)
-        : "memory"
-    );
-
-    // 切换栈
-    processor_set_stack(new_stack_top);
-
-    // 从当前栈读取参数
-    uint32_t new_logical_id, new_apic_id;
-    __asm__ volatile(
-        "mov 0(%%rsp), %0\n\t"
-        "mov 4(%%rsp), %1"
-        : "=r"(new_logical_id), "=r"(new_apic_id)
-        :
-        : "memory"
-    );
-
+__attribute__((noreturn, noinline, used))
+static void smp_init_raw(uint32_t logical_id, uint32_t apic_id) {
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
-    logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[new_logical_id] = new_apic_id;
+    logicalid_to_apicid_struct_ptr->logicalid_to_apicid_arr[logical_id] = apic_id;
 
     // 计算索引
-    uint64_t gdt_index = new_logical_id * GDT_ENTRY_COUNT;
-    uint64_t idt_index = new_logical_id * IDT_ENTRY_COUNT;
+    uint64_t gdt_index = logical_id * GDT_ENTRY_COUNT;
+    uint64_t idt_index = logical_id * IDT_ENTRY_COUNT;
 
     // 强制读取指针值
     uintptr_t gdt_base = (uintptr_t)gdt_ptr;
@@ -279,15 +270,15 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     __asm__ volatile("ltr %w0" : : "r"(tss_selector) : "memory");
 
     // 设置per_cpu的逻辑cpuid
-    per_cpu_ptr[new_logical_id].logical_id = new_logical_id;
+    per_cpu_ptr[logical_id].logical_id = logical_id;
 
     // 初始化canary
-    per_cpu_ptr[new_logical_id].cancry = 0x28;
+    per_cpu_ptr[logical_id].cancry = 0x28;
 
-    INIT_LIST_HEAD(&per_cpu_ptr[new_logical_id].migration);
+    INIT_LIST_HEAD(&per_cpu_ptr[logical_id].migration);
 
     // 设置当前cpu的gs到per_cpu
-    set_gs_base((uint64_t)&per_cpu_ptr[new_logical_id]);
+    set_gs_base((uint64_t)&per_cpu_ptr[logical_id]);
 
     // 开启中断
     irq_on();
@@ -296,7 +287,7 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     if (!apic_init()) SMP_PANIC("apic init failed\n");
 
     // 如果是bp，执行特定初始化
-    if (new_logical_id == bootboot->bspid) {
+    if (logical_id == bootboot->bspid) {
         if (!acpi_init()) SMP_PANIC("acpi init failed\n");
         if (!ioapic_init()) SMP_PANIC("ioacpi init failed\n");
         if (!pit_init()) SMP_PANIC("pit init failed\n");
@@ -324,7 +315,7 @@ void smp_init(uint32_t logical_id, uint32_t apic_id) {
     static atomic_bool bp_post_init = false;
 
     // 如果是bp，执行特定初始化
-    if (new_logical_id == bootboot->bspid) {
+    if (logical_id == bootboot->bspid) {
         if (!acpi_namespace_load()) SMP_PANIC("acpi namespace load failed\n");
         if (!acpi_namespace_init()) SMP_PANIC("acpi namespace init failed\n");
         if (!platform_dev_init()) SMP_PANIC("acpi init failed\n");
