@@ -1010,7 +1010,7 @@ bool task_init(void) {
 
 // 启动任务调度
 void task_run(void) {
-    TASK_PRINT("Start task scheduling");
+    TASK_PRINT("Start task scheduling\n");
 
     task_set_next_timer();
     task_boot_sched();
