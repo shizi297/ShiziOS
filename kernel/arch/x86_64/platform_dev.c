@@ -9,7 +9,7 @@
 #include <uacpi/namespace.h>
 #include <uacpi/utilities.h>
 #include <uacpi/uacpi.h>
-#include <drivers/base/drivers.h>
+#include <drivers/drivers.h>
 
 #define PLATFORM_DEV_PANIC(fmt, ...) \
     printp("[PLATFORM DEV] ERROR: " fmt, ##__VA_ARGS__)
@@ -35,7 +35,7 @@ struct platform_device {
  * @return true 成功获取一个 PCI 根桥的信息
  * @return false 没有更多根桥（或出错）
  */
-bool platform_next_get_info(void **iterator, char *hid, char *uid, uint16_t *seg) {
+static bool platform_next_get_info(void **iterator, char *hid, char *uid, uint16_t *seg) {
     if (!iterator) return false;
 
     // 获取 \_SB 节点
@@ -119,7 +119,7 @@ bool platform_next_get_info(void **iterator, char *hid, char *uid, uint16_t *seg
  * 
  * 调用者需要确保输出缓存区至少为 PLATFORM_NAME_BUF_SIZE
  */
-void platform_create_name(const char *hid, const char *uid, char *buf) {
+static void platform_create_name(const char *hid, const char *uid, char *buf) {
     size_t hid_len = strlen(hid);
     memcpy(buf, hid, hid_len);
     buf[hid_len] = ':';
@@ -134,7 +134,7 @@ void platform_create_name(const char *hid, const char *uid, char *buf) {
  *
  * 调用者需要确保输出缓存区至少为 PLATFORM_NAME_BUF_SIZE
  */
-void platform_name_to_hid(const char *name, char *buf) {
+static void platform_name_to_hid(const char *name, char *buf) {
     const char *colon = strchr(name, ':');
     size_t len = colon ? (size_t)(colon - name) : strlen(name);
     memcpy(buf, name, len);
@@ -161,6 +161,10 @@ static bool platform_match(struct device *dev, struct driver *drv) {
  */
 static void platform_free_device(struct device *dev) {
     struct platform_device *pdev = container_of(dev, struct platform_device, dev);
+    
+    // 释放设备名
+    kheap_free((void *)dev->name);
+    
     kheap_free(pdev);
 }
 
@@ -210,7 +214,7 @@ bool platform_dev_init(void) {
         pdev->dev.bus = &platform_bus_type;
         pdev->segment = seg;                 // 保存段组号，供主桥驱动使用
 
-        atomic_init(&pdev->dev.refcnt, 1);
+        atomic_init(&pdev->dev.refcnt, 0);
         INIT_LIST_HEAD(&pdev->dev.children);
         INIT_LIST_HEAD(&pdev->dev.sibling);
         INIT_LIST_HEAD(&pdev->dev.node);
