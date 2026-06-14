@@ -30,7 +30,7 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     KERNEL_PRINT("ShiziOS KERNEL v%s\n", KERNEL_VERSION);
 
     bp_logical_id = logical_id;
-    bp_apic_id = bp_apic_id;
+    bp_apic_id = apic_id;
 
     uint64_t bp_stack_top = (uint64_t)(bp_stack + INIT_STACK_BYTE) - 128;
 
