@@ -18,3 +18,11 @@ typedef int64_t ssize_t;
 
 // 设备号
 typedef uint32_t dev_t; 
+
+// 通用位宽类型
+typedef union {
+    uint8_t u8;
+    uint16_t u16;
+    uint32_t u32;
+    uint64_t u64;
+} word_t;
