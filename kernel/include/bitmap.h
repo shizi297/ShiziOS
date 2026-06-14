@@ -19,6 +19,15 @@ typedef uint8_t bitmap_t;
 #define BITMAP_BYTES(bits)  (((bits) + 7) / 8)
 
 /**
+ * 定义一个位图
+ * 
+ * @param name 变量名
+ * @param bits 位图的总位数
+ */
+#define DEFINE_BITMAP(name, bits) \
+    bitmap_t name[BITMAP_BYTES(bits)]
+
+/**
  * 初始化一个位图变量
  * 
  * @param name 变量名
