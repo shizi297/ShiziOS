@@ -10,6 +10,7 @@
 #include <heap.h>
 #include <initcall.h>
 #include <drivers/drivers.h>
+#include <bootboot.h>
 
 #define VIRTIO_PCI_CAP_ID 0x09
 
@@ -49,6 +50,11 @@ struct virtio_pci_cap64 {
     uint32_t length_hi;         // 长度的高 32 位
 } __attribute__((packed));
 
+struct virtio_pci_notify_cap {
+    struct virtio_pci_cap cap;
+    uint32_t notify_off_multiplier;
+};
+
 // VirtIO PCI 通用配置结构体
 struct virtio_pci_common {
     // 关于整个设备的字段
@@ -61,7 +67,7 @@ struct virtio_pci_common {
     volatile virtio_status_t device_status;     // 设备状态（读/写，写 0 复位）
     volatile uint8_t config_generation;         // 配置空间原子性保护（只读）
 
-    // 关于特定 virtqueue 的字段（需先写 queue_select）
+    // 关于特定 virtioqueue 的字段（需先写 queue_select）
     volatile uint16_t queue_select;             // 选择当前操作的队列索引
     volatile uint16_t queue_size;               // 队列大小（读/写，0 表示不可用）
     volatile uint16_t queue_msix_vector;        // 该队列的 MSI-X 向量
@@ -97,10 +103,14 @@ struct virtio_pci_device {
 // 传输层私有数据
 struct virtio_transport_priv {
     struct virtio_pci_common *common;        
-    struct virtio_pci_notify **notify;
+    struct virtio_pci_notify **notify;    
     uint32_t num_notify;  
     struct virtio_pci_isr *isr;      
     struct virtio_pci_device *device;       
+
+    uintptr_t notify_base;                  
+    uint32_t notify_multiplier;          
+    struct virtio_pci_notify **notify_by_vqn; 
 };
 
 // 单个 VirtIO PCI 能力条目
@@ -111,6 +121,7 @@ struct virtio_pci_cap_entry {
     uint64_t offset;     // BAR 内偏移
     uint64_t phys_addr;  // 物理地址
     void *virt_addr;     // 映射后的虚拟地址
+    uint8_t cap_len;
 };
 
 // 解析到的所有能力
@@ -126,13 +137,14 @@ struct virtio_pci_dev_priv {
 
 static struct device *virtio_pci_dev;
 static struct virtio_dev_ops ops; 
+static const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
 static int virtio_pci_probe(struct device *dev) {
     return virtio_probe(dev, &ops, virtio_pci_dev);
 }
 
 void virtio_pci_remove(struct device *dev) {
-    virtio_remove(dev);
+    virtio_remove(dev, virtio_pci_dev);
 }
 
 static const struct pci_device_id virtio_pci_id_table[] = {
@@ -201,6 +213,7 @@ static struct virtio_pci_caps *virtio_pci_parse_caps(struct device *dev) {
             dev, off + offsetof(struct virtio_pci_cap, cap_len)
         );
 
+        entry->cap_len = cap_len;
         entry->cfg_type = (virtio_pci_cfg_type_t)pci_config_read_byte(
             dev, off + offsetof(struct virtio_pci_cap, cfg_type)
         );
@@ -242,6 +255,15 @@ static struct virtio_pci_caps *virtio_pci_parse_caps(struct device *dev) {
 
         // 映射 MMIO
         entry->virt_addr = vheap_map_mmio(entry->phys_addr, length);
+        if (!entry->virt_addr) {
+            // 回滚已映射的条目
+            for (uint32_t j = 0; j < idx; j++) {
+                if (caps->caps[j].virt_addr)
+                    vheap_unmap_mmio(caps->caps[j].virt_addr);
+            }
+            kheap_free(caps);
+            return NULL;
+        }
 
         // 读取 cap_next 以继续遍历
         off = pci_config_read_byte(
@@ -257,12 +279,23 @@ static struct virtio_pci_caps *virtio_pci_parse_caps(struct device *dev) {
     return caps;
 }
 
-static bool virtio_pci_ops_init(struct device *dev) {
-    // 分配设备私有数据
-    struct virtio_dev_priv *priv = kheap_alloc(sizeof(*priv));
-    if (!priv)
-        return false;
+static struct virtio_dev_priv *virtio_pci_ops_init(struct device *dev) {
+    struct virtio_dev_priv *priv = NULL;
+    struct virtio_pci_caps *caps = NULL;
+    struct virtio_pci_common *common = NULL;
+    struct virtio_pci_notify **notify_array = NULL;
+    uint32_t num_notify = 0;
+    struct virtio_pci_isr *isr = NULL;
+    struct virtio_pci_device *device_cfg = NULL;
+    struct virtio_transport_priv *ctx = NULL;
+    uintptr_t notify_base = 0;
+    uint32_t notify_multiplier = 0;
+    bool found_mmio_notify = false;
 
+    // 分配设备私有数据
+    priv = kheap_alloc(sizeof(*priv));
+    if (!priv)
+        goto out;
     memset(priv, 0, sizeof(*priv));
 
     priv->pdev = dev;
@@ -271,40 +304,25 @@ static bool virtio_pci_ops_init(struct device *dev) {
     priv->type = pci_get_device_id(dev) - VIRTIO_PCI_DEVICE_ID_START;
 
     // 解析能力列表
-    struct virtio_pci_caps *caps = virtio_pci_parse_caps(dev);
-    if (!caps) {
-        kheap_free(priv);
-        return false;
-    }
-
-    // 提取配置区域的 MMIO 基址
-    struct virtio_pci_common *common = NULL;
-    struct virtio_pci_notify **notify_array = NULL;
-    uint32_t num_notify = 0;
-    struct virtio_pci_isr *isr = NULL;
-    struct virtio_pci_device *device_cfg = NULL;
+    caps = virtio_pci_parse_caps(dev);
+    if (!caps)
+        goto free_priv;
 
     // 第一次遍历：统计 Notify 条目数量
     for (uint32_t i = 0; i < caps->count; i++) {
-        struct virtio_pci_cap_entry *entry = &caps->caps[i];
-
-        if (entry->cfg_type == VIRTIO_PCI_CFG_NOTIFY)
+        if (caps->caps[i].cfg_type == VIRTIO_PCI_CFG_NOTIFY)
             num_notify++;
     }
 
     // 分配 Notify 数组
     if (num_notify > 0) {
         notify_array = kheap_alloc(num_notify * sizeof(struct virtio_pci_notify *));
-        if (!notify_array) {
-            kheap_free(caps);
-            kheap_free(priv);
-            return false;
-        }
-
+        if (!notify_array)
+            goto unmap_mmio;
         memset(notify_array, 0, num_notify * sizeof(struct virtio_pci_notify *));
     }
 
-    // 第二次遍历：填充各区域
+    // 第二次遍历：填充各配置区域，并记录主通知区域信息
     for (uint32_t i = 0; i < caps->count; i++) {
         struct virtio_pci_cap_entry *entry = &caps->caps[i];
 
@@ -316,6 +334,17 @@ static bool virtio_pci_ops_init(struct device *dev) {
             case VIRTIO_PCI_CFG_NOTIFY:
                 if (entry->id < num_notify)
                     notify_array[entry->id] = entry->virt_addr;
+
+                // 选择第一个 MMIO BAR 的 Notify 能力作为主通知区域
+                if (!found_mmio_notify && (dev->res[entry->bar].flags & IORESOURCE_MEM)) {
+                    // 获取乘数
+                    struct virtio_pci_notify_cap *notify_cap = 
+                        (struct virtio_pci_notify_cap *)entry->virt_addr;
+
+                    notify_base = (uintptr_t)entry->virt_addr;
+                    notify_multiplier = notify_cap->notify_off_multiplier;
+                    found_mmio_notify = true;
+                }
                 break;
             case VIRTIO_PCI_CFG_ISR:
                 if (entry->id == 0)
@@ -330,14 +359,13 @@ static bool virtio_pci_ops_init(struct device *dev) {
         }
     }
 
-    if (!common || !notify_array) {
-        if (notify_array)
-            kheap_free(notify_array);
+    // 必须找到 Common 配置区域和至少一个 Notify 区域
+    if (!common || !notify_array)
+        goto free_notify;
 
-        kheap_free(caps);
-        kheap_free(priv);
-        return false;
-    }
+    // 必须找到 MMIO BAR 的 Notify 能力，否则无法继续
+    if (!found_mmio_notify)
+        goto free_notify;
 
     // 读取设备特性位图
     common->device_feature_select = 0;
@@ -347,17 +375,12 @@ static bool virtio_pci_ops_init(struct device *dev) {
     uint64_t dev_features = ((uint64_t)dev_hi << 32) | dev_lo;
 
     // 检查必须支持的能力
-    if ((dev_features & VIRTIO_REQUIRED_CAPS) != VIRTIO_REQUIRED_CAPS) {
-        kheap_free(notify_array);
-        kheap_free(caps);
-        kheap_free(priv);
-        return false;
-    }
+    if ((dev_features & VIRTIO_REQUIRED_CAPS) != VIRTIO_REQUIRED_CAPS)
+        goto free_notify;
 
     // 计算驱动特性
     uint64_t driver_features = 
-        VIRTIO_REQUIRED_CAPS |
-        (dev_features & ~VIRTIO_FORBIDDEN_FEATURES);
+        VIRTIO_REQUIRED_CAPS | (dev_features & ~VIRTIO_FORBIDDEN_FEATURES);
 
     // 写回硬件
     common->driver_feature_select = 0;
@@ -365,33 +388,50 @@ static bool virtio_pci_ops_init(struct device *dev) {
     common->driver_feature_select = 1;
     common->driver_feature = (uint32_t)(driver_features >> 32);
 
-    // 重读确认最终协商结果
-    common->device_feature_select = 0;
-    dev_lo = common->device_feature;
-    common->device_feature_select = 1;
-    dev_hi = common->device_feature;
-    priv->features = ((uint64_t)dev_hi << 32) | dev_lo;
+    // 保存协商结果
+    priv->features = driver_features;
 
     // 构建传输层上下文
-    struct virtio_transport_priv *ctx = kheap_alloc(sizeof(*ctx));
-    if (!ctx) {
-        kheap_free(notify_array);
-        kheap_free(caps);
-        kheap_free(priv);
-        return false;
-    }
+    ctx = kheap_alloc(sizeof(*ctx));
+    if (!ctx)
+        goto free_notify;
 
     ctx->common = common;
     ctx->notify = notify_array;
     ctx->num_notify = num_notify;
     ctx->isr = isr;
     ctx->device = device_cfg;
+    ctx->notify_base = notify_base;
+    ctx->notify_multiplier = notify_multiplier;
+
+    // 分配按 vqn 索引的通知地址数组，大小为 CPU 核心数
+    ctx->notify_by_vqn = kheap_alloc(bootboot->numcores * sizeof(struct virtio_pci_notify *));
+    if (!ctx->notify_by_vqn)
+        goto free_ctx;
+    memset(ctx->notify_by_vqn, 0, bootboot->numcores * sizeof(struct virtio_pci_notify *));
 
     priv->transport_priv = ctx;
 
     // 清理能力列表
     kheap_free(caps);
-    return true;
+    return priv;
+
+free_ctx:
+    kheap_free(ctx);
+free_notify:
+    kheap_free(notify_array);
+unmap_mmio:
+    if (caps) {
+        for (uint32_t i = 0; i < caps->count; i++) {
+            if (caps->caps[i].virt_addr)
+                vheap_unmap_mmio(caps->caps[i].virt_addr);
+        }
+        kheap_free(caps);
+    }
+free_priv:
+    kheap_free(priv);
+out:
+    return NULL;
 }
 
 static void virtio_pci_ops_destroy(struct device *dev) {
@@ -403,13 +443,17 @@ static void virtio_pci_ops_destroy(struct device *dev) {
 
     // 释放 Notify 数组
     if (ctx->notify) {
-        struct virtio_pci_notify **notify_array = (struct virtio_pci_notify **)ctx->notify;
         for (uint32_t i = 0; i < ctx->num_notify; i++) {
-            if (notify_array[i])
-                vheap_unmap_mmio((void *)notify_array[i]);
+            if (ctx->notify[i])
+                vheap_unmap_mmio((void *)ctx->notify[i]);
         }
+        kheap_free(ctx->notify);
+    }
 
-        kheap_free(notify_array);
+    // 释放按 vqn 索引的通知地址数组
+    if (ctx->notify_by_vqn) {
+        kheap_free(ctx->notify_by_vqn);
+        ctx->notify_by_vqn = NULL;
     }
 
     // 释放 MMIO 映射
@@ -421,8 +465,7 @@ static void virtio_pci_ops_destroy(struct device *dev) {
         vheap_unmap_mmio((void *)ctx->device);
 
     kheap_free(ctx);
-    kheap_free(priv);
-    dev->driver_data = NULL;
+    priv->transport_priv = NULL;
 }
 
 static virtio_status_t virtio_pci_ops_get_status(struct device *dev) {
@@ -445,20 +488,20 @@ static void virtio_pci_ops_read_device_config(
 ) {
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtio_transport_priv *ctx = priv->transport_priv;
-    struct virtio_pci_device *base = ctx->device + offset;
+    volatile word_t *val = (volatile word_t *)(&ctx->device->val.u8 + offset);
 
     switch (len) {
         case 1:
-            buf->u8 = base->val.u8;
+            buf->u8 = val->u8;
             break;
         case 2:
-            buf->u16 = base->val.u16;
+            buf->u16 = val->u16;
             break;
         case 4:
-            buf->u32 = base->val.u32;
+            buf->u32 = val->u32;
             break;
         case 8:
-            buf->u64 = base->val.u64;
+            buf->u64 = val->u64;
             break;
         default:
             break;
@@ -473,20 +516,20 @@ static void virtio_pci_ops_write_device_config(
 ) {
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtio_transport_priv *ctx = priv->transport_priv;
-    struct virtio_pci_device *base = ctx->device + offset;
+    volatile word_t *val = (volatile word_t *)(&ctx->device->val.u8 + offset);
 
     switch (len) {
         case 1:
-            base->val.u8 = buf->u8;
+            val->u8 = buf->u8;
             break;
         case 2:
-            base->val.u16 = buf->u16;
+            val->u16 = buf->u16;
             break;
         case 4:
-            base->val.u32 = buf->u32;
+            val->u32 = buf->u32;
             break;
         case 8:
-            base->val.u64 = buf->u64;
+            val->u64 = buf->u64;
             break;
         default:
             break;
@@ -503,13 +546,12 @@ static bool virtio_pci_ops_set_vq(
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtio_transport_priv *ctx = priv->transport_priv;
 
-    if (index >= ctx->num_notify)
+    if (index >= ctx->common->num_queues)
         return false;
 
     // 选择队列
     ctx->common->queue_select = index;
 
-    // 检查队列大小是否合法
     if (vq->size > ctx->common->queue_size)
         return false;
 
@@ -528,22 +570,49 @@ static bool virtio_pci_ops_set_vq(
     // 启用队列
     ctx->common->queue_enable = 1;
 
-    // 保存队列索引供 notify 使用
+    if (!ctx->common->queue_enable)
+        goto err_free_msix;
+
     vq->queue_index = index;
+    vq->queue_notify_data = ctx->common->queue_notify_data;
+    vq->notify_default_idx = ctx->common->queue_notify_off;
+
+    // 读取当前队列的通知偏移量并计算通知地址
+    uint16_t off = ctx->common->queue_notify_off;
+    uintptr_t addr = ctx->notify_base + off * ctx->notify_multiplier;
+    ctx->notify_by_vqn[index] = (struct virtio_pci_notify *)addr;
 
     return true;
+
+err_free_msix:
+    pci_msix_free_vector(priv->pdev, msix);
+    return false;
 }
 
-static void virtio_pci_ops_notify(struct device *dev, struct virtioqueue *vq, int data) {
+static void virtio_pci_ops_notify(struct virtioqueue *vq, struct device *dev, uint64_t data) {
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtio_transport_priv *ctx = priv->transport_priv;
-    struct virtio_pci_notify *notify = ctx->notify[vq->queue_index];
+    uint32_t hw_data;
+    uint8_t flag;
+    uint16_t vqn;
+    uint16_t off;
+    uint8_t wrap;
 
-    if (data == -1) {
-        notify->notify16 = vq->queue_index;
-    } else {
-        notify->notify32 = (uint32_t)data;
-    }
+    VIRTIO_UNPACK_NOTIFICATION_DATA(data, hw_data, flag);
+    VIRTIO_UNPACK_NOTIFICATION_DATA32(hw_data, vqn, off, wrap);
+
+    // vqn 不能超过 CPU 核心数
+    if (vq->queue_index >= bootboot->numcores)
+        return;
+
+    struct virtio_pci_notify *notify = ctx->notify_by_vqn[vq->queue_index];
+    if (!notify)
+        return;
+
+    if (flag == 0)
+        notify->notify16 = vqn;
+    else
+        notify->notify32 = hw_data;
 }
 
 static struct virtio_dev_ops ops = {
@@ -563,9 +632,20 @@ void virtio_pci_init(void) {
     INIT_LIST_HEAD(&virtio_bus_type.drivers);
     INIT_LIST_HEAD(&virtio_bus_type.node);
 
-    // 注册 VirtIO 总线(用于后续虚拟节点挂载)
-    if (!drivers_add_bus(&virtio_bus_type))
+    // 分配并初始化 VirtIO 总线私有数据
+    struct virtio_bus_priv *bus_priv = kheap_alloc(sizeof(*bus_priv));
+    if (!bus_priv)
         return;
+
+    bus_priv->ops = &ops;
+    virtio_bus_type.priv = bus_priv;
+
+    // 注册 VirtIO 总线(用于后续虚拟节点挂载)
+    if (!drivers_add_bus(&virtio_bus_type)) {
+        kheap_free(bus_priv);
+        virtio_bus_type.priv = NULL;
+        return;
+    }
 
     // 创建全局控制器设备
     struct device *dev = kheap_alloc(sizeof(*dev));
@@ -588,6 +668,9 @@ void virtio_pci_init(void) {
 
     // 此时全局指针指向当前 dev，增加引用
     device_ref_get(virtio_pci_dev);
+
+    // 注册到驱动框架
+    drivers_add_device(virtio_pci_dev);
 
     // 注册 virtio-pci PCI 驱动
     drivers_add_driver(&virtio_pci_driver);
