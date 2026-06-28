@@ -767,7 +767,7 @@ static bool pci_get_bar_info(
     bool is_io = (bar_low & 1);
     *flags = is_io ? IORESOURCE_IO : IORESOURCE_MEM;
 
-    // 获取低 32 位掩码（通过写全 1 读回）
+    // 获取低 32 位掩码
     if (!pci_get_bar_mask(priv, pdev, offset_low, bar_low, &mask_low))
         return false;
 
@@ -789,18 +789,16 @@ static bool pci_get_bar_info(
         // 组合 64 位掩码
         bar_mask = ((uint64_t)mask_high << 32) | mask_low;
 
-        /*
-         * 64 位 MMIO BAR 的低 4 位是硬编码的标志位
-         * 不是地址掩码
-         * 强制置 1 以保证 size 正确对齐到 16 字节 
-         */
-        bar_mask |= PCI_BAR_MEM_LOW_MASK;
+        // 低位是只读标志位，不属于地址空间，计算前清除
+        bar_mask &= ~0xFULL;
 
         // 掩码为全 1 表示 BAR 无效
-        if (bar_mask == PCI_BAR_MASK_64BIT_ALL)
+        if (bar_mask == 0xFFFFFFFFFFFFFFFFULL) {
             *size = 0;
-        else
-            *size = ~bar_mask + 1;      // 地址掩码转大小
+            return false;
+        }
+
+        *size = ~bar_mask + 1;      // 地址掩码转大小
 
         if (*size == 0)
             return false;
@@ -808,18 +806,30 @@ static bool pci_get_bar_info(
         /*
          * 计算 PCI 设备 64 位 MMIO BAR 的物理基址
          * 高 32 位左移
-         * 低 32 位去掉低 4 位标志（MMIO 需要 16 字节对齐）
+         * 低 32 位去掉低 4 位标志
          */
         *base = ((uint64_t)bar_high << 32) | (bar_low & PCI_BAR_MEM_MASK);
     } else {
         // 32 位 BAR
-        bar_mask = mask_low;
+        uint32_t bar_mask32 = mask_low;
+
+        // 清除低位标志位
+        if (is_io) {
+            // I/O BAR：低 2 位是标志位，不属于地址空间
+            bar_mask32 &= ~0x3U;
+        } else {
+            // MMIO BAR：低 4 位是标志位，不属于地址空间
+            bar_mask32 &= ~0xFU;
+        }
 
         // 掩码为 0 或全 1 表示 BAR 无效
-        if (bar_mask == 0 || bar_mask == PCI_BAR_MASK_32BIT_ALL)
+        if (bar_mask32 == 0 || bar_mask32 == 0xFFFFFFFFU) {
             *size = 0;
-        else
-            *size = ~bar_mask + 1;
+            return false;
+        }
+
+        // 计算 32 位大小，转换为 64 位（高 32 位自动为 0）
+        *size = (uint64_t)(~bar_mask32 + 1U);
 
         if (*size == 0)
             return false;
@@ -855,6 +865,7 @@ static void pci_parse_bars(
     struct pci_dev_priv *pdev
 ) {
     bool reserved[PCI_MAX_BARS] = {0};
+    int bar_count = 0;
 
     for (int i = 0; i < PCI_MAX_BARS; i++) {
         if (reserved[i])
@@ -896,15 +907,18 @@ static void pci_parse_bars(
             pdev->bars[i].start = base;
             pdev->bars[i].end = base + size - 1;
             pdev->bars[i].flags = flags;
+            bar_count++;
 
-            // 64 位 BAR 占用两个索引，跳过下一个
+            // 64 位 BAR 占用两个索引，标记下一个为已保留
             if (is_64bit && (i + 1 < PCI_MAX_BARS))
                 reserved[i + 1] = true;
         }
     }
 
+    // 将解析到的 BAR 信息传递给设备
     dev->res = pdev->bars;
-    dev->num_res = PCI_MAX_BARS;
+    dev->num_res = bar_count;
+    pdev->num_bars = bar_count;
 }
 
 /**
@@ -1061,6 +1075,12 @@ static void pci_parse_msix_capability(
     pdev->msix_bitmap = kheap_alloc(BITMAP_BYTES(pdev->msix_vectors));
     if (pdev->msix_bitmap)
         bitmap_zero(pdev->msix_bitmap, pdev->msix_vectors);
+
+    // 映射 MSI‑X 表到虚拟地址
+    if (pdev->msix_table_bir < PCI_MAX_BARS) {
+        uint64_t table_phys = pdev->bars[pdev->msix_table_bir].start + pdev->msix_table_offset;
+        pdev->msix_table_virt = vheap_map_mmio(table_phys, pdev->msix_table_size);
+    }
 }
 
 /**
@@ -1650,6 +1670,25 @@ int pci_msix_alloc_vector(
     entry_addr = (uintptr_t)pdev->msix_table_virt + index * 16;
     *(volatile uint64_t *)entry_addr = msg.addr;
     *(volatile uint32_t *)(entry_addr + 8) = msg.data;
+
+    // 设置 MSI‑X Enable 位
+    if (pdev->msix_cap_offset) {
+        uint32_t ctrl;
+        struct pci_bus_dev_priv *bus_priv = dev->parent->driver_data;
+        if (bus_priv) {
+            pci_ecam_read(
+                bus_priv,
+                pdev->segment, pdev->bus, pdev->dev, pdev->func,
+                pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, &ctrl
+            );
+            ctrl |= PCI_MSIX_CTRL_ENABLE_BIT;
+            pci_ecam_write(
+                bus_priv,
+                pdev->segment, pdev->bus, pdev->dev, pdev->func,
+                pdev->msix_cap_offset + PCI_MSIX_CTRL_OFFSET, 2, ctrl
+            );
+        }
+    }
 
     return (int)index;
 }
