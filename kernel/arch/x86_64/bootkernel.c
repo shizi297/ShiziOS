@@ -53,22 +53,17 @@ uint32_t xsaves_size = 0;
 // logical_id_raw是bootboot引导传的当前逻辑cpuid
 __attribute__((noreturn))
 void _start(uint64_t logical_id_raw) {
+    irq_off();
+    
     uint32_t logical_id = (uint32_t)logical_id_raw;
     uint32_t apic_id = 0;
     bool bpcpu_logical_flag = false;
     
     const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
-    // bootboot在加载内核前已经初始化串口，这里不初始化
+    serial_smp_init();
 
-    irq_off();
-
-    spin_lock(&boot_init_spin);
     apic_boot_init();
-    if (!boot_init) {
-        boot_init = true;
-    }
-    spin_unlock(&boot_init_spin);
 
     apic_id = apic_get_id();
 
