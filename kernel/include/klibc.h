@@ -29,6 +29,24 @@
 // 判断指针是否为NULL或错误指针
 #define IS_ERR_OR_NULL(ptr) (!(ptr) || IS_ERR(ptr))
 
+#define CONCAT(a, b) a##b
+
+#define BITS_PER_BYTE           8
+#define BITS_PER_LONG           (sizeof(unsigned long) * BITS_PER_BYTE)
+#define BITS_PER_LONG_LONG      (sizeof(unsigned long long) * BITS_PER_BYTE)
+
+#define BIT(n)                  (1UL << (n))
+#define BIT_ULL(n)              (1ULL << (n))
+
+#define BIT_MASK(n)             BIT(n)
+#define BIT_WORD(n)             ((n) / BITS_PER_LONG)
+
+#define GENMASK(h, l) \
+    (((~0UL) - BIT(l) + 1) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
+
+#define GENMASK_ULL(h, l) \
+    (((~0ULL) - BIT_ULL(l) + 1) & (~0ULL >> (BITS_PER_LONG_LONG - 1 - (h))))
+
 #define container_of(ptr, type, member) __extension__ ({ \
 	const __typeof__(((type *)0)->member) *__pmember = (ptr); \
 	(type *)((char *)__pmember - offsetof(type, member)); })
