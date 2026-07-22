@@ -483,25 +483,26 @@ static void virtio_pci_ops_set_status(struct device *dev, virtio_status_t status
 static void virtio_pci_ops_read_device_config(
     struct device *dev, 
     uint32_t offset, 
-    word_t *buf, 
+    void *buf, 
     size_t len
 ) {
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtio_transport_priv *ctx = priv->transport_priv;
     volatile word_t *val = (volatile word_t *)(&ctx->device->val.u8 + offset);
+    word_t *_buf = (word_t *)buf;
 
     switch (len) {
         case 1:
-            buf->u8 = val->u8;
+            _buf->u8 = val->u8;
             break;
         case 2:
-            buf->u16 = val->u16;
+            _buf->u16 = val->u16;
             break;
         case 4:
-            buf->u32 = val->u32;
+            _buf->u32 = val->u32;
             break;
         case 8:
-            buf->u64 = val->u64;
+            _buf->u64 = val->u64;
             break;
         default:
             break;
@@ -509,31 +510,42 @@ static void virtio_pci_ops_read_device_config(
 }
 
 static void virtio_pci_ops_write_device_config(
-    struct device *dev, 
-    uint32_t offset, 
-    const word_t *buf, 
+    struct device *dev,
+    uint32_t offset,
+    const void *buf,
     size_t len
 ) {
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtio_transport_priv *ctx = priv->transport_priv;
     volatile word_t *val = (volatile word_t *)(&ctx->device->val.u8 + offset);
+    const word_t *_buf = (const word_t *)buf;
 
     switch (len) {
         case 1:
-            val->u8 = buf->u8;
+            val->u8 = _buf->u8;
             break;
         case 2:
-            val->u16 = buf->u16;
+            val->u16 = _buf->u16;
             break;
         case 4:
-            val->u32 = buf->u32;
+            val->u32 = _buf->u32;
             break;
         case 8:
-            val->u64 = buf->u64;
+            val->u64 = _buf->u64;
             break;
         default:
             break;
     }
+}
+
+static void virtio_pci_ops_write_features(struct device *dev, uint64_t features) {
+    struct virtio_dev_priv *priv = dev->driver_data;
+    struct virtio_transport_priv *ctx = priv->transport_priv;
+
+    ctx->common->driver_feature_select = 0;
+    ctx->common->driver_feature = (uint32_t)features;
+    ctx->common->driver_feature_select = 1;
+    ctx->common->driver_feature = (uint32_t)(features >> 32);
 }
 
 static bool virtio_pci_ops_set_vq(
@@ -622,6 +634,7 @@ static struct virtio_dev_ops ops = {
     .set_status = virtio_pci_ops_set_status,
     .read_device_config = virtio_pci_ops_read_device_config,
     .write_device_config = virtio_pci_ops_write_device_config,
+    .write_features = virtio_pci_ops_write_features,
     .set_vq = virtio_pci_ops_set_vq,
     .notify = virtio_pci_ops_notify,
 };

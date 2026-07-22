@@ -31,26 +31,6 @@
         (wrap) = (uint8_t)(((hw_data) >> 31) & 1); \
     } while(0)
 
-// 通用特性
-#define VIRTIO_F_NOTIFY_ON_EMPTY    24   // Legacy 专用，队列非空变空时通知
-#define VIRTIO_F_RESERVED_25        25   // 保留
-#define VIRTIO_F_RESERVED_26        26   // 保留
-#define VIRTIO_F_ANY_LAYOUT         27   // Legacy 专用，接受任意描述符布局
-#define VIRTIO_F_INDIRECT_DESC      28   // 支持间接描述符表
-#define VIRTIO_F_EVENT_IDX          29   // 支持抑制通知
-#define VIRTIO_F_UNUSED_30          30   // 未使用，禁止协商
-#define VIRTIO_F_RESERVED_31        31   // 保留
-#define VIRTIO_F_VERSION_1          32   // 符合 1.0 及以上规范，区分 legacy
-#define VIRTIO_F_ACCESS_PLATFORM    33   // 设备可能受平台限制，驱动必须接受但是不一定要使用
-#define VIRTIO_F_RING_PACKED        34   // 使用 Packed Ring 队列布局
-#define VIRTIO_F_IN_ORDER           35   // 设备按驱动提交顺序使用缓冲区
-#define VIRTIO_F_ORDER_PLATFORM     36   // 需要平台强内存顺序屏障
-#define VIRTIO_F_SR_IOV             37   // 支持单根虚拟化
-#define VIRTIO_F_NOTIFICATION_DATA  38   // 驱动通知时携带额外数据
-#define VIRTIO_F_NOTIF_CONFIG_DATA  39   // 设备提供 per_vq 通知数据
-#define VIRTIO_F_RING_RESET         40   // 支持单独重置 virtioqueue
-#define VIRTIO_F_START              VIRTIO_F_NOTIFY_ON_EMPTY
-#define VIRTIO_F_END                VIRTIO_F_RING_RESET
 #define VIRTIO_FEATURES_BITS        VIRTIO_F_END - VIRTIO_F_START + 1
 
 #define VIRTIO_DESC_SIZE      sizeof(struct virtio_desc)
@@ -137,6 +117,8 @@ struct virtioqueue {
 
     uint16_t last_used_idx;     // 最后处理的 used 条目
     struct virtio_desc *desc;   // 描述符表虚拟地址
+
+    void **caller_data; // 用于存储驱动私有数据
 
     // Split Ring 专用
     struct {
@@ -261,21 +243,6 @@ struct virtio_feature_ops {
     );
 
     /**
-     * 将请求上下文保存到描述符的私有数据区
-     *
-     * @param vq 队列指针
-     * @param desc_idx 描述符链头索引
-     * @param last_idx 最后一个数据描述符索引
-     * @param req 驱动上下文指针，回收时原样返回
-     */
-    void (*set_req)(
-        struct virtioqueue *vq,
-        uint16_t desc_idx,
-        uint16_t last_idx,
-        void *req
-    );
-
-    /**
      * 回收请求项
      *
      * @param vq 队列指针
@@ -345,6 +312,7 @@ struct virtio_dev_priv {
     uint16_t type;  // 设备类型
     struct virtio_feature_ops feature_ops;
     struct virtio_transport_priv *transport_priv;    // 传输层私有数据
+    void *driver_data;  // 驱动私有数据
 };
 
 struct virtio_dev_ops {
@@ -355,15 +323,16 @@ struct virtio_dev_ops {
     void (*read_device_config)(
         struct device *dev, 
         uint32_t offset, 
-        word_t *buf, 
+        void *buf, 
         size_t len
     ); // 从设备配置空间读取数据
     void (*write_device_config)(
         struct device *dev, 
         uint32_t offset, 
-        const word_t *buf, 
+        const void *buf, 
         size_t len
     );  // 向设备配置空间写入数据
+    void (*write_features)(struct device *dev, uint64_t features);  // 写入特性
     bool (*set_vq)(
         struct device *dev, 
         uint32_t index, 
@@ -373,12 +342,6 @@ struct virtio_dev_ops {
     );    // 设置 virtioqueue
     void (*notify)(struct virtioqueue *vq, struct device *dev, uint64_t data);   // 通知设备 virtioqueue 中有新的请求
 };
-
-struct virtio_device_id{
-    uint32_t type;
-};
-
-extern struct bus virtio_bus_type;
 
 int virtio_probe(struct device *dev, struct virtio_dev_ops *ops, struct device *parent);
 void virtio_remove(struct device *phys_dev, struct device *virtio_root);

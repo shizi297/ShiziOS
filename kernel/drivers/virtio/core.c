@@ -219,9 +219,10 @@ static void split_fill_desc(
     struct virtio_desc *desc = vq->desc;
     struct virtio_desc *base_desc;
     uint32_t total = out + in;
+    bool is_indirect = desc[desc_idx].split.flags & VIRTQ_DESC_F_INDIRECT;
 
     // 间接描述符，数据写入间接表
-    if (desc[desc_idx].split.flags & VIRTQ_DESC_F_INDIRECT) {
+    if (is_indirect) {
         base_desc = (struct virtio_desc *)PHYS_TO_LINEAR(desc[desc_idx].addr);
     } else {
         // 直接描述符，数据写入描述符环
@@ -230,68 +231,41 @@ static void split_fill_desc(
 
     uint16_t cur = desc_idx;
 
-    // 填充 Device-readable 缓冲区
-    for (uint32_t i = 0; i < out; i++) {
-        if (desc[desc_idx].split.flags & VIRTQ_DESC_F_INDIRECT) {
-            // 间接表使用连续索引 i
-            base_desc[i].addr = sg[i].addr;
-            base_desc[i].len = sg[i].length;
-            base_desc[i].split.flags = VIRTQ_DESC_F_NEXT;
+    // 填充所有协议描述符
+    for (uint32_t i = 0; i < total; i++) {
+        struct virtio_desc *target;
+
+        if (is_indirect) {
+            target = &base_desc[i];
         } else {
-            base_desc[cur].addr = sg[i].addr;
-            base_desc[cur].len = sg[i].length;
-            base_desc[cur].split.flags = VIRTQ_DESC_F_NEXT;
-            cur = base_desc[cur].split.next;
+            target = &base_desc[cur];
+            cur = target->split.next;
+        }
+
+        target->addr = sg[i].addr;
+        target->len = sg[i].length;
+
+        if (i < out) {
+            target->split.flags = VIRTQ_DESC_F_NEXT;
+        } else {
+            target->split.flags = VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT;
         }
     }
 
-    // 填充 Device-writable 缓冲区
-    for (uint32_t i = out; i < total; i++) {
-        if (desc[desc_idx].split.flags & VIRTQ_DESC_F_INDIRECT) {
-            base_desc[i].addr = sg[i].addr;
-            base_desc[i].len = sg[i].length;
-            base_desc[i].split.flags = VIRTQ_DESC_F_WRITE;
-            if (i < total - 1)
-                base_desc[i].split.flags |= VIRTQ_DESC_F_NEXT;
-        } else {
-            base_desc[cur].addr = sg[i].addr;
-            base_desc[cur].len = sg[i].length;
-            base_desc[cur].split.flags = VIRTQ_DESC_F_WRITE;
-            if (i < total - 1)
-                base_desc[cur].split.flags |= VIRTQ_DESC_F_NEXT;
-            cur = base_desc[cur].split.next;
-        }
+    // 最后一个协议描述符的 next 置 0，表示链结束
+    if (is_indirect) {
+        base_desc[total - 1].split.next = 0;
+    } else {
+        base_desc[cur].split.next = 0;
     }
 
     // 确保描述符内容写入完成后，再更新 avail_idx
     atomic_thread_fence(memory_order_release);
 
+    // 更新 available ring
     uint16_t idx = vq->split.avail->idx;
     vq->split.avail->ring[idx % vq->size] = desc_idx;
     vq->split.avail->idx = idx + 1;
-}
-
-static void split_set_req(
-    struct virtioqueue *vq,
-    uint16_t desc_idx,
-    uint16_t last_idx,
-    void *req
-) {
-    // 间接描述符，req 保存在间接表的最后一个槽位
-    if (vq->desc[desc_idx].split.flags & VIRTQ_DESC_F_INDIRECT) {
-        struct virtio_desc *indirect = (struct virtio_desc *)PHYS_TO_LINEAR(vq->desc[desc_idx].addr);
-        indirect[last_idx].addr = (uint64_t)(uintptr_t)req;
-        indirect[last_idx].len = 0;
-        indirect[last_idx].split.flags = 0;
-        indirect[last_idx].split.next = 0;
-        return;
-    }
-
-    // 将 caller_data 存储在额外槽位的 addr 字段
-    vq->desc[last_idx].addr = (uint64_t)(uintptr_t)req;
-    vq->desc[last_idx].len = 0;
-    vq->desc[last_idx].split.flags = 0; // flags = 0, 设备不会使用这个条目
-    vq->desc[last_idx].split.next = 0;
 }
 
 static void *split_recycle(struct virtioqueue *vq) {
@@ -305,33 +279,28 @@ static void *split_recycle(struct virtioqueue *vq) {
     // 获取已完成描述符的编号
     uint16_t desc_id = vq->split.used->ring[vq->last_used_idx % vq->size].id;
 
-    // 间接描述符，遍历间接表取回 caller_data，释放间接表内存
+    // 从独立数组中取出 caller_data
+    void *caller_data = vq->caller_data[desc_id];
+    vq->caller_data[desc_id] = NULL;
+
+    // 间接描述符：释放间接表，归还主描述符
     if (vq->desc[desc_id].split.flags & VIRTQ_DESC_F_INDIRECT) {
         struct virtio_desc *indirect = (struct virtio_desc *)PHYS_TO_LINEAR(vq->desc[desc_id].addr);
-        uint16_t cur = 0;
-        while (indirect[cur].split.flags & VIRTQ_DESC_F_NEXT)
-            cur++;
-
-        void *caller_data = (void *)(uintptr_t)indirect[cur].addr;
-
         kheap_free(indirect);
         vq->desc[desc_id].split.next = vq->split.free_desc;
         vq->split.free_desc = desc_id;
-        vq->last_used_idx++;
-        return caller_data;
+    } else {
+        // 直接描述符：将整个描述符链归还到空闲链表
+        struct virtio_desc *desc = vq->desc;
+        uint16_t cur = desc_id;
+
+        // 遍历到链末尾
+        while (desc[cur].split.flags & VIRTQ_DESC_F_NEXT)
+            cur = desc[cur].split.next;
+
+        desc[cur].split.next = vq->split.free_desc;
+        vq->split.free_desc = desc_id;
     }
-
-    // 遍历到最后一个槽位取回 caller_data
-    struct virtio_desc *desc = vq->desc;
-    uint16_t cur = desc_id;
-    while (desc[cur].split.flags & VIRTQ_DESC_F_NEXT)
-        cur = desc[cur].split.next;
-
-    void *caller_data = (void *)(uintptr_t)desc[cur].addr;
-
-    // 将整个描述符链归还到空闲链表
-    desc[cur].split.next = vq->split.free_desc;
-    vq->split.free_desc = desc_id;
 
     // 更新 last_used_idx
     vq->last_used_idx++;
@@ -367,14 +336,22 @@ static bool split_init(struct device *dev, struct virtioqueue *vq, uint64_t size
     vq->avail_phys = vq->ring_phys + desc_size;
     vq->used_phys = vq->ring_phys + desc_size + avail_size;
 
+    // 初始化空闲描述符链表
     for (uint64_t i = 0; i < size - 1; i++)
         vq->desc[i].split.next = (uint16_t)(i + 1);
-
     vq->desc[size - 1].split.next = 0xFFFF;
     vq->split.free_desc = 0;
     vq->last_used_idx = 0;
 
-    // 确保 idx 初始值在硬件可见之前刷新
+    // 分配 caller_data 数组
+    vq->caller_data = kheap_alloc(size * sizeof(void *));
+    if (!vq->caller_data) {
+        kheap_free(ring);
+        return false;
+    }
+    memset(vq->caller_data, 0, size * sizeof(void *));
+
+    // 确保初始化完成后硬件可见
     atomic_thread_fence(memory_order_release);
 
     return true;
@@ -487,9 +464,10 @@ static void packed_fill_desc(
     struct virtio_desc *base_desc;
     uint16_t avail_flag = vq->packed.avail_wrap_count ? VIRTQ_DESC_F_AVAIL : 0;
     uint32_t total = out + in;
+    bool is_indirect = desc[desc_idx].packed.flags & VIRTQ_DESC_F_INDIRECT;
 
     // 间接描述符，数据写入间接表
-    if (desc[desc_idx].packed.flags & VIRTQ_DESC_F_INDIRECT) {
+    if (is_indirect) {
         base_desc = (struct virtio_desc *)PHYS_TO_LINEAR(desc[desc_idx].addr);
     } else {
         // 直接描述符，数据写入描述符环
@@ -498,67 +476,38 @@ static void packed_fill_desc(
 
     uint16_t cur = desc_idx;
 
-    // 填充 Device-readable 缓冲区
-    for (uint32_t i = 0; i < out; i++) {
-        if (desc[desc_idx].packed.flags & VIRTQ_DESC_F_INDIRECT) {
-            base_desc[i].addr = sg[i].addr;
-            base_desc[i].len = sg[i].length;
-            base_desc[i].packed.flags = VIRTQ_DESC_F_NEXT | avail_flag;
-            base_desc[i].packed.id = (uint16_t)i;
+    // 填充所有协议描述符
+    for (uint32_t i = 0; i < total; i++) {
+        struct virtio_desc *target;
+        uint16_t id = (uint16_t)i;
+
+        if (is_indirect) {
+            target = &base_desc[i];
         } else {
-            base_desc[cur].addr = sg[i].addr;
-            base_desc[cur].len = sg[i].length;
-            base_desc[cur].packed.flags = VIRTQ_DESC_F_NEXT | avail_flag;
-            base_desc[cur].packed.id = (uint16_t)i;
+            target = &base_desc[cur];
             cur = (cur + 1) % vq->size;
+        }
+
+        target->addr = sg[i].addr;
+        target->len = sg[i].length;
+        target->packed.id = id;
+
+        if (i < out) {
+            target->packed.flags = VIRTQ_DESC_F_NEXT | avail_flag;
+        } else {
+            target->packed.flags = VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT | avail_flag;
         }
     }
 
-    // 填充 Device-writable 缓冲区
-    for (uint32_t i = out; i < total; i++) {
-        if (desc[desc_idx].packed.flags & VIRTQ_DESC_F_INDIRECT) {
-            base_desc[i].addr = sg[i].addr;
-            base_desc[i].len = sg[i].length;
-            base_desc[i].packed.flags = VIRTQ_DESC_F_WRITE | avail_flag;
-            if (i < total - 1)
-                base_desc[i].packed.flags |= VIRTQ_DESC_F_NEXT;
-            base_desc[i].packed.id = (uint16_t)i;
-        } else {
-            base_desc[cur].addr = sg[i].addr;
-            base_desc[cur].len = sg[i].length;
-            base_desc[cur].packed.flags = VIRTQ_DESC_F_WRITE | avail_flag;
-            if (i < total - 1)
-                base_desc[cur].packed.flags |= VIRTQ_DESC_F_NEXT;
-            base_desc[cur].packed.id = (uint16_t)i;
-            cur = (cur + 1) % vq->size;
-        }
+    // 最后一个协议描述符的 flags 移除 NEXT，表示链结束
+    if (is_indirect) {
+        base_desc[total - 1].packed.flags &= ~VIRTQ_DESC_F_NEXT;
+    } else {
+        base_desc[cur].packed.flags &= ~VIRTQ_DESC_F_NEXT;
     }
 
     // 确保描述符内容写入完成后硬件可见
     atomic_thread_fence(memory_order_release);
-}
-
-static void packed_set_req(
-    struct virtioqueue *vq,
-    uint16_t desc_idx,
-    uint16_t last_idx,
-    void *req
-) {
-    // 间接描述符，req 保存在间接表的最后一个槽位
-    if (vq->desc[desc_idx].packed.flags & VIRTQ_DESC_F_INDIRECT) {
-        struct virtio_desc *indirect = (struct virtio_desc *)PHYS_TO_LINEAR(vq->desc[desc_idx].addr);
-        indirect[last_idx].addr = (uint64_t)(uintptr_t)req;
-        indirect[last_idx].len = 0;
-        indirect[last_idx].packed.flags = 0;
-        indirect[last_idx].packed.id = 0;
-        return;
-    }
-
-    // 将 caller_data 存储在额外槽位的 addr 字段
-    vq->desc[last_idx].addr = (uint64_t)(uintptr_t)req;
-    vq->desc[last_idx].len = 0;
-    vq->desc[last_idx].packed.flags = 0;
-    vq->desc[last_idx].packed.id = 0;
 }
 
 static void *packed_recycle(struct virtioqueue *vq) {
@@ -573,24 +522,23 @@ static void *packed_recycle(struct virtioqueue *vq) {
         return NULL;
 
     struct virtio_desc *desc = vq->desc;
-    uint16_t cur = idx;
+    uint16_t desc_id = idx;
     void *caller_data;
 
-    // 间接描述符，遍历间接表取回 caller_data，释放间接表内存
-    if (desc[idx].packed.flags & VIRTQ_DESC_F_INDIRECT) {
-        struct virtio_desc *indirect = (struct virtio_desc *)PHYS_TO_LINEAR(desc[idx].addr);
-        uint16_t icur = 0;
-        while (indirect[icur].packed.flags & VIRTQ_DESC_F_NEXT)
-            icur = (icur + 1) % vq->size;
-        caller_data = (void *)(uintptr_t)indirect[icur].addr;
+    // 从独立数组中取出 caller_data
+    caller_data = vq->caller_data[desc_id];
+    vq->caller_data[desc_id] = NULL;
 
+    // 间接描述符：释放间接表，归还主描述符
+    if (desc[desc_id].packed.flags & VIRTQ_DESC_F_INDIRECT) {
+        struct virtio_desc *indirect = (struct virtio_desc *)PHYS_TO_LINEAR(desc[desc_id].addr);
         kheap_free(indirect);
-        desc[idx].addr = 0;
-        desc[idx].len = 0;
-        desc[idx].packed.flags = 0;
-        desc[idx].packed.id = 0;
+        desc[desc_id].addr = 0;
+        desc[desc_id].len = 0;
+        desc[desc_id].packed.flags = 0;
+        desc[desc_id].packed.id = 0;
 
-        // 推进 last_used_idx，处理回绕（间接表只有一个主描述符，链长度为 1）
+        // 推进 last_used_idx
         vq->last_used_idx = (vq->last_used_idx + 1) % vq->size;
         if (vq->last_used_idx == 0)
             vq->packed.used_wrap_count ^= 1;
@@ -598,22 +546,23 @@ static void *packed_recycle(struct virtioqueue *vq) {
         return caller_data;
     }
 
-    // 从描述符链中取回 caller_data
+    // 直接描述符：计算链长度，取回 caller_data，清除所有槽位并归还
+    uint16_t cur = desc_id;
+
+    // 遍历到链末尾
     while (desc[cur].packed.flags & VIRTQ_DESC_F_NEXT)
         cur = (cur + 1) % vq->size;
 
-    caller_data = (void *)(uintptr_t)desc[cur].addr;
-
     // 计算链长度
     uint16_t chain_len = 1;
-    uint16_t tmp = idx;
+    uint16_t tmp = desc_id;
     while (desc[tmp].packed.flags & VIRTQ_DESC_F_NEXT) {
         chain_len++;
         tmp = (tmp + 1) % vq->size;
     }
 
-    // 遍历整条描述符链，清除所有槽位的标志位，归还到空闲池
-    uint16_t clear_idx = idx;
+    // 遍历整条描述符链，清除所有槽位
+    uint16_t clear_idx = desc_id;
     while (1) {
         desc[clear_idx].addr = 0;
         desc[clear_idx].len = 0;
@@ -629,7 +578,7 @@ static void *packed_recycle(struct virtioqueue *vq) {
     // 更新 last_used_idx
     uint16_t new_last = (vq->last_used_idx + chain_len) % vq->size;
     if (vq->last_used_idx + chain_len >= vq->size)
-        vq->packed.used_wrap_count ^= 1;    // 回绕
+        vq->packed.used_wrap_count ^= 1;
 
     vq->last_used_idx = new_last;
 
@@ -663,6 +612,14 @@ static bool packed_init(struct device *dev, struct virtioqueue *vq, uint64_t siz
     vq->packed.next_avail_idx = 0;
     vq->packed.avail_wrap_count = 1;
     vq->packed.used_wrap_count = 1;
+
+    // 分配 caller_data 数组
+    vq->caller_data = kheap_alloc(size * sizeof(void *));
+    if (!vq->caller_data) {
+        kheap_free(ring);
+        return false;
+    }
+    memset(vq->caller_data, 0, size * sizeof(void *));
 
     // 确保初始化完成后硬件可见
     atomic_thread_fence(memory_order_release);
@@ -844,9 +801,83 @@ void virtio_remove(struct device *phys_dev, struct device *virtio_root) {
             return;
         }
     }
+}
 
-    // 未找到匹配的虚拟设备
-    printk("[VirtIO] Warning: No virtual device found for physical device %s\n", phys_dev->name);
+/**
+ * 设置驱动私有数据
+ * 
+ * @param dev 虚拟设备
+ * @param data 数据指针
+ */
+void virtio_set_drvdata(struct device *dev, void *data) {
+    struct virtio_dev_priv *priv = dev->driver_data;
+    if (priv)
+        priv->driver_data = data;
+}
+
+/**
+ * 获取设备私有数据
+ * 
+ * @param dev 虚拟设备
+ * 
+ * @return 数据指针
+ */
+void *virtio_get_drvdata(struct device *dev) {
+    struct virtio_dev_priv *priv = dev->driver_data;
+    return priv ? priv->driver_data : NULL;
+}
+
+/**
+ * 写入特性位
+ * 
+ * @param dev 虚拟设备
+ * @param features 要写入的特性
+ */
+void virtio_write_features(struct device *dev, uint64_t features) {
+    struct virtio_bus_priv *bus_priv = dev->bus->priv;
+
+    if (!bus_priv || !bus_priv->ops || !bus_priv->ops->write_features)
+        return;
+
+    bus_priv->ops->write_features(dev, features);
+}
+
+/**
+ * 获取所有支持的特性
+ * 
+ * @param dev 虚拟设备
+ */
+uint64_t virtio_get_features(struct device *dev) {
+    struct virtio_dev_priv *priv = dev->driver_data;
+    return priv ? priv->features : 0;
+}
+
+/**
+ * 从设备配置空间读取数据
+ * 
+ * @param dev 虚拟设备
+ * @param offset 配置空间偏移
+ * @param buf 接收缓冲区
+ * @param len 读取长度
+ */
+void virtio_read_device_config(struct device *dev, uint32_t offset, void *buf, size_t len) {
+    struct virtio_bus_priv *bus_priv = dev->bus->priv;
+    if (bus_priv && bus_priv->ops && bus_priv->ops->read_device_config)
+        bus_priv->ops->read_device_config(dev, offset, buf, len);
+}
+
+/**
+ * 向设备配置空间写入数据
+ * 
+ * @param dev 虚拟设备
+ * @param offset 配置空间偏移
+ * @param buf 数据缓冲区
+ * @param len 写入长度
+ */
+void virtio_write_device_config(struct device *dev, uint32_t offset, const void *buf, size_t len) {
+    struct virtio_bus_priv *bus_priv = dev->bus->priv;
+    if (bus_priv && bus_priv->ops && bus_priv->ops->write_device_config)
+        bus_priv->ops->write_device_config(dev, offset, buf, len);
 }
 
 /*
@@ -993,7 +1024,6 @@ bool virtio_device_init(struct device *dev) {
                     ops->alloc_inorder = split_alloc_desc_inorder;
                     ops->alloc_noorder = split_alloc_desc_noorder;
                     ops->fill_desc = split_fill_desc;
-                    ops->set_req = split_set_req;
                     ops->recycle = split_recycle;
                     ops->init = split_init;
                     ops->create_indirect_raw = split_create_indirect_raw;
@@ -1003,7 +1033,6 @@ bool virtio_device_init(struct device *dev) {
                     ops->alloc_inorder = packed_alloc_desc_inorder;
                     ops->alloc_noorder = packed_alloc_desc_noorder;
                     ops->fill_desc = packed_fill_desc;
-                    ops->set_req = packed_set_req;
                     ops->recycle = packed_recycle;
                     ops->init = packed_init;
                     ops->create_indirect_raw = packed_create_indirect_raw;
@@ -1154,23 +1183,21 @@ int virtioqueue_add_buf(
 ) {
     struct virtio_dev_priv *priv = dev->driver_data;
     struct virtioqueue *vq = priv->vqs[queue_index];
-
-    // 从空闲链表获取槽位（多申请一个给 req 用）
+    uint32_t total = out + in;
     uint16_t desc_idx, last_idx;
-    if (!priv->feature_ops.alloc_desc(vq, dev, out + in + 1, &desc_idx, &last_idx)) {
-        // 直接分配失败，尝试间接描述符
-        if (!priv->feature_ops.create_indirect(vq, dev, out + in + 1, &desc_idx))
-            return -ENOSPC;
 
-        // 间接分配成功，desc_idx 指向主槽位，额外槽在间接表末尾
-        last_idx = out + in;
+    // 分配协议描述符
+    if (!priv->feature_ops.alloc_desc(vq, dev, total, &desc_idx, &last_idx)) {
+        // 直接分配失败，尝试间接描述符
+        if (!priv->feature_ops.create_indirect(vq, dev, total, &desc_idx))
+            return -ENOSPC;
     }
 
     // 填充描述符内容
     priv->feature_ops.fill_desc(vq, desc_idx, sg, out, in);
 
-    // 将 req 保存到最后一个槽位
-    priv->feature_ops.set_req(vq, desc_idx, last_idx, req);
+    // 保存 caller_data 到独立数组，供回收时使用
+    vq->caller_data[desc_idx] = req;
 
     return 0;
 }
