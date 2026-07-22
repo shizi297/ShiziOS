@@ -74,6 +74,7 @@ struct file {
     atomic_uint count;  // 引用计数
     struct file_operations *ops;    // 文件操作表
     spinlock_t lock;    // 保护 pos, flags
+    void *private_data; // 驱动/文件系统私有数据
 };
 
 // 用于 dentry 哈希缓存的键

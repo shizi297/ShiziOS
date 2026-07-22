@@ -453,44 +453,6 @@ static struct vfsmount *vfs_find_mount(struct dentry *dentry) {
     return found;
 }
 
-// 分配解析字符串的句柄
-static vfs_path_prs_t *vfs_path_prs_alloc(const char *path) {
-    if (!path) return ERR_PTR(-EINVAL);
-
-    vfs_path_prs_t *prs = kheap_alloc(sizeof(vfs_path_prs_t));
-    if (!prs) return ERR_PTR(-ENOMEM);
-
-    // 复制路径字符串，确保每个 path 的引用者只有一个
-    prs->path = strdup(path);
-    if (!prs->path) {
-        kheap_free(prs);
-        return ERR_PTR(-ENOMEM);
-    }
-
-    // 从路径开头开始解析
-    prs->offset = 0;
-
-    prs->curr_path = NULL;
-
-    return prs;
-}
-
-// 释放解析句柄
-static void vfs_path_prs_free(vfs_path_prs_t *prs) {
-    if (!prs) return;
-
-    // 释放路径字符串
-    kheap_free((void *)prs->path);
-    
-    // 释放当前路径对象
-    if (prs->curr_path) {
-        vfs_path_put(prs->curr_path);
-        kheap_free(prs->curr_path);
-    }
-    
-    kheap_free(prs);
-}
-
 // 获取下一个目录或文件的名称
 static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pwd) {
     if (!prs || !prs->path) 
@@ -608,65 +570,78 @@ static struct path *vfs_path_lookup(
     vfs_lookup_flags_t flags,
     const struct path *pwd
 ) {
-    vfs_path_prs_t *cur;
-    vfs_path_prs_t *stack[MAX_SYMLINKS];
-    int depth = 0;
+    vfs_path_prs_t stack[MAX_SYMLINKS];
+    int depth = 1;
     int err = 0;
     struct path *res = NULL;
 
-    // 获取句柄用于解析路径字符串
-    cur = vfs_path_prs_alloc(path);
-    if (IS_ERR(cur))
-        return ERR_CAST(cur);
+    // 初始化最外层的解析器，统一使用动态分配的路径副本
+    stack[0].path = strdup(path);
+    if (!stack[0].path) return ERR_PTR(-ENOMEM);
+    stack[0].offset = 0;
+    stack[0].curr_path = NULL;
 
     // 解析每一个组件
     while (1) {
-        struct path *p = vfs_path_prs_next(cur, pwd);
+        struct path *p = vfs_path_prs_next(&stack[depth-1], pwd);
         if (IS_ERR(p)) {
-            // 解析错误
             err = PTR_ERR(p);
             break;
         }
 
         // 所有组件解析完成
         if (p == NULL) {
-            if (!depth) {
-                // 是负缓存，返回没有找到文件或目录
-                if (!cur->curr_path->dentry->inode) {
+            if (depth == 1) {
+                // 没有符号链接，直接检查结果并返回
+                if (!stack[0].curr_path->dentry->inode) {
                     err = -ENOENT;
                     break;
                 }
 
-                // 没有符号链接，直接返回结果
                 if (
                     (flags & LOOKUP_DIRECTORY) &&
-                    !S_ISDIR(cur->curr_path->dentry->inode->mode)
+                    !S_ISDIR(stack[0].curr_path->dentry->inode->mode)
                 ) {
-                    // 不是目录但要求是目录，返回错误
                     err = -ENOTDIR;
                     break;
                 }
 
-                // 解析成功，返回结果
-                res = cur->curr_path;
-                cur->curr_path = NULL;
-                vfs_path_prs_free(cur);
+                // 解析成功，转移结果所有权
+                res = stack[0].curr_path;
+                stack[0].curr_path = NULL;
+
+                // 释放主解析器的路径副本
+                kheap_free((void *)stack[0].path);
+                stack[0].path = NULL;
                 return res;
             } else {
                 /*
-                 * 我们已经完成了符号链接的展开
-                 * 此时 cur->curr_path 就是最终路径
-                 * 直接返回结果
-                 * 并清理栈中所有残留的解析器 
+                 * 符号链接目标路径解析完毕
+                 * 需要返回上一层并接续剩余路径
                  */
-                res = cur->curr_path;
-                cur->curr_path = NULL;
-                vfs_path_prs_free(cur);
+                struct path *target_path = stack[depth-1].curr_path;
+                stack[depth-1].curr_path = NULL;   // 转移所有权
 
-                while (depth > 0)
-                    vfs_path_prs_free(stack[--depth]);
+                // 清理当前层（符号链接的解析器）
+                kheap_free((void *)stack[depth-1].path);
+                stack[depth-1].path = NULL;
 
-                return res;
+                // 释放当前层的 struct path 结构体本身（target_path 已取出）
+                if (stack[depth-1].curr_path)
+                    kheap_free(stack[depth-1].curr_path);
+
+                // 弹栈，回退到上一层
+                depth--;
+
+                // 将目标路径的终点交给上一层解析器
+                if (stack[depth-1].curr_path) {
+                    vfs_path_put(stack[depth-1].curr_path);
+                    kheap_free(stack[depth-1].curr_path);
+                }
+                stack[depth-1].curr_path = target_path;
+
+                // 继续解析剩余路径
+                continue;
             }
         }
 
@@ -693,9 +668,9 @@ static struct path *vfs_path_lookup(
             vfs_dget(mnt->root);
             new_cur->dentry = mnt->root;
 
-            vfs_path_put(cur->curr_path);
-            kheap_free(cur->curr_path);
-            cur->curr_path = new_cur;
+            vfs_path_put(stack[depth-1].curr_path);
+            kheap_free(stack[depth-1].curr_path);
+            stack[depth-1].curr_path = new_cur;
             continue;
         }
 
@@ -707,59 +682,63 @@ static struct path *vfs_path_lookup(
                 break;
             }
 
-            stack[depth++] = cur;
+            // 保存当前层状态（增加引用，因为将作为上一层被共享）
+            vfs_path_get(stack[depth-1].curr_path);
 
             // 读取符号链接的目标路径
             char target[PATH_MAX];
             ssize_t ret = vfs_readlink(p->dentry, target, sizeof(target) - 1);
             if (ret < 0) {
+                vfs_path_put(stack[depth-1].curr_path); // 回滚刚增加的引用
                 err = ret;
                 break;
             }
-
             target[ret] = '\0';
 
-            // 复制目标路径字符串，确保每个解析句柄有独立的字符串
-            char *dup = strdup(target);
-            if (!dup) {
+            // 创建新的一层解析器
+            depth++;
+            memset(&stack[depth-1], 0, sizeof(vfs_path_prs_t));
+
+            // 复制目标路径字符串，保证每一层独立
+            stack[depth-1].path = strdup(target);
+            if (!stack[depth-1].path) {
+                depth--;
+                vfs_path_put(stack[depth-1].curr_path);
                 err = -ENOMEM;
                 break;
             }
 
-            // 为新的路径解析分配一个句柄
-            vfs_path_prs_t *new_prs = vfs_path_prs_alloc(dup);
-            if (IS_ERR(new_prs)) {
-                kheap_free(dup);
-                err = PTR_ERR(new_prs);
+            // 设置新解析器的起始目录
+            const struct path *base = (target[0] == '/') ? vfs_root : stack[depth-2].curr_path;
+            stack[depth-1].curr_path = kheap_alloc(sizeof(struct path));
+            if (!stack[depth-1].curr_path) {
+                depth--;
+                kheap_free((void *)stack[depth-1].path);
+                vfs_path_put(stack[depth-1].curr_path);
+                err = -ENOMEM;
                 break;
             }
+            stack[depth-1].curr_path->mnt = base->mnt;
+            stack[depth-1].curr_path->dentry = base->dentry;
+            vfs_path_get(stack[depth-1].curr_path);
 
-            const struct path *base = (target[0] == '/') ? vfs_root : cur->curr_path;
-
-            // 初始化新句柄并解析第一个组件
-            struct path *first = vfs_path_prs_next(new_prs, base);
-            if (IS_ERR(first)) {
-                // 解析符号链接目标失败，清理资源并返回错误
-                vfs_path_prs_free(new_prs);
-                err = PTR_ERR(first);
-                break;
-            }
-
-            // 解析成功，切换到新的解析句柄继续处理剩余组件
-            cur = new_prs;
+            // 初始化新解析器后直接开始下一轮循环，它会自动被当做当前解析器
             continue;
         }
 
         // 普通组件，不需要处理，直接继续解析下一个组件
     }
 
-    // 清理资源
-    if (cur)
-        vfs_path_prs_free(cur);
-
-    // 释放所有符号链接解析句柄
-    while (depth > 0)
-        vfs_path_prs_free(stack[--depth]);
+    // 清理所有栈帧的资源
+    for (int i = 0; i < depth; i++) {
+        if (stack[i].curr_path) {
+            vfs_path_put(stack[i].curr_path);
+            kheap_free(stack[i].curr_path);
+        }
+        if (stack[i].path) {
+            kheap_free((void *)stack[i].path);
+        }
+    }
 
     return ERR_PTR(err);
 }
@@ -1030,13 +1009,9 @@ static off_t vfs_default_llseek(struct file *file, off_t offset, seek_whence_t w
     struct inode *inode = file->path.dentry->inode;
     off_t new_pos;
 
-    // 根据 whence 计算新的文件偏移
     switch (whence) {
         case SEEK_SET:
             new_pos = offset;
-            break;
-        case SEEK_CUR:
-            new_pos = file->pos + offset;
             break;
         case SEEK_END:
             new_pos = inode->size + offset;
@@ -1045,13 +1020,8 @@ static off_t vfs_default_llseek(struct file *file, off_t offset, seek_whence_t w
             return -EINVAL;
     }
 
-    // 不允许负偏移
     if (new_pos < 0)
         return -EINVAL;
-
-    spin_lock(&file->lock);
-    file->pos = new_pos;
-    spin_unlock(&file->lock);
 
     return new_pos;
 }
@@ -1422,6 +1392,27 @@ struct path *vfs_get_root_path(void) {
     return vfs_root;
 }
 
+// 获取 inode 的 rdev 字段
+dev_t vfs_inode_get_rdev(struct inode *inode) {
+    return inode->rdev;
+}
+
+// 获取 file 结构体的私有数据
+void *vfs_file_get_private(struct file *file) {
+    void *priv;
+    spin_lock(&file->lock);
+    priv = file->private_data;
+    spin_unlock(&file->lock);
+    return priv;
+}
+
+// 设置 file 结构体的私有数据
+void vfs_file_set_private(struct file *file, void *priv) {
+    spin_lock(&file->lock);
+    file->private_data = priv;
+    spin_unlock(&file->lock);
+}
+
 // 初始化vfs
 bool vfs_init(void) {
     // 初始化用于缓存的哈希表
@@ -1468,27 +1459,20 @@ bool vfs_init(void) {
  * @return 新的文件偏移
  */
 off_t vfs_lseek(struct file *file, off_t offset, seek_whence_t whence) {
-    struct inode *inode = file->path.dentry->inode;
     off_t new_pos;
 
-    // 根据参照点计算新位置
-    switch (whence) {
-        case SEEK_SET:
-            new_pos = offset;
-            break;
-        case SEEK_CUR:
-            new_pos = file->pos + offset;
-            break;
-        case SEEK_END:
-            new_pos = inode->size + offset;
-            break;
-        default:
-            return -EINVAL;
+    // 把 SEEK_CUR 转换成 SEEK_SET
+    if (whence == SEEK_CUR) {
+        offset = file->pos + offset;
+        whence = SEEK_SET;
     }
 
-    // 偏移不能为负
+    if (!file->ops->llseek)
+        return -ESPIPE;
+
+    new_pos = file->ops->llseek(file, offset, whence);
     if (new_pos < 0)
-        return -EINVAL;
+        return new_pos;
 
     spin_lock(&file->lock);
     file->pos = new_pos;

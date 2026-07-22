@@ -1488,26 +1488,14 @@ void tmpfs_init(void) {
     vfs_register_filesystem(&tmpfs_type);
 }
 
-// 文件打开操作 
 static int tmpfs_open(struct inode *inode, struct file *file) {
     return 0;
 }
 
-// 文件关闭操作
 static int tmpfs_release(struct inode *inode, struct file *file) {
     return 0;
 }
 
-/**
- * 读取文件数据
- *
- * @param file  打开的文件
- * @param buf   用户缓冲区
- * @param count 请求读取的字节数
- * @param pos   偏移指针，NULL 表示使用 file 内部偏移
- *
- * @return 成功返回实际读取字节数，失败返回错误码
- */
 static ssize_t tmpfs_read(
     struct file *file,
     char *buf,
@@ -1590,16 +1578,6 @@ static ssize_t tmpfs_read(
     return done;
 }
 
-/**
- * 写入文件数据
- *
- * @param file 打开的文件
- * @param buf 数据缓冲区
- * @param count 请求写入的字节数
- * @param pos 偏移指针，NULL 表示使用 file 内部偏移
- *
- * @return 实际写入字节数
- */
 static ssize_t tmpfs_write(
     struct file *file,
     const char *buf,
@@ -1724,15 +1702,6 @@ out:
     return done;
 }
 
-/**
- * 调整文件偏移
- *
- * @param file 打开的文件
- * @param offset 偏移量
- * @param whence 参照点
- *
- * @return 新的文件偏移
- */
 static off_t tmpfs_llseek(
     struct file *file,
     off_t offset,
@@ -1741,30 +1710,27 @@ static off_t tmpfs_llseek(
     struct inode *inode = file->path.dentry->inode;
     off_t new_pos;
 
-    // 根据参照点计算新位置
     switch (whence) {
         case SEEK_SET:
             new_pos = offset;
             break;
-        case SEEK_CUR:
-            new_pos = (off_t)file->pos + offset;
-            break;
         case SEEK_END:
-            new_pos = (off_t)inode->size + offset;
+            new_pos = inode->size + offset;
             break;
         default:
             return -EINVAL;
     }
 
-    // 偏移不能为负
     if (new_pos < 0)
         return -EINVAL;
 
-    spin_lock(&file->lock);
-    file->pos = new_pos;
-    spin_unlock(&file->lock);
-
     return new_pos;
+}
+
+static int tmpfs_fsync(struct file *file, bool meta) {
+    (void)file;
+    (void)meta;
+    return 0;  // 内存文件系统，不需要落盘
 }
 
 // 文件操作表
@@ -1774,6 +1740,7 @@ static struct file_operations tmpfs_file_operations = {
     .read    = tmpfs_read,
     .write   = tmpfs_write,
     .llseek  = tmpfs_llseek,
+    .fsync   = tmpfs_fsync,
 };
 
 /**
