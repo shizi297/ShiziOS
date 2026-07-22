@@ -143,9 +143,49 @@ struct path {
 struct file_operations {
     int (*open)(struct inode *inode, struct file *file); // 打开文件
     int (*release)(struct inode *inode, struct file *file);  // 关闭文件
-    ssize_t (*read)(struct file *file, char *buf, size_t count, off_t *pos);   // 读取文件数据
-    ssize_t (*write)(struct file *file, const char *buf, size_t count, off_t *pos);    // 写入文件数据
-    off_t (*llseek)(struct file *file, off_t offset, seek_whence_t whence);   // 调整文件偏移
+
+    /**
+     * 读取文件数据
+     *
+     * @param file 打开的文件
+     * @param buf 用户缓冲区
+     * @param count 请求读取的字节数
+     * @param pos 偏移指针，NULL 表示使用 file 内部偏移
+     *
+     * @return 成功返回实际读取字节数，失败返回错误码
+     */
+    ssize_t (*read)(struct file *file, char *buf, size_t count, off_t *pos);  
+
+    /**
+     * 写入文件数据
+     *
+     * @param file 打开的文件
+     * @param buf 数据缓冲区
+     * @param count 请求写入的字节数
+     * @param pos 偏移指针，NULL 表示使用 file 内部偏移
+     *
+     * @return 实际写入字节数
+     */
+    ssize_t (*write)(struct file *file, const char *buf, size_t count, off_t *pos);    
+
+    /**
+     * 调整文件偏移
+     *
+     * @param file 打开的文件
+     * @param offset 偏移量
+     * @param whence 参照点
+     *
+     * @return 新的文件偏移
+     */
+    off_t (*llseek)(struct file *file, off_t offset, seek_whence_t whence);  
+
+    /**
+     * 同步文件数据到持久存储
+     *
+     * @param file 文件结构体
+     * @param meta true 表示是否同步源数据
+     */
+    int (*fsync)(struct file *file, bool meta); 
 };
 
 /**
@@ -180,6 +220,15 @@ int vfs_umount(struct path *mountpoint, int flags, bool from_kernel);
 
 // 获取根目录path
 struct path *vfs_get_root_path(void);
+
+// 获取 inode 的 rdev 字段
+dev_t vfs_inode_get_rdev(struct inode *inode);
+
+// 获取 file 结构体的私有数据
+void *vfs_file_get_private(struct file *file);
+
+// 设置 file 结构体的私有数据
+void vfs_file_set_private(struct file *file, void *priv);
 
 // 初始化vfs
 bool vfs_init(void);
