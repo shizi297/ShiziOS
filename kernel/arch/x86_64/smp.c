@@ -23,6 +23,7 @@
 #include <drivers.h>
 #include <stdatomic.h>
 #include <shizi/types.h>
+#include <klibc.h>
 
 #define SMP_PRINT(fmt, ...) \
     printk("[SMP] " fmt, ##__VA_ARGS__)
@@ -384,6 +385,27 @@ void smp_irq_unregister_handler(uint8_t vector) {
 
     // 恢复默认值
     irq_table[vector] = 0;
+}
+
+/**
+ * 分配中断向量号
+ * 
+ * @param handler_addr 中断处理函数地址
+ * 
+ * @return 向量号
+ */
+kresult_t smp_irq_alloc_handler(uint64_t handler_addr) {
+    if (handler_addr == 0)
+        return (kresult_t){.err = -EINVAL, .val = 0};
+
+    for (int vector = 32; vector < 256; vector++) {
+        if (irq_table[vector] == 0) {
+            irq_table[vector] = handler_addr;
+            return (kresult_t){.err = 0, .val = vector};
+        }
+    }
+
+    return (kresult_t){.err = -ENOSPC, .val = 0};
 }
 
 // 获取当前cpu的内核tls

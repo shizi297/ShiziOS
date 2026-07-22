@@ -111,6 +111,15 @@ bool smp_irq_register_handler(uint8_t vector, uint64_t handler_addr);
  */
 void smp_irq_unregister_handler(uint8_t vector);
 
+/**
+ * 分配中断向量号
+ * 
+ * @param handler_addr 中断处理函数地址
+ * 
+ * @return 向量号
+ */
+kresult_t smp_irq_alloc_handler(uint64_t handler_addr);
+
 // 获取当前cpu的内核tls
 per_cpu *smp_get_kernel_tls(void);
 
