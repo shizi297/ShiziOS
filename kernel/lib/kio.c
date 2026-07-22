@@ -12,11 +12,30 @@
 #include <limits.h>
 #include <shizi/types.h>
 
-// 回调类型，用于函数进行输出文字
-typedef void (*kio_putchar_t)(char c);
+#define PRINT_ADD_CHAR(stream, ch, done_label) \
+    do { \
+        if ((stream)->pos >= (stream)->size - 1) \
+            goto done_label; \
+        (stream)->buffer[(stream)->pos++] = (ch); \
+        (stream)->count++; \
+    } while (0)
 
 // 内部缓冲区大小，用于数字转换的临时存储
 #define TMP_BUF_SIZE 128
+
+// vprintk 缓存区的大小
+#define PRINTK_BUFFER_SIZE 512 
+
+__attribute__((section(".data")))
+static struct {
+    kio_output_t backend;        // 普通后端
+    kio_output_t panic_backend;  // panic 后端
+    spinlock_t lock;
+} print_backend = {
+    .backend = NULL,
+    .panic_backend = NULL,
+    .lock = SPIN_LOCK_INIT,
+};
 
 static inline size_t print_strlen(const char *s) {
     extern size_t strlen(const char *);
@@ -269,10 +288,9 @@ static void prepare_number(
 }
 
 /**
- * 通过回调输出文字
- * 
- * @param put 输出字符的回调函数
- * @param written 指向局部输出字符计数器的指针，每输出一个字符递增
+ * 通过 PFILE 流输出数字
+ *
+ * @param stream 输出流
  * @param sign_char 符号字符（'\0' 表示无符号）
  * @param prefix 替代前缀（NULL 表示无前缀）
  * @param digits 精度补零后的数字字符串
@@ -281,8 +299,7 @@ static void prepare_number(
  * @param prec 精度值（-1 表示未指定精度）
  */
 static void output_int(
-    kio_putchar_t put,
-    int *written,
+    PFILE *stream,
     char sign_char,
     const char *prefix,
     const char *digits,
@@ -295,121 +312,115 @@ static void output_int(
     int digits_len = print_strlen(digits);
     int content_len = sign_len + prefix_len + digits_len;
 
+    // 无填充
     if (width <= content_len) {
-        // 无填充
-        if (sign_char) {
-            put(sign_char);
-            (*written)++;
-        }
+        if (sign_char)
+            PRINT_ADD_CHAR(stream, sign_char, done);
 
         if (prefix) {
-            for (int i = 0; prefix[i]; i++) {
-                put(prefix[i]);
-                (*written)++;
-            }
+            for (int i = 0; prefix[i]; i++)
+                PRINT_ADD_CHAR(stream, prefix[i], done);
         }
 
-        for (int i = 0; digits[i]; i++) {
-            put(digits[i]);
-            (*written)++;
-        }
-        
+        for (int i = 0; digits[i]; i++)
+            PRINT_ADD_CHAR(stream, digits[i], done);
+
         return;
     }
 
     int pad = max(0, width - content_len);
 
+    // 左对齐：内容在前，空格在后
     if (flags & FLAG_LEFT) {
-        // 左对齐：内容在前，空格在后
-        if (sign_char) {
-            put(sign_char);
-            (*written)++;
-        }
+        if (sign_char)
+            PRINT_ADD_CHAR(stream, sign_char, done);
 
         if (prefix) {
-            for (int i = 0; prefix[i]; i++) {
-                put(prefix[i]);
-                (*written)++;
-            }
-        }
-        
-        for (int i = 0; digits[i]; i++) {
-            put(digits[i]);
-            (*written)++;
+            for (int i = 0; prefix[i]; i++)
+                PRINT_ADD_CHAR(stream, prefix[i], done);
         }
 
-        for (int i = 0; i < pad; i++) {
-            put(' ');
-            (*written)++;
-        }
+        for (int i = 0; digits[i]; i++)
+            PRINT_ADD_CHAR(stream, digits[i], done);
+
+        for (int i = 0; i < pad; i++)
+            PRINT_ADD_CHAR(stream, ' ', done);
 
         return;
     }
 
+    // 符号和前缀后、数字前补零
     bool zero_pad = (flags & FLAG_ZERO) && (prec < 0);
-
     if (zero_pad) {
-        // 符号和前缀后、数字前补零
-        if (sign_char) {
-            put(sign_char);
-            (*written)++;
-        }
+        if (sign_char)
+            PRINT_ADD_CHAR(stream, sign_char, done);
+
         if (prefix) {
-            for (int i = 0; prefix[i]; i++) {
-                put(prefix[i]);
-                (*written)++;
-            }
+            for (int i = 0; prefix[i]; i++)
+                PRINT_ADD_CHAR(stream, prefix[i], done);
         }
-        for (int i = 0; i < pad; i++) {
-            put('0');
-            (*written)++;
-        }
-        for (int i = 0; digits[i]; i++) {
-            put(digits[i]);
-            (*written)++;
-        }
-    } else {
-        // 整个内容左侧填空格
-        for (int i = 0; i < pad; i++) {
-            put(' ');
-            (*written)++;
-        }
-        if (sign_char) {
-            put(sign_char);
-            (*written)++;
-        }
-        if (prefix) {
-            for (int i = 0; prefix[i]; i++) {
-                put(prefix[i]);
-                (*written)++;
-            }
-        }
-        for (int i = 0; digits[i]; i++) {
-            put(digits[i]);
-            (*written)++;
-        }
+
+        for (int i = 0; i < pad; i++)
+            PRINT_ADD_CHAR(stream, '0', done);
+
+        for (int i = 0; digits[i]; i++)
+            PRINT_ADD_CHAR(stream, digits[i], done);
+
+        return;
     }
+
+    // 整个内容左侧填空格
+    for (int i = 0; i < pad; i++)
+        PRINT_ADD_CHAR(stream, ' ', done);
+
+    if (sign_char)
+        PRINT_ADD_CHAR(stream, sign_char, done);
+
+    if (prefix) {
+        for (int i = 0; prefix[i]; i++)
+            PRINT_ADD_CHAR(stream, prefix[i], done);
+    }
+
+    for (int i = 0; digits[i]; i++)
+        PRINT_ADD_CHAR(stream, digits[i], done);
+
+done:
+    return;
+}
+
+/*
+ * 注册输出后端
+ *
+ * @param backend 普通输出后端
+ * @param panic_backend panic 输出后端
+ */
+void kio_register_backend(kio_output_t backend, kio_output_t panic_backend) {
+    spin_lock(&print_backend.lock);
+    print_backend.backend = backend;
+    print_backend.panic_backend = panic_backend;
+    spin_unlock(&print_backend.lock);
 }
 
 /**
- * 格式化字符串并通过回调输出
- * 
- * @param put 每输出一个字符时调用的回调函数
+ * 格式化字符串并通过 PFILE 流输出
+ *
+ * @param stream 输出流
  * @param fmt 格式控制字符串
  * @param args 可变参数列表
- * 
+ *
  * @return 输出的字符总数（不含 '\0'）
  */
-static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
+int vfprintk(PFILE *stream, const char *fmt, va_list args) {
+    if (stream->pos >= stream->size - 1)
+        return stream->count;
+
     char tmp[TMP_BUF_SIZE];
     const char *p;
-    int written = 0;
 
     // 扫描格式串，遇到 % 则解析并处理，否则直接输出
     for (p = fmt; *p; p++) {
         if (*p != '%') {
-            put(*p);
-            written++;
+            PRINT_ADD_CHAR(stream, *p, done);
             continue;
         }
 
@@ -417,8 +428,7 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
         parse_fmt_spec(&p, args, &spec);
 
         if (spec.conv == '%') {
-            put('%');
-            written++;
+            PRINT_ADD_CHAR(stream, '%', done);
             continue;
         }
 
@@ -435,33 +445,33 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
             if (is_signed) {
                 int64_t val;
                 switch (spec.len_mod) {
-                case LEN_HH:
-                    val = (signed char)va_arg(args, int);
-                    break;
-                case LEN_H:
-                    val = (short)va_arg(args, int);
-                    break;
-                case LEN_NONE:
-                    val = va_arg(args, int);
-                    break;
-                case LEN_L:
-                    val = va_arg(args, long);
-                    break;
-                case LEN_LL:
-                    val = va_arg(args, long long);
-                    break;
-                case LEN_Z:
-                    val = (int64_t)va_arg(args, ssize_t);
-                    break;
-                case LEN_T:
-                    val = (int64_t)va_arg(args, ptrdiff_t);
-                    break;
-                case LEN_J:
-                    val = va_arg(args, intmax_t);
-                    break;
-                default:
-                    val = va_arg(args, int);
-                    break;
+                    case LEN_HH:
+                        val = (signed char)va_arg(args, int);
+                        break;
+                    case LEN_H:
+                        val = (short)va_arg(args, int);
+                        break;
+                    case LEN_NONE:
+                        val = va_arg(args, int);
+                        break;
+                    case LEN_L:
+                        val = va_arg(args, long);
+                        break;
+                    case LEN_LL:
+                        val = va_arg(args, long long);
+                        break;
+                    case LEN_Z:
+                        val = (int64_t)va_arg(args, ssize_t);
+                        break;
+                    case LEN_T:
+                        val = (int64_t)va_arg(args, ptrdiff_t);
+                        break;
+                    case LEN_J:
+                        val = va_arg(args, intmax_t);
+                        break;
+                    default:
+                        val = va_arg(args, int);
+                        break;
                 }
                 if (val < 0) {
                     is_negative = true;
@@ -471,33 +481,33 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
                 }
             } else {
                 switch (spec.len_mod) {
-                case LEN_HH:
-                    abs_val = (unsigned char)va_arg(args, unsigned int);
-                    break;
-                case LEN_H:
-                    abs_val = (unsigned short)va_arg(args, unsigned int);
-                    break;
-                case LEN_NONE:
-                    abs_val = va_arg(args, unsigned int);
-                    break;
-                case LEN_L:
-                    abs_val = va_arg(args, unsigned long);
-                    break;
-                case LEN_LL:
-                    abs_val = va_arg(args, unsigned long long);
-                    break;
-                case LEN_Z:
-                    abs_val = va_arg(args, size_t);
-                    break;
-                case LEN_T:
-                    abs_val = (uint64_t)va_arg(args, ptrdiff_t);
-                    break;
-                case LEN_J:
-                    abs_val = va_arg(args, uintmax_t);
-                    break;
-                default:
-                    abs_val = va_arg(args, unsigned int);
-                    break;
+                    case LEN_HH:
+                        abs_val = (unsigned char)va_arg(args, unsigned int);
+                        break;
+                    case LEN_H:
+                        abs_val = (unsigned short)va_arg(args, unsigned int);
+                        break;
+                    case LEN_NONE:
+                        abs_val = va_arg(args, unsigned int);
+                        break;
+                    case LEN_L:
+                        abs_val = va_arg(args, unsigned long);
+                        break;
+                    case LEN_LL:
+                        abs_val = va_arg(args, unsigned long long);
+                        break;
+                    case LEN_Z:
+                        abs_val = va_arg(args, size_t);
+                        break;
+                    case LEN_T:
+                        abs_val = (uint64_t)va_arg(args, ptrdiff_t);
+                        break;
+                    case LEN_J:
+                        abs_val = va_arg(args, uintmax_t);
+                        break;
+                    default:
+                        abs_val = va_arg(args, unsigned int);
+                        break;
                 }
             }
 
@@ -520,15 +530,15 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
             bool has_prefix;
 
             prepare_number(
-                abs_val, 
+                abs_val,
                 spec.conv, spec.prec, spec.flags,
-                tmp, digits_buf, &digits, 
+                tmp, digits_buf, &digits,
                 prefix, &has_prefix
             );
 
             // 输出
             output_int(
-                put, &written, sign_char,
+                stream, sign_char,
                 has_prefix ? prefix : NULL, digits,
                 spec.width, spec.flags, spec.prec
             );
@@ -548,22 +558,22 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
                 len = min((size_t)spec.prec, len);
             }
 
+            // 左填充空格
             if (spec.width > (int)len && !(spec.flags & FLAG_LEFT)) {
                 for (int i = 0; i < spec.width - (int)len; i++) {
-                    put(' ');
-                    written++;
+                    PRINT_ADD_CHAR(stream, ' ', done);
                 }
             }
 
+            // 输出字符串内容
             for (size_t i = 0; i < len; i++) {
-                put(s[i]);
-                written++;
+                PRINT_ADD_CHAR(stream, s[i], done);
             }
 
+            // 右填充空格
             if (spec.width > (int)len && (spec.flags & FLAG_LEFT)) {
                 for (int i = 0; i < spec.width - (int)len; i++) {
-                    put(' ');
-                    written++;
+                    PRINT_ADD_CHAR(stream, ' ', done);
                 }
             }
 
@@ -573,19 +583,21 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
         // 字符
         if (spec.conv == 'c') {
             char c = (char)va_arg(args, int);
+
+            // 左填充空格
             if (spec.width > 1 && !(spec.flags & FLAG_LEFT)) {
                 for (int i = 0; i < spec.width - 1; i++) {
-                    put(' ');
-                    written++;
+                    PRINT_ADD_CHAR(stream, ' ', done);
                 }
             }
 
-            put(c);
-            written++;
+            // 输出字符
+            PRINT_ADD_CHAR(stream, c, done);
+
+            // 右填充空格
             if (spec.width > 1 && (spec.flags & FLAG_LEFT)) {
                 for (int i = 0; i < spec.width - 1; i++) {
-                    put(' ');
-                    written++;
+                    PRINT_ADD_CHAR(stream, ' ', done);
                 }
             }
 
@@ -597,10 +609,8 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
             void *ptr = va_arg(args, void *);
             uintptr_t val = (uintptr_t)ptr;
 
-            put('0');
-            written++;
-            put('x');
-            written++;
+            PRINT_ADD_CHAR(stream, '0', done);
+            PRINT_ADD_CHAR(stream, 'x', done);
 
             int ptr_digits = 2 * sizeof(void *);
             char *end = tmp + TMP_BUF_SIZE - 1;
@@ -608,14 +618,13 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
             char *pstart = format_hex(val, end, false);
             int len = end - pstart;
             int pad = max(0, ptr_digits - len);
+
             for (int i = 0; i < pad; i++) {
-                put('0');
-                written++;
+                PRINT_ADD_CHAR(stream, '0', done);
             }
 
             for (int i = 0; i < len; i++) {
-                put(pstart[i]);
-                written++;
+                PRINT_ADD_CHAR(stream, pstart[i], done);
             }
 
             continue;
@@ -623,55 +632,121 @@ static int vfprintk(kio_putchar_t put, const char *fmt, va_list args) {
 
         // 把字符数写入当前局部计数器
         if (spec.conv == 'n') {
+            int count = stream->count;
             switch (spec.len_mod) {
-            case LEN_HH:
-                *(va_arg(args, signed char *)) = (signed char)written;
-                break;
-            case LEN_H:
-                *(va_arg(args, short *)) = (short)written;
-                break;
-            case LEN_NONE:
-                *(va_arg(args, int *)) = (int)written;
-                break;
-            case LEN_L:
-                *(va_arg(args, long *)) = (long)written;
-                break;
-            case LEN_LL:
-                *(va_arg(args, long long *)) = (long long)written;
-                break;
-            case LEN_Z:
-                *(va_arg(args, ssize_t *)) = (ssize_t)written;
-                break;
-            case LEN_T:
-                *(va_arg(args, ptrdiff_t *)) = (ptrdiff_t)written;
-                break;
-            case LEN_J:
-                *(va_arg(args, intmax_t *)) = (intmax_t)written;
-                break;
-            default:
-                *(va_arg(args, int *)) = (int)written;
-                break;
+                case LEN_HH:
+                    *(va_arg(args, signed char *)) = (signed char)count;
+                    break;
+                case LEN_H:
+                    *(va_arg(args, short *)) = (short)count;
+                    break;
+                case LEN_NONE:
+                    *(va_arg(args, int *)) = (int)count;
+                    break;
+                case LEN_L:
+                    *(va_arg(args, long *)) = (long)count;
+                    break;
+                case LEN_LL:
+                    *(va_arg(args, long long *)) = (long long)count;
+                    break;
+                case LEN_Z:
+                    *(va_arg(args, ssize_t *)) = (ssize_t)count;
+                    break;
+                case LEN_T:
+                    *(va_arg(args, ptrdiff_t *)) = (ptrdiff_t)count;
+                    break;
+                case LEN_J:
+                    *(va_arg(args, intmax_t *)) = (intmax_t)count;
+                    break;
+                default:
+                    *(va_arg(args, int *)) = (int)count;
+                    break;
             }
             continue;
         }
 
         // 未知转换符：原样输出 % 和字符
-        put('%');
-        written++;
-        put(spec.conv);
-        written++;
+        PRINT_ADD_CHAR(stream, '%', done);
+        PRINT_ADD_CHAR(stream, spec.conv, done);
     }
 
-    return written;
+done:
+    return stream->count;
+}
+
+void vprintk(const char *fmt, va_list args) {
+    char buf[PRINTK_BUFFER_SIZE];
+    PFILE stream = {
+        .buffer = buf,
+        .size = PRINTK_BUFFER_SIZE,
+        .pos = 0,
+        .count = 0,
+    };
+    uint64_t irqflags;
+    kio_output_t backend;
+
+    vfprintk(&stream, fmt, args);
+
+    spin_lock_irqsave(&print_backend.lock, &irqflags);
+    backend = print_backend.backend;
+    spin_unlock_irqrestore(&print_backend.lock, irqflags);
+
+    if (backend)
+        backend(&stream);
+}
+
+__attribute__((noreturn))
+void vprintp(const char *fmt, va_list args) {
+    char buf[PRINTK_BUFFER_SIZE];
+    PFILE stream = {
+        .buffer = buf,
+        .size = PRINTK_BUFFER_SIZE,
+        .pos = 0,
+        .count = 0,
+    };
+    kio_output_t panic_backend;
+
+    vfprintk(&stream, fmt, args);
+
+    irq_off();
+
+    panic_backend = print_backend.panic_backend;
+    if (panic_backend)
+        panic_backend(&stream);
+
+    while (1)
+        cpu_halt();
+}
+
+int vsnprintk(char *buf, size_t size, const char *fmt, va_list args) {
+    if (size == 0)
+        return 0;
+
+    PFILE stream = {
+        .buffer = buf,
+        .size = size,
+        .pos = 0,
+        .count = 0,
+    };
+
+    vfprintk(&stream, fmt, args);
+
+    buf[stream.pos] = '\0';
+    return stream.count;
+}
+
+int snprintk(char *buf, size_t size, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int ret = vsnprintk(buf, size, fmt, args);
+    va_end(args);
+    return ret;
 }
 
 void printk(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    uint64_t irqflags;
-    spin_lock_irqsave(&serial_lock, &irqflags);
-    vfprintk(serial_putchar_nolock, fmt, args);
-    spin_unlock_irqrestore(&serial_lock, irqflags);
+    vprintk(fmt, args);
     va_end(args);
 }
 
@@ -679,8 +754,6 @@ __attribute__((noreturn))
 void printp(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    irq_off();
-    vfprintk(serial_putchar_nolock, fmt, args);
+    vprintp(fmt, args);
     va_end(args);
-    while (1) cpu_halt();
 }
