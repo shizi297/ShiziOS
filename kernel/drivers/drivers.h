@@ -121,34 +121,11 @@ struct bus {
     void (*free_device)(struct device *dev);
 };
 
-typedef struct drivers_minor_devt drivers_minor_devt;
-
 // 增加设备引用计数
 void device_ref_get(struct device *dev);
 
 // 减少设备引用计数，归零时释放设备
 void device_ref_put(struct device *dev); 
-
-// 分配一个新的主设备号，返回一个次设备号分配器
-drivers_minor_devt *drivers_major_alloc(void);
-
-// 初始化次设备号分配器
-void drivers_minor_allocator_init(drivers_minor_devt *handle, bool is_dynamic);
-
-// 分配一个次设备号
-int drivers_minor_alloc(drivers_minor_devt *handle, dev_t *dev);
-
-// 释放一个次设备号
-void drivers_minor_free(drivers_minor_devt *handle, dev_t dev);
-
-// 释放主设备号和次设备号分配器
-void drivers_major_free(drivers_minor_devt *handle);
-
-// 注册 fops 到主设备号
-int drivers_register_fops(unsigned int major, struct file_operations *fops);
-
-// 注销主设备号的 fops
-void drivers_unregister_fops(unsigned int major);
 
 // 添加一个总线
 bool drivers_add_bus(struct bus *bus);

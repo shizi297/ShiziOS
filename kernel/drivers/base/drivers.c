@@ -326,19 +326,6 @@ struct file_operations *drivers_dev_find(dev_t dev, mode_t mode) {
     return NULL;
 }
 
-// 增加设备引用计数
-void device_ref_get(struct device *dev) {
-    atomic_fetch_add(&dev->refcnt, 1);
-}
-
-// 减少设备引用计数，归零时释放设备
-void device_ref_put(struct device *dev) {
-    if (atomic_fetch_sub(&dev->refcnt, 1) == 1) {
-        // 引用计数从 1 变为 0，释放设备
-        device_release(dev);
-    }
-}
-
 // 分配一个新的主设备号，返回一个次设备号分配器
 drivers_minor_devt *drivers_major_alloc(void) {
     spin_lock(&major_state.lock);   // 保护全局主设备号位图
@@ -456,21 +443,27 @@ void drivers_major_free(drivers_minor_devt *handle) {
 }
 
 // 注册 fops 到主设备号
-int drivers_register_fops(unsigned int major, struct file_operations *fops) {
-    if (!fops_table || major > DEV_MAX_MAJOR)
-        return -EINVAL;
-
-    dynarr_set(fops_table, major, &fops);
-    return 0;
+void drivers_register_fops(drivers_minor_devt *minor_handle, struct file_operations *fops) {
+    dynarr_set(fops_table, minor_handle->major, &fops);
 }
 
 // 注销主设备号的 fops
-void drivers_unregister_fops(unsigned int major) {
-    if (!fops_table || major > DEV_MAX_MAJOR)
-        return;
-
+void drivers_unregister_fops(drivers_minor_devt *minor_handle) {
     struct file_operations *null = NULL;
-    dynarr_set(fops_table, major, &null);
+    dynarr_set(fops_table, minor_handle->major, &null);
+}
+
+// 增加设备引用计数
+void device_ref_get(struct device *dev) {
+    atomic_fetch_add(&dev->refcnt, 1);
+}
+
+// 减少设备引用计数，归零时释放设备
+void device_ref_put(struct device *dev) {
+    if (atomic_fetch_sub(&dev->refcnt, 1) == 1) {
+        // 引用计数从 1 变为 0，释放设备
+        device_release(dev);
+    }
 }
 
 // 添加一个总线
