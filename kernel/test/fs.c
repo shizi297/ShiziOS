@@ -15,6 +15,10 @@
 #define FS_TEST_PRINT(fmt, ...) \
     printk("[FS_TEST]" fmt, ##__VA_ARGS__)
 
+#define NUM_THREADS 12
+#define NUM_READERS 2
+#define NUM_WRITERS 2
+
 static int pass_count = 0;
 static int fail_count = 0;
 
@@ -28,6 +32,116 @@ static void get_paths(struct path **root, struct path **pwd) {
 static void put_paths(struct path *root, struct path *pwd) {
     vfs_path_put(root);
     vfs_path_put(pwd);
+}
+
+// 用于并发测试线程
+struct concurrent_thread_data {
+    struct path *pwd;
+    int id;
+    int error;
+    bool done;
+    atomic_int *barrier;
+    atomic_int *remaining;
+};
+
+// 用于并发读写的线程
+struct concurrent_rw_thread_data {
+    struct path *pwd;
+    int id;
+    int error;
+    bool done;
+    bool is_reader;
+    atomic_int *barrier;
+    atomic_int *remaining;
+};
+
+// 并发创建不同文件的线程函数
+static void concurrent_create_thread_func(void *arg) {
+    struct concurrent_thread_data *t = arg;
+    
+    atomic_fetch_sub(t->barrier, 1);
+    while (atomic_load(t->barrier) > 0) {
+        task_sched();
+    }
+
+    char path[64];
+    snprintk(path, sizeof(path), "/concurrent_%d", t->id);
+    struct file *file = vfs_open(path, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR, t->pwd);
+    if (!IS_ERR(file)) {
+        char data[4];
+        snprintk(data, sizeof(data), "t%d", t->id);
+        vfs_write(file, data, 2, NULL);
+        vfs_close(file);
+        t->error = 0;
+    } else {
+        t->error = PTR_ERR(file);
+    }
+    t->done = true;
+    atomic_fetch_sub(t->remaining, 1);
+}
+
+// 并发创建同名文件的线程函数
+static void concurrent_create_same_func(void *arg) {
+    struct concurrent_thread_data *t = arg;
+    
+    atomic_fetch_sub(t->barrier, 1);
+    while (atomic_load(t->barrier) > 0) {
+        task_sched();
+    }
+
+    struct file *file = vfs_open(
+        "/concurrent_same",
+        O_CREAT | O_RDWR | O_TRUNC | O_EXCL,
+        S_IRUSR | S_IWUSR,
+        t->pwd
+    );
+    if (!IS_ERR(file)) {
+        vfs_write(file, "data", 4, NULL);
+        vfs_close(file);
+        t->error = 0;
+    } else {
+        t->error = PTR_ERR(file);
+    }
+    t->done = true;
+    atomic_fetch_sub(t->remaining, 1);
+}
+
+// 并发读写的线程函数
+static void concurrent_rw_thread_func(void *arg) {
+    struct concurrent_rw_thread_data *t = arg;
+    
+    atomic_fetch_sub(t->barrier, 1);
+    while (atomic_load(t->barrier) > 0) {
+        task_sched();
+    }
+
+    if (t->is_reader) {
+        struct file *file = vfs_open("/concurrent_rw", O_RDONLY, 0, t->pwd);
+        if (!IS_ERR(file)) {
+            char buf[128];
+            for (int i = 0; i < 5; i++) {
+                vfs_lseek(file, 0, SEEK_SET);
+                vfs_read(file, buf, sizeof(buf), NULL);
+            }
+            vfs_close(file);
+            t->error = 0;
+        } else {
+            t->error = PTR_ERR(file);
+        }
+    } else {
+        struct file *file = vfs_open("/concurrent_rw", O_RDWR | O_APPEND, 0, t->pwd);
+        if (!IS_ERR(file)) {
+            for (int i = 0; i < 2; i++) {
+                vfs_write(file, "wdat", 4, NULL);
+            }
+            vfs_close(file);
+            t->error = 0;
+        } else {
+            t->error = PTR_ERR(file);
+        }
+    }
+    t->done = true;
+    atomic_fetch_sub(t->remaining, 1);
 }
 
 // 基本文件操作
@@ -644,7 +758,7 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
     struct file *file = NULL;
     char buf[8];
     int ret;
-    struct vfsmount *mnt = NULL;
+    kresult_t mnt_res;
 
     // 创建挂载点并挂载 tmpfs
     TEST_IMPL(do_run, step, {
@@ -656,8 +770,8 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
         );
         TEST_ASSERT_STEP(global_step + step, ret == 0, "mkdir /mnt failed: %d", ret);
 
-        mnt = vfs_mount(NULL, "/mnt", "tmpfs", MS_NONE, NULL, true);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(mnt), "mount tmpfs on /mnt failed: %d", PTR_ERR(mnt));
+        mnt_res = vfs_mount(NULL, "/mnt", "tmpfs", MS_NONE, NULL, true);
+        TEST_ASSERT_STEP(global_step + step, mnt_res.err == 0, "mount tmpfs on /mnt failed: %d", mnt_res.err);
     });
 
     // 在挂载点下创建文件
@@ -720,22 +834,218 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
         vfs_close(file);
     });
 
-    /**
-     * 清理
-     * 
-     * TODO: 
-     * 
-     * TEST_CLEANUP(do_run, {
-     * vfs_unlink("/link_to_mount", pwd);
-     * vfs_unlink("/mnt/mountfile", pwd);
-     * vfs_umount(xxx);
-     * vfs_rmdir("/mnt", pwd);
-     * });
-     */
+    // 清理
+    TEST_CLEANUP(do_run, {
+        vfs_unlink("/link_to_mount", pwd);
+        vfs_unlink("/mnt/mountfile", pwd);
+        vfs_umount("/mnt", 0, true);
+        vfs_rmdir("/mnt", pwd);
+    });
+})
+
+// 并发创建不同文件
+TEST_ENTRY(test_concurrent_create_different, step, do_run, (struct path *pwd, int global_step), {
+    struct concurrent_thread_data tdata[NUM_THREADS];
+    atomic_int barrier;
+    atomic_int remaining;
+
+    TEST_IMPL(do_run, step, {
+        TEST_DESC(global_step + step, "concurrent create different files");
+
+        // 初始化
+        for (int i = 0; i < NUM_THREADS; i++) {
+            tdata[i].pwd = pwd;
+            tdata[i].id = i;
+            tdata[i].error = 0;
+            tdata[i].done = false;
+            tdata[i].barrier = &barrier;
+            tdata[i].remaining = &remaining;
+        }
+        atomic_init(&barrier, NUM_THREADS);
+        atomic_init(&remaining, NUM_THREADS);
+
+        // 创建线程并等待
+        for (int i = 0; i < NUM_THREADS; i++) {
+            task_create_kernel_thread(concurrent_create_thread_func, &tdata[i]);
+        }
+        while (atomic_load(&remaining) > 0) {
+            task_sched();
+        }
+
+        // 验证
+        for (int i = 0; i < NUM_THREADS; i++) {
+            char path[64];
+            snprintk(path, sizeof(path), "/concurrent_%d", i);
+            struct file *file = vfs_open(path, O_RDONLY, 0, pwd);
+            TEST_ASSERT_STEP(
+                global_step + step,
+                !IS_ERR(file),
+                "concurrent file %d not found",
+                i
+            );
+            if (!IS_ERR(file)) {
+                char buf[4] = {0};
+                ssize_t r = vfs_read(file, buf, 2, NULL);
+                TEST_ASSERT_STEP(
+                    global_step + step,
+                    r == 2,
+                    "concurrent file %d read failed",
+                    i
+                );
+                vfs_close(file);
+            }
+        }
+    });
+
+    // 清理
+    TEST_CLEANUP(do_run, {
+        for (int i = 0; i < NUM_THREADS; i++) {
+            char path[64];
+            snprintk(path, sizeof(path), "/concurrent_%d", i);
+            vfs_unlink(path, pwd);
+        }
+    });
+})
+
+// 并发创建同名文件（验证互斥）
+TEST_ENTRY(test_concurrent_create_same, step, do_run, (struct path *pwd, int global_step), {
+    struct concurrent_thread_data tdata[NUM_THREADS];
+    atomic_int barrier;
+    atomic_int remaining;
+
+    TEST_IMPL(do_run, step, {
+        TEST_DESC(global_step + step, "concurrent create same file");
+
+        // 初始化
+        for (int i = 0; i < NUM_THREADS; i++) {
+            tdata[i].pwd = pwd;
+            tdata[i].id = i;
+            tdata[i].error = 0;
+            tdata[i].done = false;
+            tdata[i].barrier = &barrier;
+            tdata[i].remaining = &remaining;
+        }
+        atomic_init(&barrier, NUM_THREADS);
+        atomic_init(&remaining, NUM_THREADS);
+
+        // 创建线程并等待
+        for (int i = 0; i < NUM_THREADS; i++) {
+            task_create_kernel_thread(concurrent_create_same_func, &tdata[i]);
+        }
+        while (atomic_load(&remaining) > 0) {
+            task_sched();
+        }
+
+        // 验证：只能有一个线程成功，其他返回 -EEXIST
+        int success_count = 0;
+        for (int i = 0; i < NUM_THREADS; i++) {
+            if (tdata[i].error == 0) {
+                success_count++;
+            } else {
+                TEST_ASSERT_STEP(
+                    global_step + step,
+                    tdata[i].error == -EEXIST,
+                    "thread %d unexpected error: %d",
+                    i,
+                    tdata[i].error
+                );
+            }
+        }
+        TEST_ASSERT_STEP(
+            global_step + step,
+            success_count == 1,
+            "exactly one thread should succeed, got %d",
+            success_count
+        );
+    });
+
+    // 清理
+    TEST_CLEANUP(do_run, {
+        vfs_unlink("/concurrent_same", pwd);
+    });
+})
+
+// 并发读写混合（写线程追加，读线程读取）
+TEST_ENTRY(test_concurrent_read_write, step, do_run, (struct path *pwd, int global_step), {
+    struct concurrent_rw_thread_data tdata[NUM_READERS + NUM_WRITERS];
+    atomic_int barrier;
+    atomic_int remaining;
+
+    TEST_IMPL(do_run, step, {
+        TEST_DESC(global_step + step, "concurrent read/write test");
+
+        // 创建初始文件
+        struct file *file = vfs_open("/concurrent_rw", O_CREAT | O_RDWR | O_TRUNC,
+            S_IRUSR | S_IWUSR, pwd);
+        TEST_ASSERT_STEP(
+            global_step + step,
+            !IS_ERR(file),
+            "create /concurrent_rw failed"
+        );
+        if (!IS_ERR(file)) {
+            const char *init_str = "initial";
+            size_t init_len = strlen(init_str);
+            vfs_write(file, init_str, init_len, NULL);
+            vfs_close(file);
+        }
+
+        // 初始化线程数据
+        for (int i = 0; i < NUM_READERS + NUM_WRITERS; i++) {
+            tdata[i].pwd = pwd;
+            tdata[i].id = i;
+            tdata[i].error = 0;
+            tdata[i].done = false;
+            tdata[i].is_reader = (i < NUM_READERS);
+            tdata[i].barrier = &barrier;
+            tdata[i].remaining = &remaining;
+        }
+        atomic_init(&barrier, NUM_READERS + NUM_WRITERS);
+        atomic_init(&remaining, NUM_READERS + NUM_WRITERS);
+
+        // 创建线程并等待
+        for (int i = 0; i < NUM_READERS + NUM_WRITERS; i++) {
+            task_create_kernel_thread(concurrent_rw_thread_func, &tdata[i]);
+        }
+
+        while (atomic_load(&remaining) > 0) {
+            task_sched();
+        }
+
+        // 验证：最终文件大小 = 初始大小 + 每个写线程写入的4字节 * 2次
+        file = vfs_open("/concurrent_rw", O_RDONLY, 0, pwd);
+        TEST_ASSERT_STEP(
+            global_step + step,
+            !IS_ERR(file),
+            "open /concurrent_rw after test failed"
+        );
+        if (!IS_ERR(file)) {
+            struct kstat stat;
+            int err = vfs_getattr("/concurrent_rw", &stat, pwd);
+            TEST_ASSERT_STEP(
+                global_step + step,
+                err == 0,
+                "getattr /concurrent_rw failed"
+            );
+            size_t expected_size = strlen("initial") + NUM_WRITERS * 2 * 4;
+            TEST_ASSERT_STEP(
+                global_step + step,
+                stat.st_size == (off_t)expected_size,
+                "file size mismatch: expected %d, got %d",
+                expected_size,
+                stat.st_size
+            );
+            vfs_close(file);
+        }
+    });
+
+    // 清理
+    TEST_CLEANUP(do_run, {
+        vfs_unlink("/concurrent_rw", pwd);
+    });
 })
 
 // 主测试入口
-static void test(void) {
+void test_fs(void) {
     struct path *root, *pwd;
     struct test_result result;
     int total_steps = 0;
@@ -801,6 +1111,22 @@ static void test(void) {
     fail_count += result.fail;
     total_steps += result.total;
 
+    // 并发测试
+    result = test_concurrent_create_different(pwd, total_steps);
+    pass_count += result.pass;
+    fail_count += result.fail;
+    total_steps += result.total;
+
+    result = test_concurrent_create_same(pwd, total_steps);
+    pass_count += result.pass;
+    fail_count += result.fail;
+    total_steps += result.total;
+
+    result = test_concurrent_read_write(pwd, total_steps);
+    pass_count += result.pass;
+    fail_count += result.fail;
+    total_steps += result.total;
+
     put_paths(root, pwd);
 
     FS_TEST_PRINT(
@@ -817,4 +1143,4 @@ static void test(void) {
         FS_TEST_PRINT("ALL TESTS PASSED\n");
 }
 
-INITCALL(kthreadtest, 0, test);
+INITCALL(kthreadtest, 0, test_fs);

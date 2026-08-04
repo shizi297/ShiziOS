@@ -22,6 +22,7 @@ endif()
 find_program(LLD_FOUND ld.lld)
 if(LLD_FOUND)
     add_link_options("-fuse-ld=lld")
+    add_link_options("-Wl,-m,elf_x86_64")
     message(STATUS "Using lld linker with multi-threading: ${LLD_FOUND}")
 else()
     message(STATUS "No lld found, using default linker")
@@ -54,10 +55,10 @@ if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
 endif()
 
 # 基础编译选项（所有模式共用）
-set(BASE_FLAGS -std=gnu11 -ffreestanding -fno-strict-aliasing ${OPT_LEVEL})
+set(BASE_FLAGS -std=gnu11 -ffreestanding -fno-strict-aliasing --target=x86_64-elf ${OPT_LEVEL})
 
 # 用户态专用编译选项
-set(USER_EXTRA_FLAGS -fPIC -nostdlib -nostdlibinc)
+set(USER_EXTRA_FLAGS -fPIC -nostdlib -nostdlibinc --target=x86_64-elf)
 
 # 栈保护标志
 if(STACK)

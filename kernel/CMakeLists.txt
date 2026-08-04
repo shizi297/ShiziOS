@@ -24,6 +24,7 @@ add_subdirectory(task)             # 任务管理模块
 add_subdirectory(init)             # 内核初始化模块
 add_subdirectory(ipc)              # IPC模块
 add_subdirectory(sync)             # 同步原语模块
+add_subdirectory(block)            # 块设备层模块
 add_subdirectory(fs)               # 文件系统模块
 
 # 测试模块
@@ -51,6 +52,7 @@ target_link_libraries(kernel.elf
     kernel_task
     kernel_ipc
     kernel_sync
+    kernel_block
     kernel_fs
     $<$<BOOL:${TEST}>:kernel_test>
     -Wl,--no-whole-archive
