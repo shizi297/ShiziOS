@@ -39,6 +39,9 @@ SECTIONS
 
     .data : {
         *(.data .data.*)
+        . = ALIGN(8);
+        PROVIDE(__stack_chk_guard = .);
+        LONG(0x595e9fbd94fda766);
     } :all
 
     .bss : {

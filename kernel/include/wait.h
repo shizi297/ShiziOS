@@ -8,6 +8,7 @@
 #include <list.h>
 #include <spinlock.h>
 #include <task.h>
+#include <asm/smp.h>
 
 typedef struct {
     struct list_head head;
@@ -87,8 +88,8 @@ do { \
     spin_lock(&(wq)->lock); \
     waitqueue_add((wq), &__entry); \
     while (!(condition)) { \
-        spin_unlock(&(wq)->lock); \
         task_sleep(true); \
+        spin_unlock(&(wq)->lock); \
         task_sched(); \
         spin_lock(&(wq)->lock); \
     } \

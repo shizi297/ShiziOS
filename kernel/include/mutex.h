@@ -26,12 +26,20 @@ static inline void mutex_init(mutex_t *m) {
     waitqueue_head_init(&m->wait_queue);
 }
 
-// 获取互斥锁
 static inline void mutex_lock(mutex_t *m) {
-    waitqueue_event(&m->wait_queue, atomic_load(&m->state) == 0);
+    // 快速路径
+    int expected = 0;
+    if (atomic_compare_exchange_strong(&m->state, &expected, 1)) {
+        m->owner = smp_get_task_current();
+        return;
+    }
 
-    // 条件满足后，设置锁定
-    atomic_store(&m->state, 1);
+    // 慢速路径
+    do {
+        waitqueue_event(&m->wait_queue, atomic_load(&m->state) == 0);
+        expected = 0;
+    } while (!atomic_compare_exchange_strong(&m->state, &expected, 1));
+
     m->owner = smp_get_task_current();
 }
 

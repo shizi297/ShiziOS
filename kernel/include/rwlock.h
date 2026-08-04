@@ -7,44 +7,68 @@
 
 #include <stdint.h>
 #include <stdatomic.h>
-#include <mutex.h>
-#include <wait.h>
+#include <asm/processor.h>
 
+// 状态位
+#define RWLOCK_READER_BITS   30u                                    // 读者计数占用的位数
+#define RWLOCK_READER_MASK   ((1ull << RWLOCK_READER_BITS) - 1u)    // 读者计数掩码（低 30 位）
+#define RWLOCK_WRITE_WAITING (1ull << (RWLOCK_READER_BITS + 1))     // 有写者在等待（第 31 位）
+#define RWLOCK_WRITE_LOCKED  (1ull << (RWLOCK_READER_BITS + 0))     // 写者持有锁（第 30 位）
 
 typedef struct {
-    atomic_uint_least32_t readers;  // 当前读者数量
-    mutex_t write_mutex;    // 保证同一时间只有一个写者
-    wait_queue_head_t write_wait;   // 写者等待队列（读者归零时唤醒）
+    atomic_uint_least32_t state;     
 } rwlock_t;
 
 // 初始化
 static inline void rwlock_init(rwlock_t *rw) {
-    atomic_init(&rw->readers, 0);
-    mutex_init(&rw->write_mutex);
-    waitqueue_head_init(&rw->write_wait);
+    atomic_init(&rw->state, 0);
 }
 
 // 获取读锁
 static inline void rwlock_read_lock(rwlock_t *rw) {
-    atomic_fetch_add(&rw->readers, 1);
+    while (1) {
+        uint32_t s = atomic_load_explicit(&rw->state, memory_order_relaxed);
+        // 没有写者持有且没有写者等待时可以获取读锁
+        if (!(s & (RWLOCK_WRITE_LOCKED | RWLOCK_WRITE_WAITING))) {
+            if (atomic_compare_exchange_weak_explicit(
+                    &rw->state, &s, s + 1,
+                    memory_order_acquire, memory_order_relaxed)) {
+                return;
+            }
+        }
+        // 有写者，自旋等待
+    }
 }
 
 // 释放读锁
 static inline void rwlock_read_unlock(rwlock_t *rw) {
-    if (atomic_fetch_sub(&rw->readers, 1) == 1) {
-        waitqueue_wake_up(&rw->write_wait);
-    }
+    atomic_fetch_sub_explicit(&rw->state, 1, memory_order_release);
 }
 
 // 获取写锁
 static inline void rwlock_write_lock(rwlock_t *rw) {
-    mutex_lock(&rw->write_mutex);
-    waitqueue_event(&rw->write_wait, atomic_load(&rw->readers) == 0);
+    while (1) {
+        uint32_t s = atomic_load_explicit(&rw->state, memory_order_relaxed);
+        if (s == 0) {
+            // 没有任何持有者，尝试直接获取写锁
+            if (atomic_compare_exchange_weak_explicit(
+                    &rw->state, &s, RWLOCK_WRITE_LOCKED,
+                    memory_order_acquire, memory_order_relaxed)) {
+                return;
+            }
+        } else {
+            // 标记写者等待，防止新的读者进入
+            if (!(s & RWLOCK_WRITE_WAITING)) {
+                atomic_fetch_or_explicit(&rw->state, RWLOCK_WRITE_WAITING, memory_order_relaxed);
+            }
+        }
+        // 自旋等待
+    }
 }
 
 // 释放写锁
 static inline void rwlock_write_unlock(rwlock_t *rw) {
-    mutex_unlock(&rw->write_mutex);
+    atomic_store_explicit(&rw->state, 0, memory_order_release);
 }
 
 // 获取读锁并关中断

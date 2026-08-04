@@ -24,7 +24,7 @@
 #define TMP_BUF_SIZE 128
 
 // vprintk 缓存区的大小
-#define PRINTK_BUFFER_SIZE 512 
+#define PRINTK_BUFFER_SIZE 512
 
 __attribute__((section(".data")))
 static struct {
