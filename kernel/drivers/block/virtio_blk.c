@@ -9,6 +9,7 @@
 #include <block.h>
 #include <klibc.h>
 #include <asm/smp.h>
+#include <spinlock.h>
 
 #define VIRTIO_BLK_DEVICE_ID 2
 
@@ -85,6 +86,7 @@ struct virtio_blk_priv {
     struct block_hdr hdr;          // 必须第一个
     struct virtio_blk_features_ops ops;
     uint32_t num_queues;           // 从配置空间读取，请求分发用
+    spinlock_t *queue_locks;        // 每个队列的锁
     uint8_t irq_vector;
 };
 
@@ -131,6 +133,16 @@ struct virtio_blk_config {
 } __attribute__((packed));
 
 struct block_type *virtio_blk_type = NULL;
+
+static void *blk_isr_before(void *priv, uint64_t *qid) {
+    struct virtio_blk_priv *p = priv;
+    spin_lock(&p->queue_locks[*qid]);
+    return &p->queue_locks[*qid];
+}
+
+static void blk_isr_after(void *ctx) {
+    spin_unlock((spinlock_t *)ctx);
+}
 
 static bool virtio_blk_flush_disabled(struct virtio_blk_priv *priv, struct device *dev) {
     (void)priv;
@@ -181,23 +193,26 @@ static int virtio_blk_request(
     hdr.reserved = 0;
     hdr.sector = sector;
 
-    // 组装 scatterlist
-    sg[out].addr = (uintptr_t)&hdr;
+    // 组装 scatterlist，地址需转换为物理地址
+    sg[out].addr = LINEAR_TO_PHYS((uintptr_t)&hdr);
     sg[out].length = sizeof(hdr);
     out++;
 
     // 数据段（FLUSH 时 sector_count=0，dummy 自增不影响 out/in）
-    sg[*data_cnt].addr = (uintptr_t)buf;
+    sg[*data_cnt].addr = LINEAR_TO_PHYS((uintptr_t)buf);
     sg[*data_cnt].length = sector_count * 512;
     (*data_cnt)++;
 
     // 状态段
-    sg[in].addr = (uintptr_t)&status;
+    sg[in].addr = LINEAR_TO_PHYS((uintptr_t)&status);
     sg[in].length = 1;
     in++;
 
     // 提交请求
+    spin_lock(&p->queue_locks[qid]);
     ret = virtioqueue_add_buf(dev, qid, sg, out, in, &ctx);
+    spin_unlock(&p->queue_locks[qid]);
+    
     if (ret < 0)
         return ret;
 
@@ -239,7 +254,7 @@ static int virtio_blk_flush(void *priv, struct device *dev) {
     return p->ops.flush(priv, dev) ? 0 : -EOPNOTSUPP;
 }
 
-VIRTIO_DRIVER_ISR_ENTRY(virtio_blk_isr, virtio_blk_type, data, {
+VIRTIO_DRIVER_ISR_ENTRY(virtio_blk_isr, virtio_blk_type, blk_isr_before, blk_isr_after, data, {
     struct virtio_blk_ctx *ctx = data;
     task_wakeup(ctx->task);
 });
@@ -263,7 +278,7 @@ static int virtio_blk_probe(struct device *dev) {
         return -ENOMEM;
     memset(priv, 0, sizeof(*priv));
 
-    priv->hdr.read  = virtio_blk_read;
+    priv->hdr.read = virtio_blk_read;
     priv->hdr.write = virtio_blk_write;
     priv->hdr.flush = virtio_blk_flush;
 
@@ -317,14 +332,29 @@ static int virtio_blk_probe(struct device *dev) {
     ret = virtqueue_set_all(dev, 0, vector, priv->num_queues, &created);
     if (ret < 0)
         goto err_remove_block;
-
+        
     priv->num_queues = created;
     priv->irq_vector = vector;
+    
+    priv->queue_locks = kheap_alloc(priv->num_queues * sizeof(spinlock_t));
+    if (!priv->queue_locks) {
+        ret = -ENOMEM;
+        goto err_free_vqs;
+    }
+    for (int i = 0; i < priv->num_queues; i++) 
+        spinlock_init(&priv->queue_locks[i]);
     
     virtio_set_drvdata(dev, priv);
 
     return 0;
 
+err_free_vqs:
+    /* 
+     * TODO :
+     * 销毁所有 virtqueue
+     * virtqueue_free_all(dev);
+     */
+    kheap_free(priv->queue_locks);
 err_remove_block:
     block_remove_device(dev);
 err_free_irq:
@@ -337,6 +367,10 @@ err_free_priv:
 static void virtio_blk_remove(struct device *dev) {
     struct virtio_blk_priv *priv;
 
+    priv = virtio_get_drvdata(dev);
+    if (!priv)
+        return;
+
     // 从块设备层注销
     block_remove_device(dev);
 
@@ -347,12 +381,14 @@ static void virtio_blk_remove(struct device *dev) {
      */
 
     // 释放中断号
-    priv = virtio_get_drvdata(dev);
-    if (priv) {
-        smp_irq_unregister_handler(priv->irq_vector);
-        kheap_free(priv);
-        virtio_set_drvdata(dev, NULL);
-    }
+    smp_irq_unregister_handler(priv->irq_vector);
+
+    // 释放 per-queue 锁数组
+    if (priv->queue_locks)
+        kheap_free(priv->queue_locks);
+
+    kheap_free(priv);
+    virtio_set_drvdata(dev, NULL);
 }
 
 static const struct virtio_device_id virtio_blk_id[] = {

@@ -34,18 +34,23 @@
  * VIRTIO ISR 处理入口
  *
  * @param name ISR 函数名
- * @param handle 设备类函数句柄
+ * @param handle 设备类型句柄
+ * @param before 回收前调用，返回上下文
+ * @param after 回收后调用，接收 before 返回的上下文
  * @param data_var 保存 caller_data 的变量名
  * @param body 处理单个请求的代码块（可使用 data_var 访问 caller_data）
- * 
- * 对于 body 部分需要使用 {} 进行包裹逻辑
  */
-#define VIRTIO_DRIVER_ISR_ENTRY(name, handle, data_var, body) \
+#define VIRTIO_DRIVER_ISR_ENTRY(name, handle, before, after, data_var, body) \
     void name(void) { \
         uint64_t __isr_index = 0; \
         void *data_var; \
-        while ((data_var = virtioqueue_process_isr(handle, &__isr_index)) != NULL) { \
-            body \
+        while (1) { \
+            data_var = virtioqueue_process_isr(handle, &__isr_index, before, after); \
+            if (data_var == NULL) \
+                break; \
+            do { \
+                body \
+            } while (0); \
         } \
     }
 
@@ -59,6 +64,27 @@ struct scatterlist {
 struct virtio_device_id{
     uint32_t type;
 };
+
+struct virtio_isr_result {
+    void *data;
+    uint32_t qid;
+};
+
+/**
+ * 回收前回调
+ *
+ * @param priv 驱动私有数据
+ * @param qid 队列索引
+ * @return 上下文指针
+ */
+typedef void *(*virtio_isr_before_t)(void *priv, uint64_t *qid);
+
+/**
+ * 回收后回调
+ *
+ * @param ctx before 返回的上下文
+ */
+typedef void (*virtio_isr_after_t)(void *ctx);
 
 extern struct bus virtio_bus_type;
 
@@ -192,10 +218,17 @@ void virtioqueue_kick(struct device *dev, uint32_t queue_index);
 
 /**
  * 回收所有队列的已完成请求
- * 
+ *
  * @param handle 设备类型句柄
  * @param index 存放当前查找进度
+ * @param before 回收前回调
+ * @param after 回收后回调
  *
  * @return 下一个 caller_data，无完成项时返回 NULL
  */
-void *virtioqueue_process_isr(struct virtio_device_type *handle, uint64_t *index);
+void *virtioqueue_process_isr(
+    struct virtio_device_type *handle,
+    uint64_t *index,
+    virtio_isr_before_t before,
+    virtio_isr_after_t after
+);

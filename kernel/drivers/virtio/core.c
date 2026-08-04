@@ -1225,13 +1225,20 @@ void virtioqueue_kick(struct device *dev, uint32_t queue_index) {
 
 /**
  * 回收所有队列的已完成请求
- * 
+ *
  * @param handle 设备类型句柄
  * @param index 存放当前查找进度
+ * @param before 回收前回调
+ * @param after 回收后回调
  *
  * @return 下一个 caller_data，无完成项时返回 NULL
  */
-void *virtioqueue_process_isr(struct virtio_device_type *handle, uint64_t *index) {
+void *virtioqueue_process_isr(
+    struct virtio_device_type *handle,
+    uint64_t *index,
+    virtio_isr_before_t before,
+    virtio_isr_after_t after
+) {
     if (!handle || !handle->devices || !index)
         return NULL;
 
@@ -1241,7 +1248,7 @@ void *virtioqueue_process_isr(struct virtio_device_type *handle, uint64_t *index
 
     // 解析起始位置
     uint32_t start_didx = VIRTIO_ISR_GET_DIDX(*index);
-    uint32_t start_qidx = VIRTIO_ISR_GET_QIDX(*index);
+    uint64_t start_qidx = VIRTIO_ISR_GET_QIDX(*index);
 
     // 如果起始设备索引越界，从头开始
     if (start_didx >= count) {
@@ -1250,7 +1257,7 @@ void *virtioqueue_process_isr(struct virtio_device_type *handle, uint64_t *index
     }
 
     uint32_t didx = start_didx;
-    uint32_t qidx = start_qidx;
+    uint64_t qidx = start_qidx;
     struct virtio_dev_priv *priv = NULL;
 
     while (1) {
@@ -1268,7 +1275,9 @@ void *virtioqueue_process_isr(struct virtio_device_type *handle, uint64_t *index
         if (qidx < num_q) {
             struct virtioqueue *vq = priv->vqs[qidx];
             if (vq && priv->feature_ops.recycle) {
+                void *ctx = before(priv, &qidx);
                 void *data = priv->feature_ops.recycle(vq);
+                after(ctx);
                 if (data) {
                     // 成功回收，原地不动，更新外部索引并返回
                     *index = VIRTIO_ISR_PACK(didx, qidx);
