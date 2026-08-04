@@ -16,6 +16,9 @@
 #define VFS_HASH_MIN 256
 #define VFS_HASH_MAX (1 << 18)
 
+// POSIX 默认 umask
+#define VFS_DEFAULT_UMASK 022
+
 #define VFS_PRINT(fmt, ...) \
     printk("[VFS] " fmt, ##__VA_ARGS__)
 
@@ -33,6 +36,8 @@ static struct vfs_lock_list fs_list_head = {0};
 
 // dentry LRU 链表头
 static struct vfs_lock_list dentry_lru_list = {0};   
+
+static struct vfs_lock_list inode_lru_list = {0};
 
 // 缓存的哈希表
 static struct vfs_hash_table inode_cache = {0};   
@@ -242,7 +247,15 @@ static struct dentry *vfs_dlookup(struct dentry *parent, const char *name, size_
 
 // 分配并初始化 dentry
 static struct dentry *vfs_dalloc(struct dentry *parent, const char *name) {
-    struct dentry *dentry = kheap_alloc(sizeof(struct dentry));
+    struct dentry *dentry;
+
+    // 先检查缓存中是否已有同名 dentry 避免重复创建
+    dentry = vfs_dcache_find(parent, name, strlen(name));
+    if (dentry)
+        return dentry;
+
+    // 缓存未命中，分配新的 dentry
+    dentry = kheap_alloc(sizeof(struct dentry));
     if (!dentry)
         return NULL;
 
@@ -278,21 +291,24 @@ static struct dentry *vfs_dalloc(struct dentry *parent, const char *name) {
         spin_unlock(&parent->lock);
     }
 
-    // 插入 dentry 哈希表
-    vfs_dcache_add(dentry);
-
     return dentry;
 }
 
 // 读取符号链接目标
 static ssize_t vfs_readlink(struct dentry *dentry, char *buf, size_t bufsiz) {
-    if (!dentry->inode || !S_ISLNK(dentry->inode->mode))
+    struct inode *inode;
+
+    spin_lock(&dentry->lock);
+    inode = dentry->inode;
+    spin_unlock(&dentry->lock);
+
+    if (!inode || !S_ISLNK(inode->mode))
         return -EINVAL;
 
-    if (!dentry->inode->ops->readlink)
+    if (!inode->ops->readlink)
         return -ENOSYS;
 
-    return dentry->inode->ops->readlink(dentry->inode, buf, bufsiz);
+    return inode->ops->readlink(inode, buf, bufsiz);
 }
 
 // 将 dentry 加入全局 LRU 链表尾部
@@ -315,6 +331,30 @@ static void vfs_dlru_del(struct dentry *dentry) {
     spin_unlock(&dentry_lru_list.lock);
 }
 
+/**
+ * 将 inode 加入全局 LRU 链表尾部
+ *
+ * @param inode 要加入 LRU 的 inode
+ */
+static void vfs_ilru_add(struct inode *inode) {
+    spin_lock(&inode_lru_list.lock);
+    if (list_empty(&inode->lru))
+        list_add_tail(&inode->lru, &inode_lru_list.list);
+    spin_unlock(&inode_lru_list.lock);
+}
+
+/**
+ * 将 inode 从全局 LRU 链表中删除
+ *
+ * @param inode 要从 LRU 中移除的 inode
+ */
+static void vfs_ilru_del(struct inode *inode) {
+    spin_lock(&inode_lru_list.lock);
+    if (!list_empty(&inode->lru))
+        list_del_init(&inode->lru);
+    spin_unlock(&inode_lru_list.lock);
+}
+
 // 增加 dentry 引用计数
 static inline void vfs_dget(struct dentry *dentry) {
     uint64_t old = atomic_fetch_add(&dentry->count, 1);
@@ -327,6 +367,47 @@ static inline void vfs_dget(struct dentry *dentry) {
 static inline void vfs_dput(struct dentry *dentry) {
     if (atomic_fetch_sub(&dentry->count, 1) == 1) 
         vfs_dlru_add(dentry);
+}
+
+/**
+ * 检查文件是否已存在
+ *
+ * @param parent_dentry 父目录的 dentry
+ * @param name 文件名
+ * @param name_len 文件名长度
+ *
+ * 调用前需要父目录的 inode 锁
+ */
+static inline bool vfs_file_exists(
+    struct dentry *parent_dentry,
+    const char *name,
+    size_t name_len
+) {
+    struct dentry *exist = vfs_dcache_find(parent_dentry, name, name_len);
+    if (exist) {
+        bool has_inode;
+        spin_lock(&exist->lock);
+        has_inode = (exist->inode != NULL);
+        spin_unlock(&exist->lock);
+        vfs_dput(exist);
+        return has_inode;
+    }
+
+    // 缓存未命中，穿透到文件系统确认
+    exist = vfs_dalloc(parent_dentry, name);
+    if (!exist)
+        return false;
+
+    exist = parent_dentry->inode->ops->lookup(parent_dentry->inode, exist);
+    if (!exist || IS_ERR(exist))
+        return false;
+
+    bool has_inode;
+    spin_lock(&exist->lock);
+    has_inode = (exist->inode != NULL);
+    spin_unlock(&exist->lock);
+    vfs_dput(exist);
+    return has_inode;
 }
 
 // 根据名称查找已注册的文件系统类型
@@ -593,7 +674,11 @@ static struct path *vfs_path_lookup(
         if (p == NULL) {
             if (depth == 1) {
                 // 没有符号链接，直接检查结果并返回
-                if (!stack[0].curr_path->dentry->inode) {
+                bool has_inode;
+                spin_lock(&stack[0].curr_path->dentry->lock);
+                has_inode = (stack[0].curr_path->dentry->inode != NULL);
+                spin_unlock(&stack[0].curr_path->dentry->lock);
+                if (!has_inode) {
                     err = -ENOENT;
                     break;
                 }
@@ -645,7 +730,11 @@ static struct path *vfs_path_lookup(
             }
         }
 
-        if (p->dentry->flags & DCACHE_MOUNTED) {
+        bool is_mounted;
+        spin_lock(&p->dentry->lock);
+        is_mounted = (p->dentry->flags & DCACHE_MOUNTED);
+        spin_unlock(&p->dentry->lock);
+        if (is_mounted) {
             // 当前是挂载点
             struct vfsmount *mnt = vfs_find_mount(p->dentry);
             if (!mnt) {
@@ -823,6 +912,7 @@ static int vfs_root_mount(void) {
     struct dentry *root_dentry;
     struct vfsmount *mnt;
     struct path *root_path;
+    kresult_t res;
 
     // 查找 tmpfs 文件系统类型
     tmpfs = vfs_find_filesystem("tmpfs");
@@ -830,9 +920,11 @@ static int vfs_root_mount(void) {
         return -ENODEV;
 
     // 调用 tmpfs 的 mount 回调，获取根 dentry
-    root_dentry = tmpfs->mount(tmpfs, MS_NOUSER, NULL, NULL);
-    if (IS_ERR(root_dentry))
-        return PTR_ERR(root_dentry);
+    res = tmpfs->mount(tmpfs, MS_NOUSER, NULL, NULL);
+    if (res.err)
+        return res.err;
+
+    root_dentry = res.ptr;
 
     // 分配并初始化根挂载点
     mnt = kheap_alloc(sizeof(struct vfsmount));
@@ -876,6 +968,7 @@ static int vfs_dev_mount(void) {
     struct dentry *root_dentry;
     struct vfsmount *mnt;
     struct file_system_type *tmpfs;
+    kresult_t res;
     int err;
 
     // 创建 /dev 目录
@@ -896,11 +989,13 @@ static int vfs_dev_mount(void) {
     }
 
     // 调用 tmpfs 的 mount 回调，创建根 dentry
-    root_dentry = tmpfs->mount(tmpfs, MS_NOUSER, NULL, NULL);
-    if (IS_ERR(root_dentry)) {
+    res = tmpfs->mount(tmpfs, MS_NOUSER, NULL, NULL);
+    if (res.err) {
         vfs_path_put(dev_path);
-        return PTR_ERR(root_dentry);
+        return res.err;
     }
+
+    root_dentry = res.ptr;
 
     // 分配 vfsmount
     mnt = kheap_alloc(sizeof(struct vfsmount));
@@ -1043,6 +1138,34 @@ void vfs_icache_add(struct inode *inode) {
 }
 
 /**
+ * 对已知的 inode 增加引用计数
+ *
+ * @param inode 要增加引用的 inode
+ */
+void vfs_iget(struct inode *inode) {
+    if (!inode)
+        return;
+
+    if (atomic_fetch_add(&inode->count, 1) == 0)
+        vfs_ilru_del(inode);
+}
+
+/**
+ * 增加 inode 引用
+ *
+ * @param inode 要释放引用的 inode
+ */
+void vfs_iput(struct inode *inode) {
+    if (!inode)
+        return;
+
+    if (atomic_fetch_sub(&inode->count, 1) != 1)
+        return;
+
+    vfs_ilru_add(inode);
+}
+
+/**
  * 在 inode 缓存哈希表中查找 inode
  *
  * @param sb 超级块
@@ -1053,20 +1176,19 @@ void vfs_icache_add(struct inode *inode) {
 struct inode *vfs_icache_find(struct super_block *sb, ino_t ino) {
     struct inode_key key = { .sb = sb, .ino = ino };
     struct hlist_node *node;
-    struct inode *inode;
+    struct inode *inode = NULL;
 
     rwlock_read_lock(&inode_cache.lock);
 
     node = hash_lookup(&inode_cache.hash, &key, vfs_inode_get_key);
     if (node) {
         inode = hlist_entry(node, struct inode, hash);
-        atomic_fetch_add(&inode->count, 1);
-        rwlock_read_unlock(&inode_cache.lock);
-        return inode;
+        if (atomic_fetch_add(&inode->count, 1) == 0)
+            vfs_ilru_del(inode);
     }
 
     rwlock_read_unlock(&inode_cache.lock);
-    return NULL;
+    return inode;
 }
 
 // 将 dentry 添加到 dentry 缓存哈希表
@@ -1107,6 +1229,80 @@ struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t l
 
     rwlock_read_unlock(&dentry_cache.lock);
     return NULL;
+}
+
+/**
+ * 执行打开文件
+ *
+ * @param ps 已构造好的路径对象（调用者持有引用）
+ * @param flags 打开标志
+ * @param perm_mask 权限掩码
+ *
+ * @return file 指针
+ */
+static struct file *vfs_do_open(struct path *ps, open_flags_t flags, int perm_mask) {
+    struct file *file = NULL;
+    int err = 0;
+    struct inode *inode = ps->dentry->inode;
+
+    // 检查权限
+    err = vfs_inode_permission(inode, perm_mask);
+    if (err)
+        goto out;
+
+    // O_DIRECTORY 支持
+    if ((flags & O_DIRECTORY) && !S_ISDIR(inode->mode)) {
+        err = -ENOTDIR;
+        goto out;
+    }
+
+    // 如果要求写操作或截断，且文件系统以只读挂载，则拒绝
+    if ((perm_mask & MAY_WRITE) || (flags & O_TRUNC)) {
+        if (ps->mnt->flags & MS_RDONLY) {
+            err = -EROFS;
+            goto out;
+        }
+    }
+
+    // 分配文件描述符
+    file = kheap_alloc(sizeof(struct file));
+    if (!file) {
+        err = -ENOMEM;
+        goto out;
+    }
+
+    file->path = *ps;
+    vfs_path_get(&file->path);
+    file->pos = 0;
+    file->mode = perm_mask;
+    file->flags = flags;
+    atomic_init(&file->count, 1);
+    spinlock_init(&file->lock);
+    file->ops = inode->fop ? inode->fop : &default_file_operations;
+
+    // 调用文件系统特定的 open 操作
+    if (file->ops->open) {
+        err = file->ops->open(inode, file);
+        if (err)
+            goto out_free_file;
+    }
+
+    // 如果指定了 O_TRUNC 且有写权限且是常规文件，执行截断
+    if ((flags & O_TRUNC) && (perm_mask & MAY_WRITE) && S_ISREG(inode->mode)) {
+        err = vfs_truncate(file, 0);
+        if (err)
+            goto out_free_file;
+    }
+
+    return file;
+
+out_free_file:
+    vfs_path_put(&file->path);
+    kheap_free(file);
+    file = NULL;
+out:
+    vfs_path_put(ps);
+    return ERR_PTR(err);
 }
 
 /**
@@ -1162,18 +1358,6 @@ struct file_operations dev_fops = {
     .release = vfs_dev_release,
 };
 
-// 增加路径引用
-void vfs_path_get(struct path *path) {
-    vfs_mntget(path->mnt);
-    vfs_dget(path->dentry);
-}
-
-// 减少路径引用
-void vfs_path_put(struct path *path) {
-    vfs_dput(path->dentry);
-    vfs_mntput(path->mnt);
-}
-
 // 注册文件系统
 int vfs_register_filesystem(struct file_system_type *fs) {
     if (!fs || !fs->name) return -EINVAL;
@@ -1209,19 +1393,31 @@ uint32_t vfs_full_name_hash(const char *name, unsigned int len) {
     return hash;
 }
 
+// 增加路径引用
+void vfs_path_get(struct path *path) {
+    vfs_mntget(path->mnt);
+    vfs_dget(path->dentry);
+}
+
+// 减少路径引用
+void vfs_path_put(struct path *path) {
+    vfs_dput(path->dentry);
+    vfs_mntput(path->mnt);
+}
+
 /**
  * 挂载一个文件系统
- * 
+ *
  * @param dev_name 设备名称
  * @param dir_name 挂载点路径
  * @param type 文件系统类型名称
  * @param flags 挂载标志
  * @param data 文件系统特定数据
  * @param from_kernel 调用者是否为内核
- * 
- * @return 挂载点的 vfsmount 指针
+ *
+ * @return .ptr 指向挂载点的 vfsmount
  */
-struct vfsmount *vfs_mount(
+kresult_t vfs_mount(
     const char *dev_name,
     const char *dir_name,
     const char *type,
@@ -1235,24 +1431,26 @@ struct vfsmount *vfs_mount(
     struct file_system_type *fs = NULL;
     struct path *root_path = NULL;
     struct path *pwd_path = NULL;
+    kresult_t result;
     int err;
 
     // 校验 dir_name 非空
-    if (!dir_name) return ERR_PTR(-EINVAL);
+    if (!dir_name)
+        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
 
     // 用户调用时不能指定 MS_NOUSER 标志
     if (!from_kernel && (flags & MS_NOUSER))
-        return ERR_PTR(-EINVAL);
+        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
 
     // 用户不能挂载 devtmpfs
     if (!from_kernel && type && !strcmp(type, "devtmpfs"))
-        return ERR_PTR(-EPERM);
+        return (kresult_t){ .err = -EPERM, .ptr = NULL };
 
     // 获取当前任务的文件系统上下文
     vfs_get_current_fs(&root_path, &pwd_path);
     if (!root_path || !pwd_path) {
         vfs_put_current_fs(&root_path, &pwd_path);
-        return ERR_PTR(-ENOMEM);
+        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
     }
 
     // 解析挂载点路径
@@ -1260,37 +1458,38 @@ struct vfsmount *vfs_mount(
     if (IS_ERR(mountpoint)) {
         err = PTR_ERR(mountpoint);
         vfs_put_current_fs(&root_path, &pwd_path);
-        return ERR_PTR(err);
+        return (kresult_t){ .err = err, .ptr = NULL };
     }
 
     // 普通挂载：需要文件系统类型
     if (!type) {
         vfs_path_put(mountpoint);
         vfs_put_current_fs(&root_path, &pwd_path);
-        return ERR_PTR(-EINVAL);
+        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
     }
 
     // 查找文件系统类型
     uint64_t irqflags;
     spin_lock_irqsave(&fs_list_head.lock, &irqflags);
 
-    list_for_each_entry(fs, &fs_list_head.list, list) 
+    list_for_each_entry(fs, &fs_list_head.list, list)
         if (!strcmp(fs->name, type)) break;
 
     spin_unlock_irqrestore(&fs_list_head.lock, irqflags);
     if (!fs) {
         vfs_path_put(mountpoint);
         vfs_put_current_fs(&root_path, &pwd_path);
-        return ERR_PTR(-ENODEV);
+        return (kresult_t){ .err = -ENODEV, .ptr = NULL };
     }
 
     // 调用文件系统的 mount 回调，获取根 dentry
-    root_dentry = fs->mount(fs, flags, dev_name, data);
-    if (IS_ERR(root_dentry)) {
+    result = fs->mount(fs, flags, dev_name, data);
+    if (result.err) {
         vfs_path_put(mountpoint);
         vfs_put_current_fs(&root_path, &pwd_path);
-        return ERR_CAST(root_dentry);
+        return result;
     }
+    root_dentry = result.ptr;
 
     // 分配 vfsmount 结构体
     mnt = kheap_alloc(sizeof(struct vfsmount));
@@ -1298,7 +1497,7 @@ struct vfsmount *vfs_mount(
         vfs_dput(root_dentry);
         vfs_path_put(mountpoint);
         vfs_put_current_fs(&root_path, &pwd_path);
-        return ERR_PTR(-ENOMEM);
+        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
     }
 
     // 初始化 mnt 字段
@@ -1306,7 +1505,7 @@ struct vfsmount *vfs_mount(
     mnt->root = root_dentry;
     mnt->mountpoint = mountpoint->dentry;
     mnt->parent = mountpoint->mnt;
-    mnt->flags = flags;               
+    mnt->flags = flags;
     atomic_init(&mnt->count, 1);
     INIT_LIST_HEAD(&mnt->mnt_mounts);
 
@@ -1320,23 +1519,40 @@ struct vfsmount *vfs_mount(
 
     vfs_path_put(mountpoint);
     vfs_put_current_fs(&root_path, &pwd_path);
-    return mnt;
+    return (kresult_t){ .err = 0, .ptr = mnt };
 }
 
 /**
  * 卸载文件系统
  *
- * @param mountpoint 挂载点目录的 path（调用者需确保已持有引用）
+ * @param dir_name 挂载点路径
  * @param flags 标志位
  * @param from_kernel 调用者是否为内核
  */
-int vfs_umount(struct path *mountpoint, int flags, bool from_kernel) {
-    struct vfsmount *mnt;
-    struct super_block *sb;
+int vfs_umount(const char *dir_name, int flags, bool from_kernel) {
+    struct path *mountpoint = NULL;
+    struct vfsmount *mnt = NULL;
+    struct super_block *sb = NULL;
+    struct path *root_path = NULL;
+    struct path *pwd_path = NULL;
     int err = 0;
 
-    if (!mountpoint || flags)
+    if (!dir_name || flags)
         return -EINVAL;
+
+    // 获取当前任务的文件系统上下文
+    vfs_get_current_fs(&root_path, &pwd_path);
+    if (!root_path || !pwd_path) {
+        vfs_put_current_fs(&root_path, &pwd_path);
+        return -ENOMEM;
+    }
+
+    // 解析挂载点路径
+    mountpoint = vfs_path_lookup(dir_name, LOOKUP_DIRECTORY, pwd_path);
+    if (IS_ERR(mountpoint)) {
+        err = PTR_ERR(mountpoint);
+        goto out_put_fs;
+    }
 
     mnt = mountpoint->mnt;
     sb = mnt->sb;
@@ -1344,7 +1560,7 @@ int vfs_umount(struct path *mountpoint, int flags, bool from_kernel) {
     // 如果挂载点标记为禁止用户卸载，且本次调用来自用户态，则拒绝
     if (!from_kernel && (mnt->flags & MS_NOUSER)) {
         err = -EPERM;
-        goto out_put;
+        goto out_put_mountpoint;
     }
 
     mutex_lock(&mount_tree.lock);
@@ -1377,12 +1593,15 @@ int vfs_umount(struct path *mountpoint, int flags, bool from_kernel) {
     // 释放传入的 path 引用
     vfs_path_put(mountpoint);
 
+    vfs_put_current_fs(&root_path, &pwd_path);
     return 0;
 
 out_unlock:
     mutex_unlock(&mount_tree.lock);
-out_put:
+out_put_mountpoint:
     vfs_path_put(mountpoint);
+out_put_fs:
+    vfs_put_current_fs(&root_path, &pwd_path);
     return err;
 }
 
@@ -1508,7 +1727,10 @@ ssize_t vfs_read(struct file *file, char *buf, size_t count, off_t *pos) {
         offset = file->pos;
     }
 
+    struct inode *inode = file->path.dentry->inode;
+    mutex_lock(&inode->lock);
     ret = file->ops->read(file, buf, count, &offset);
+    mutex_unlock(&inode->lock);
     if (ret > 0) {
         if (pos) {
             *pos = offset;
@@ -1550,7 +1772,12 @@ ssize_t vfs_write(struct file *file, const char *buf, size_t count, off_t *pos) 
         offset = file->pos;
     }
 
+    struct inode *inode = file->path.dentry->inode;
+    mutex_lock(&inode->lock);
+    if (file->flags & O_APPEND)
+        offset = inode->size;
     ret = file->ops->write(file, buf, count, &offset);
+    mutex_unlock(&inode->lock);
     if (ret > 0) {
         if (pos) {
             *pos = offset;
@@ -1578,7 +1805,10 @@ int vfs_truncate(struct file *file, off_t length) {
     if (!inode->ops->setattr)
         return -EINVAL;
 
-    return inode->ops->setattr(file->path.dentry, &attr);
+    mutex_lock(&inode->lock);
+    int ret = inode->ops->setattr(file->path.dentry, &attr);
+    mutex_unlock(&inode->lock);
+    return ret;
 }
 
 /**
@@ -1622,6 +1852,9 @@ int vfs_mkdir(const char *path, mode_t mode, const struct path *pwd) {
     if (err)
         goto out;
 
+    // 应用 umask 屏蔽权限位
+    mode = mode & ~VFS_DEFAULT_UMASK;
+
     // 复制组件名（因为 vfs_dalloc 需要以 '\0' 结尾）
     name_copy = strndup(name, namelen);
     if (!name_copy) {
@@ -1631,16 +1864,32 @@ int vfs_mkdir(const char *path, mode_t mode, const struct path *pwd) {
 
     // 分配临时 dentry
     dentry = vfs_dalloc(parent_path->dentry, name_copy);
-    kheap_free(name_copy);
     if (!dentry) {
+        kheap_free(name_copy);
         err = -ENOMEM;
+        goto out;
+    }
+
+    // 获取父目录 inode 锁
+    mutex_lock(&parent_path->dentry->inode->lock);
+
+    // 检查是否已被并发创建
+    if (vfs_file_exists(parent_path->dentry, name, namelen)) {
+        vfs_dput(dentry);
+        mutex_unlock(&parent_path->dentry->inode->lock);
+        kheap_free(name_copy);
+        err = -EEXIST;
         goto out;
     }
 
     // 调用对应文件系统的 mkdir
     err = parent_path->dentry->inode->ops->mkdir(parent_path->dentry->inode, dentry, mode);
+    if (err == 0)
+        vfs_dcache_add(dentry);
+    mutex_unlock(&parent_path->dentry->inode->lock);
 
     vfs_dput(dentry);
+    kheap_free(name_copy);
 out:
     vfs_path_put(parent_path);
     return err;
@@ -1676,8 +1925,28 @@ int vfs_rmdir(const char *path, const struct path *pwd) {
     if (err)
         goto out;
 
+    if (dir_inode->ino < child_inode->ino) {
+        mutex_lock(&dir_inode->lock);
+        mutex_lock(&child_inode->lock);
+    } else if (dir_inode->ino > child_inode->ino) {
+        mutex_lock(&child_inode->lock);
+        mutex_lock(&dir_inode->lock);
+    } else {
+        mutex_lock(&dir_inode->lock);
+    }
+
     // 调用对应文件系统的 rmdir
     err = dir_inode->ops->rmdir(dir_inode, target->dentry);
+
+    if (dir_inode->ino < child_inode->ino) {
+        mutex_unlock(&child_inode->lock);
+        mutex_unlock(&dir_inode->lock);
+    } else if (dir_inode->ino > child_inode->ino) {
+        mutex_unlock(&dir_inode->lock);
+        mutex_unlock(&child_inode->lock);
+    } else {
+        mutex_unlock(&dir_inode->lock);
+    }
 
 out:
     vfs_path_put(target);
@@ -1724,7 +1993,9 @@ int vfs_unlink(const char *path, const struct path *pwd) {
     }
 
     // 调用对应文件系统的 unlink
+    mutex_lock(&parent_path->dentry->inode->lock);
     err = parent_path->dentry->inode->ops->unlink(parent_path->dentry->inode, dentry);
+    mutex_unlock(&parent_path->dentry->inode->lock);
     vfs_dput(dentry);
 
 out_parent:
@@ -1757,6 +2028,9 @@ int vfs_symlink(const char *target, const char *linkpath, const struct path *pwd
     if (err)
         goto out;
 
+    // 应用 umask 屏蔽权限位（符号链接默认权限为 0777）
+    mode_t mode = 0777 & ~VFS_DEFAULT_UMASK;
+
     // 复制组件名
     name_copy = strndup(name, namelen);
     if (!name_copy) {
@@ -1766,16 +2040,32 @@ int vfs_symlink(const char *target, const char *linkpath, const struct path *pwd
 
     // 分配临时 dentry
     dentry = vfs_dalloc(parent_path->dentry, name_copy);
-    kheap_free(name_copy);
     if (!dentry) {
+        kheap_free(name_copy);
         err = -ENOMEM;
+        goto out;
+    }
+
+    // 获取父目录 inode 锁
+    mutex_lock(&parent_path->dentry->inode->lock);
+
+    // 检查是否已被并发创建
+    if (vfs_file_exists(parent_path->dentry, name, namelen)) {
+        vfs_dput(dentry);
+        mutex_unlock(&parent_path->dentry->inode->lock);
+        kheap_free(name_copy);
+        err = -EEXIST;
         goto out;
     }
 
     // 调用对应文件系统的 symlink
     err = parent_path->dentry->inode->ops->symlink(parent_path->dentry->inode, dentry, target);
+    if (err == 0)
+        vfs_dcache_add(dentry);
+    mutex_unlock(&parent_path->dentry->inode->lock);
 
     vfs_dput(dentry);
+    kheap_free(name_copy);
 out:
     vfs_path_put(parent_path);
     return err;
@@ -1801,7 +2091,7 @@ int vfs_link(const char *oldpath, const char *newpath, const struct path *pwd) {
     if (IS_ERR(old_path))
         return PTR_ERR(old_path);
 
-    // 确保不是目录（硬链接通常不允许对目录）
+    // 确保不是目录（硬链接不允许对目录）
     if (S_ISDIR(old_path->dentry->inode->mode)) {
         err = -EPERM;
         goto out_old;
@@ -1828,16 +2118,32 @@ int vfs_link(const char *oldpath, const char *newpath, const struct path *pwd) {
 
     // 分配临时 dentry
     new_dentry = vfs_dalloc(new_parent_path->dentry, name_copy);
-    kheap_free(name_copy);
     if (!new_dentry) {
+        kheap_free(name_copy);
         err = -ENOMEM;
+        goto out_new_parent;
+    }
+
+    // 获取目标目录 inode 锁
+    mutex_lock(&new_parent_path->dentry->inode->lock);
+
+    // 检查目标是否已被并发创建
+    if (vfs_file_exists(new_parent_path->dentry, name, namelen)) {
+        vfs_dput(new_dentry);
+        mutex_unlock(&new_parent_path->dentry->inode->lock);
+        kheap_free(name_copy);
+        err = -EEXIST;
         goto out_new_parent;
     }
 
     // 调用对应文件系统的 link
     err = new_parent_path->dentry->inode->ops->link(old_path->dentry, new_parent_path->dentry->inode, new_dentry);
+    if (err == 0)
+        vfs_dcache_add(new_dentry);
+    mutex_unlock(&new_parent_path->dentry->inode->lock);
 
     vfs_dput(new_dentry);
+    kheap_free(name_copy);
 out_new_parent:
     vfs_path_put(new_parent_path);
 out_old:
@@ -1925,9 +2231,27 @@ int vfs_rename(const char *oldpath, const char *newpath, const struct path *pwd)
         goto out_new;
 
     // 调用对应文件系统的 rename
-    err = old_path->dentry->parent->inode->ops->rename(
-        old_path->dentry->parent->inode, old_path->dentry,
-        new_path->dentry->parent->inode, new_path->dentry);
+    struct inode *old_dir_inode = old_path->dentry->parent->inode;
+    struct inode *new_dir_inode = new_path->dentry->parent->inode;
+    if (old_dir_inode->ino < new_dir_inode->ino) {
+        mutex_lock(&old_dir_inode->lock);
+        mutex_lock(&new_dir_inode->lock);
+    } else if (old_dir_inode->ino > new_dir_inode->ino) {
+        mutex_lock(&new_dir_inode->lock);
+        mutex_lock(&old_dir_inode->lock);
+    } else {
+        mutex_lock(&old_dir_inode->lock);
+    }
+    err = old_dir_inode->ops->rename(old_dir_inode, old_path->dentry, new_dir_inode, new_path->dentry);
+    if (old_dir_inode->ino < new_dir_inode->ino) {
+        mutex_unlock(&new_dir_inode->lock);
+        mutex_unlock(&old_dir_inode->lock);
+    } else if (old_dir_inode->ino > new_dir_inode->ino) {
+        mutex_unlock(&old_dir_inode->lock);
+        mutex_unlock(&new_dir_inode->lock);
+    } else {
+        mutex_unlock(&old_dir_inode->lock);
+    }
 
 out_new:
     vfs_path_put(new_path);
@@ -1981,7 +2305,9 @@ int vfs_setattr(const char *path, struct iattr *attr, const struct path *pwd) {
         goto out;
 
     // 调用底层 setattr
+    mutex_lock(&ps->dentry->inode->lock);
     err = ps->dentry->inode->ops->setattr(ps->dentry, attr);
+    mutex_unlock(&ps->dentry->inode->lock);
 
 out:
     vfs_path_put(ps);
@@ -2005,137 +2331,139 @@ struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const s
     int err = 0;
     int perm_mask;
 
+    // 根据 O_NOFOLLOW 决定是否跟随符号链接
+    vfs_lookup_flags_t lookup_flags = (flags & O_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
+
     // 首先尝试直接查找路径
-    ps = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
-    if (IS_ERR(ps)) {
-        // 如果错误不是 ENOENT 或者没有指定 O_CREAT，则直接返回错误
-        if (PTR_ERR(ps) != -ENOENT || !(flags & O_CREAT))
-            return ERR_CAST(ps);
+    ps = vfs_path_lookup(path, lookup_flags, pwd);
+    if (!IS_ERR(ps)) {
+        // 路径已存在，如果指定了 O_EXCL，返回 -EEXIST
+        if (flags & O_EXCL) {
+            vfs_path_put(ps);
+            return ERR_PTR(-EEXIST);
+        }
+        // 计算权限掩码并直接打开
+        struct inode *inode = ps->dentry->inode;
+        int acc = flags & O_RDWR;
+        perm_mask = 0;
+        if (acc != O_WRONLY) perm_mask |= MAY_READ;
+        if (acc != O_RDONLY) perm_mask |= MAY_WRITE;
+        return vfs_do_open(ps, flags, perm_mask);
+    }
 
-        // O_CREAT 且文件不存在，准备创建
-        char *path_copy = strdup(path);
-        if (!path_copy) {
-            err = -ENOMEM;
-            goto out_err_ps;
+    // 路径不存在：如果不是 O_CREAT，直接返回错误
+    if (PTR_ERR(ps) != -ENOENT || !(flags & O_CREAT))
+        return ERR_CAST(ps);
+
+    // O_CREAT 且文件不存在，准备创建
+    char *path_copy = strdup(path);
+    if (!path_copy) {
+        err = -ENOMEM;
+        goto out_err;
+    }
+
+    char *last_slash = strrchr(path_copy, '/');
+    char *filename;
+    const char *parent_path_str;
+
+    if (last_slash) {
+        *last_slash = '\0';
+        parent_path_str = path_copy;
+        filename = last_slash + 1;
+    } else {
+        parent_path_str = ".";
+        filename = path_copy;
+    }
+
+    // 解析父目录
+    struct path *parent_ps = vfs_path_lookup(parent_path_str, lookup_flags, pwd);
+    if (IS_ERR(parent_ps)) {
+        err = PTR_ERR(parent_ps);
+        goto err_free_copy;
+    }
+
+    // 分配一个临时 dentry
+    dentry = vfs_dalloc(parent_ps->dentry, filename);
+    if (!dentry) {
+        err = -ENOMEM;
+        goto err_put_parent;
+    }
+
+    // 计算权限掩码
+    int acc = flags & O_RDWR;
+    perm_mask = 0;
+    if (acc != O_WRONLY) perm_mask |= MAY_READ;
+    if (acc != O_RDONLY) perm_mask |= MAY_WRITE;
+
+    // 获取父目录 inode 锁
+    mutex_lock(&parent_ps->dentry->inode->lock);
+
+    // 重新检查目标是否已被并发创建
+    if (vfs_file_exists(parent_ps->dentry, filename, strlen(filename))) {
+        // 文件已存在
+        vfs_dput(dentry);
+        mutex_unlock(&parent_ps->dentry->inode->lock);
+
+        if (flags & O_EXCL) {
+            err = -EEXIST;
+            goto err_put_parent;
         }
 
-        char *last_slash = strrchr(path_copy, '/');
-        char *filename;
-        const char *parent_path_str;
-
-        if (last_slash) {
-            *last_slash = '\0';
-            parent_path_str = path_copy;
-            filename = last_slash + 1;
-        } else {
-            parent_path_str = ".";
-            filename = path_copy;
-        }
-
-        // 解析父目录
-        struct path *parent_ps = vfs_path_lookup(parent_path_str, LOOKUP_FOLLOW, pwd);
-        if (IS_ERR(parent_ps)) {
-            err = PTR_ERR(parent_ps);
-            kheap_free(path_copy);
-            goto out_err_ps;
-        }
-
-        // 分配一个临时 dentry
+        // 复用已存在的 dentry 构造 path 并打开
         dentry = vfs_dalloc(parent_ps->dentry, filename);
         if (!dentry) {
             err = -ENOMEM;
-            vfs_path_put(parent_ps);
-            kheap_free(path_copy);
-            goto out_err_ps;
+            goto err_put_parent;
         }
 
-        // 在父目录中创建新文件
-        err = vfs_create(parent_ps->dentry->inode, dentry, mode);
-        vfs_path_put(parent_ps);
-        kheap_free(path_copy);
-        if (err) {
-            vfs_dput(dentry);
-            goto out_err_ps;
-        }
-
-        // 创建成功，构造一个 path 对象代表这个新文件
         ps = kheap_alloc(sizeof(struct path));
         if (!ps) {
-            err = -ENOMEM;
             vfs_dput(dentry);
-            goto out_err_ps;
+            err = -ENOMEM;
+            goto err_put_parent;
         }
-
-        // 新文件与父目录在同一挂载点
         ps->mnt = parent_ps->mnt;
         vfs_mntget(ps->mnt);
         ps->dentry = dentry;
+
+        vfs_path_put(parent_ps);
+        kheap_free(path_copy);
+        return vfs_do_open(ps, flags, perm_mask);
     }
 
-    struct inode *inode = ps->dentry->inode;
+    // 目标确实不存在，创建新文件
+    mode_t effective_mode = mode & ~VFS_DEFAULT_UMASK;
+    err = vfs_create(parent_ps->dentry->inode, dentry, effective_mode);
+    if (err == 0)
+        vfs_dcache_add(dentry);
+    mutex_unlock(&parent_ps->dentry->inode->lock);
 
-    // 根据打开标志计算权限掩码
-    int acc = flags & O_RDWR;
-    perm_mask = 0;
-    if (acc != O_WRONLY)
-        perm_mask |= MAY_READ;
-
-    if (acc != O_RDONLY)
-        perm_mask |= MAY_WRITE;
-
-    // 检查权限
-    err = vfs_inode_permission(inode, perm_mask);
     if (err)
-        goto out_free_ps;
+        goto err_free_dentry;
 
-    // 如果要求写操作或截断，且文件系统以只读挂载，则拒绝
-    if ((perm_mask & MAY_WRITE) || (flags & O_TRUNC)) {
-        if (ps->mnt->flags & MS_RDONLY) {
-            err = -EROFS;
-            goto out_free_ps;
-        }
-    }
-
-    // 分配文件描述符
-    file = kheap_alloc(sizeof(struct file));
-    if (!file) {
+    // 创建成功，构造 path 对象
+    ps = kheap_alloc(sizeof(struct path));
+    if (!ps) {
         err = -ENOMEM;
-        goto out_free_ps;
+        goto err_free_dentry;
     }
 
-    file->path = *ps;
-    vfs_path_get(&file->path);  // 增加对路径的引用，文件结构体持有引用
-    file->pos = 0;
-    file->mode = perm_mask;
-    file->flags = flags;
-    atomic_init(&file->count, 1);
-    spinlock_init(&file->lock);
-    file->ops = inode->fop ? inode->fop : &default_file_operations;
+    ps->mnt = parent_ps->mnt;
+    vfs_mntget(ps->mnt);
+    ps->dentry = dentry;
 
-    // 调用文件系统特定的 open 操作
-    if (file->ops->open) {
-        err = file->ops->open(inode, file);
-        if (err)
-            goto out_free_file;
-    }
+    vfs_path_put(parent_ps);
+    kheap_free(path_copy);
 
-    // 如果指定了 O_TRUNC 且有写权限且是常规文件，执行截断
-    if ((flags & O_TRUNC) && (perm_mask & MAY_WRITE) && S_ISREG(inode->mode)) {
-        err = vfs_truncate(file, 0);
-        if (err)
-            goto out_free_file;
-    }
+    return vfs_do_open(ps, flags, perm_mask);
 
-    // 成功，释放临时查询的路径对象
-    vfs_path_put(ps);
-    return file;
-
-out_free_file:
-    vfs_path_put(&file->path);
-    kheap_free(file);
-out_free_ps:
-    vfs_path_put(ps);
-out_err_ps:
+err_free_dentry:
+    vfs_dput(dentry);
+err_put_parent:
+    vfs_path_put(parent_ps);
+err_free_copy:
+    kheap_free(path_copy);
+out_err:
     return ERR_PTR(err);
 }
 
@@ -2172,13 +2500,17 @@ int vfs_mknod(const char *path, mode_t mode, dev_t dev, const struct path *pwd) 
     if (err)
         goto out_parent;
 
-    // 检查是否已存在同名文件
-    dentry = vfs_dlookup(parent_path->dentry, name, namelen);
-    if (dentry) {
-        vfs_dput(dentry);
-        err = -EEXIST;
+    // 只有 root 用户可以创建设备节点
+    uid_t uid;
+    gid_t gid;
+    task_get_current_ugid(&uid, &gid);
+    if (uid != 0) {
+        err = -EPERM;
         goto out_parent;
     }
+
+    // 应用 umask 屏蔽权限位
+    mode = mode & ~VFS_DEFAULT_UMASK;
 
     // 复制组件名（因为 vfs_dalloc 需要以 '\0' 结尾）
     name_copy = strndup(name, namelen);
@@ -2189,19 +2521,37 @@ int vfs_mknod(const char *path, mode_t mode, dev_t dev, const struct path *pwd) 
 
     // 分配临时 dentry
     dentry = vfs_dalloc(parent_path->dentry, name_copy);
-    kheap_free(name_copy);
     if (!dentry) {
+        kheap_free(name_copy);
         err = -ENOMEM;
+        goto out_parent;
+    }
+
+    // 获取父目录 inode 锁
+    mutex_lock(&parent_path->dentry->inode->lock);
+
+    // 检查是否已被并发创建
+    if (vfs_file_exists(parent_path->dentry, name, namelen)) {
+        vfs_dput(dentry);
+        mutex_unlock(&parent_path->dentry->inode->lock);
+        kheap_free(name_copy);
+        err = -EEXIST;
         goto out_parent;
     }
 
     // 调用文件系统的 mknod 回调
     err = parent_path->dentry->inode->ops->mknod(parent_path->dentry->inode, dentry, mode, dev);
+    if (err == 0)
+        vfs_dcache_add(dentry);
+    mutex_unlock(&parent_path->dentry->inode->lock);
     if (err) {
         vfs_dput(dentry);
+        kheap_free(name_copy);
         goto out_parent;
     }
 
+    vfs_dput(dentry);
+    kheap_free(name_copy);
     vfs_path_put(parent_path);
     return 0;
 

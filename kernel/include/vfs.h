@@ -84,6 +84,8 @@ typedef enum open_flags {
     O_APPEND   = 0x400,      // 每次写操作追加到文件末尾
     O_NONBLOCK = 0x800,      // 非阻塞模式
     O_SYNC     = 0x1000,     // 同步 I/O（写操作等待数据落盘）
+    O_DIRECTORY = 0x10000,   // 要求打开的文件必须是目录
+    O_NOFOLLOW = 0x20000,    // 不跟随符号链接
     O_CLOEXEC  = 0x80000,    // 执行时关闭文件描述符
 } open_flags_t;
 
@@ -188,19 +190,25 @@ struct file_operations {
     int (*fsync)(struct file *file, bool meta); 
 };
 
+// 增加路径引用
+void vfs_path_get(struct path *path);
+
+// 减少路径引用
+void vfs_path_put(struct path *path);
+
 /**
  * 挂载一个文件系统
- * 
+ *
  * @param dev_name 设备名称
  * @param dir_name 挂载点路径
  * @param type 文件系统类型名称
  * @param flags 挂载标志
  * @param data 文件系统特定数据
  * @param from_kernel 调用者是否为内核
- * 
- * @return 挂载点的 vfsmount 指针
+ *
+ * @return .ptr 指向挂载点的 vfsmount
  */
-struct vfsmount *vfs_mount(
+kresult_t vfs_mount(
     const char *dev_name,
     const char *dir_name,
     const char *type,
@@ -212,11 +220,11 @@ struct vfsmount *vfs_mount(
 /**
  * 卸载文件系统
  *
- * @param mountpoint 挂载点目录的 path（调用者需确保已持有引用）
+ * @param dir_name 挂载点路径
  * @param flags 标志位
  * @param from_kernel 调用者是否为内核
  */
-int vfs_umount(struct path *mountpoint, int flags, bool from_kernel);
+int vfs_umount(const char *dir_name, int flags, bool from_kernel);
 
 // 获取根目录path
 struct path *vfs_get_root_path(void);

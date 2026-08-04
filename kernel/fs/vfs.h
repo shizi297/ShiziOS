@@ -27,6 +27,11 @@ extern struct file_operations dev_fops;
 #define S_ISLNK(mode)  (((mode) & S_IFMT) == S_IFLNK)
 #define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
 #define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+#define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
+
+#define S_IFIFO  0010000   
+#define S_IFSOCK 0140000   
 
 // 路径查找标志
 typedef enum lookup_flags {
@@ -92,12 +97,29 @@ struct inode_key {
 // 文件系统类型，用于注册文件系统
 struct file_system_type {
     const char *name;   
-    struct dentry *(*mount)(
+
+    /**
+     * 挂载文件系统
+     *
+     * @param fst 文件系统类型指针
+     * @param flags 挂载标志
+     * @param dev_name 设备名称
+     * @param data 文件系统特定数据
+     *
+     * @return .ptr 指向根 dentry
+     */
+    kresult_t (*mount)(
         struct file_system_type *fst, 
         mount_flags_t flags,
         const char *dev_name,
         void *data
     );
+
+    /**
+     * 卸载文件系统时调用，释放超级块资源
+     *
+     * @param sb 超级块指针
+     */
     void (*kill_sb)(struct super_block *sb);    // 卸载文件系统时调用，释放超级块资源
     struct list_head list;   // 用于挂入 fs_list_head 链表的节点
 };
@@ -123,26 +145,22 @@ struct super_block {
 struct inode {
     uint64_t ino;  // 索引节点号
     dev_t rdev; // 设备号，对于非设备节点需要设置为0
-    mode_t mode;  // 文件模式
-    uid_t uid;    // 属主用户 ID
-    gid_t gid;    // 属主组 ID
-    off_t size;  // 文件大小
-    struct timespec atime;  // 最后访问时间
-    struct timespec mtime;  // 最后修改时间
-    struct timespec ctime;  // 最后状态改变时间
-    blkcnt_t blocks;  // 占用的块数
+    struct {
+        mode_t mode;  // 文件模式
+        uid_t uid;    // 属主用户 ID
+        gid_t gid;    // 属主组 ID
+        off_t size;  // 文件大小
+        struct timespec atime;  // 最后访问时间
+        struct timespec mtime;  // 最后修改时间
+        struct timespec ctime;  // 最后状态改变时间
+        blkcnt_t blocks;  // 占用的块数
+        nlink_t nlink; // 硬链接数
+        mutex_t lock;    
+    };
     struct inode_operations *ops;  // 索引节点操作表
     struct file_operations *fop;    // 文件操作表
     struct super_block *sb; // 所属超级块
-
-    /*
-     * 保护 mode, uid, gid, size, 
-     * atime, mtime, ctime, blocks, 
-     * nlink, lru, sb_list, private  
-     */
-    spinlock_t lock;    
     atomic_uint count;  // 引用计数
-    nlink_t nlink; // 硬链接数
     struct list_head lru;   // LRU 链表节点（用于回收）
     struct hlist_node hash; // 哈希表节点（用于 inode 缓存）
     struct list_head sb_list;   // 用于挂入 super_block->inodes 链表的节点
@@ -190,23 +208,120 @@ struct super_operations {
 
 // 索引节点操作表
 struct inode_operations {
-    struct dentry *(*lookup)(struct inode *dir, struct dentry *dentry);    // 查找目录项
-    int (*create)(struct inode *dir, struct dentry *dentry, mode_t mode);    // 创建新文件
-    int (*symlink)(struct inode *dir, struct dentry *dentry, const char *target);   // 创建软链接
-    int (*link)(struct dentry *old_dentry, struct inode *dir, struct dentry *new_dentry); // 创建硬链接
-    int (*unlink)(struct inode *dir, struct dentry *dentry);    // 删除文件
-    int (*mkdir)(struct inode *dir, struct dentry *dentry, mode_t mode);    // 创建目录
-    int (*rmdir)(struct inode *dir, struct dentry *dentry);    // 删除目录
+    /**
+     * 在目录中按名称查找目录项
+     *
+     * @param dir 父目录 inode
+     * @param dentry 待查找的 dentry（name 已填充）
+     *
+     * @return 传入的 dentry
+     */
+    struct dentry *(*lookup)(struct inode *dir, struct dentry *dentry);    
+
+    /**
+     * 在目录中创建普通文件
+     *
+     * @param dir 父目录 inode
+     * @param dentry 新文件的 dentry（name已填充）
+     * @param mode 文件权限
+     */
+    int (*create)(struct inode *dir, struct dentry *dentry, mode_t mode);  
+
+    /**
+     * 创建软链接
+     *
+     * @param dir 父目录 inode
+     * @param dentry 新软链接的 dentry（name 已设置）
+     * @param target 软链接指向的目标路径字符串
+     */
+    int (*symlink)(struct inode *dir, struct dentry *dentry, const char *target);  
+
+    /**
+     * 创建硬链接
+     *
+     * @param old_dentry 已存在文件的 dentry
+     * @param dir 目标目录 inode
+     * @param new_dentry 新硬链接的 dentry（name 已设置）
+     */
+    int (*link)(struct dentry *old_dentry, struct inode *dir, struct dentry *new_dentry); 
+
+    /**
+     * 删除文件
+     *
+     * @param dir 父目录 inode
+     * @param dentry 待删除文件的 dentry
+     */
+    int (*unlink)(struct inode *dir, struct dentry *dentry);   
+
+    /**
+     * 创建目录
+     *
+     * @param dir 父目录 inode
+     * @param dentry 新目录的 dentry（name 已设置）
+     * @param mode 目录权限
+     */
+    int (*mkdir)(struct inode *dir, struct dentry *dentry, mode_t mode);   
+
+    /**
+     * 删除空目录
+     *
+     * @param dir 父目录 inode
+     * @param dentry 待删除目录的 dentry
+     */
+    int (*rmdir)(struct inode *dir, struct dentry *dentry);   
+
+    /**
+     * 重命名或移动文件/目录
+     *
+     * @param old_dir 源目录 inode
+     * @param old_dentry 源目录项
+     * @param new_dir 目标目录 inode
+     * @param new_dentry 目标目录项
+     */
     int (*rename)(
         struct inode *old_dir, 
         struct dentry *old_dentry, 
         struct inode *new_dir, 
         struct dentry *new_dentry
-    );    // 重命名文件
-    int (*setattr)(struct dentry *dentry, struct iattr *attr);    // 设置属性
-    int (*getattr)(struct path *path, struct kstat *stat);    // 获取属性
-    ssize_t (*readlink)(struct inode *inode, char *buf, size_t bufsiz); // 读取符号链接目标
-    int (*mknod)(struct inode *dir, struct dentry *dentry, mode_t mode, dev_t dev); // 创建设备节点
+    );  
+
+    /**
+     * 获取文件属性
+     *
+     * @param path 文件路径
+     * @param stat 返回文件状态信息
+     */
+    int (*getattr)(struct path *path, struct kstat *stat);  
+
+    /**
+     * 设置文件属性
+     *
+     * @param dentry 目标文件目录项
+     * @param attr 要设置的属性
+     */
+    int (*setattr)(struct dentry *dentry, struct iattr *attr); 
+
+    /**
+     * 读取符号链接指向的目标路径
+     *
+     * @param inode 符号链接 inode
+     * @param buf 缓冲区，用于接收目标路径
+     * @param bufsiz 缓冲区大小
+     *
+     * @return 实际写入的字节数
+     */
+    ssize_t (*readlink)(struct inode *inode, char *buf, size_t bufsiz);
+
+    /**
+     * 读取符号链接指向的目标路径
+     *
+     * @param inode 符号链接 inode
+     * @param buf 缓冲区，用于接收目标路径
+     * @param bufsiz 缓冲区大小
+     *
+     * @return 实际写入的字节数
+     */
+    int (*mknod)(struct inode *dir, struct dentry *dentry, mode_t mode, dev_t dev);
 };
 
 // 目录项操作表
@@ -238,6 +353,20 @@ typedef struct {
 void vfs_icache_add(struct inode *inode);
 
 /**
+ * 对已知的 inode 增加引用计数
+ *
+ * @param inode 要增加引用的 inode
+ */
+void vfs_iget(struct inode *inode);
+
+/**
+ * 增加 inode 引用
+ *
+ * @param inode 要释放引用的 inode
+ */
+void vfs_iput(struct inode *inode);
+
+/**
  * 在 inode 缓存哈希表中查找 inode
  *
  * @param sb 超级块
@@ -260,12 +389,6 @@ void vfs_dcache_add(struct dentry *dentry);
  * @return 找到的 dentry（引用计数已增加）
  */
 struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t len);
-
-// 增加路径引用
-void vfs_path_get(struct path *path);
-
-// 减少路径引用
-void vfs_path_put(struct path *path);
 
 // 注册文件系统
 int vfs_register_filesystem(struct file_system_type *fs);
