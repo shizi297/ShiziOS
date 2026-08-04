@@ -126,15 +126,6 @@ static void tmpfs_ino_bitmap_destroy(struct tmpfs_sb_info *sbi) {
     dynarr_destroy(sbi->inode_bitmap);
 }
 
-/**
- * 初始化 inode 字段
- *
- * @param inode 已分配的 inode
- * @param sb 所属超级块
- * @param mode 文件模式
- * 
- * 调用者需要自己设置ops和fop
- */
 static int tmpfs_inode_init(
     struct inode *inode,
     struct super_block *sb,
@@ -155,23 +146,24 @@ static int tmpfs_inode_init(
 
     time_get(&now);
 
+    // 保存私有数据指针，防止被 memset 覆盖
+    void *priv = inode->private;
+
+    memset(inode, 0, sizeof(*inode));
+
+    // 恢复私有数据指针
+    inode->private = priv;
+
     inode->ino = new_ino;
-    inode->rdev = 0;
     inode->mode = mode;
     inode->uid = uid;
     inode->gid = gid;
-    inode->size = 0;
     inode->atime = now;
     inode->mtime = now;
     inode->ctime = now;
-    inode->blocks = 0;
-    inode->ops = NULL;
-    inode->fop = NULL;
     inode->sb = sb;
 
-    spinlock_init(&inode->lock);
-    atomic_init(&inode->count, 1);
-    inode->nlink = 0;
+    mutex_init(&inode->lock);
     INIT_LIST_HEAD(&inode->lru);
     INIT_HLIST_NODE(&inode->hash);
     INIT_LIST_HEAD(&inode->sb_list);
@@ -185,7 +177,6 @@ static int tmpfs_inode_init(
     return 0;
 }
 
-// 分配 struct inode 及其私有数据
 static struct inode *tmpfs_alloc_inode(struct super_block *sb) {
     struct inode *inode = kheap_alloc(sizeof(struct inode));
     if (!inode)
@@ -207,13 +198,11 @@ static struct inode *tmpfs_alloc_inode(struct super_block *sb) {
     return inode;
 }
 
-// 销毁 inode 结构体
 static void tmpfs_destroy_inode(struct inode *inode) {
     kheap_free(inode->private);  
     kheap_free(inode);
 }
 
-// 释放 inode
 static void tmpfs_evict_inode(struct inode *inode) {
     struct tmpfs_inode *ti = inode->private;
     struct tmpfs_sb_info *sbi = inode->sb->private;
@@ -256,7 +245,6 @@ static void tmpfs_evict_inode(struct inode *inode) {
     tmpfs_free_ino(sbi, inode->ino);
 }
 
-// 释放超级块及其资源
 static void tmpfs_put_super(struct super_block *sb) {
     struct tmpfs_sb_info *sbi = sb->private;
 
@@ -271,12 +259,11 @@ static void tmpfs_put_super(struct super_block *sb) {
     kheap_free(sb);
 }
 
-// tmpfs 没有存储，不需要同步，直接返回成功
 static int tmpfs_sync_fs(struct super_block *sb, bool wait) {
+    // tmpfs 没有存储，不需要同步，直接返回成功
     return 0;
 }
 
-// 返回文件系统统计信息
 static int tmpfs_statfs(struct dentry *dentry, struct statfs *buf) {
     struct super_block *sb = dentry->inode->sb;
     struct tmpfs_sb_info *sbi = sb->private;
@@ -302,39 +289,6 @@ static struct super_operations tmpfs_super_operations = {
     .sync_fs = tmpfs_sync_fs,
     .statfs = tmpfs_statfs,
 };
-
-/**
- * 根据 inode 号从超级块的已加载 inode 链表中获取 inode
- *
- * @param sb 超级块
- * @param ino inode 号
- *
- * @return inode 指针（引用计数已加）
- */
-static struct inode *tmpfs_iget(struct super_block *sb, ino_t ino) {
-    struct inode *inode;
-
-    // 优先从 inode 哈希表查找
-    inode = vfs_icache_find(sb, ino);
-    if (inode)
-        return inode;
-
-    // 哈希表未命中，回退到链表遍历
-    spin_lock(&sb->lock);
-
-    list_for_each_entry(inode, &sb->inodes, sb_list) {
-        if (inode->ino == ino) {
-            atomic_fetch_add(&inode->count, 1);
-
-            spin_unlock(&sb->lock);
-
-            return inode;
-        }
-    }
-
-    spin_unlock(&sb->lock);
-    return ERR_PTR(-ENOENT);
-}
 
 // 在目录链表中按名称查找条目(调用方需要有私有 inode 的 dir 锁)
 static struct tmpfs_dir_entry *tmpfs_dir_lookup(
@@ -390,14 +344,6 @@ static void tmpfs_dir_remove(struct tmpfs_dir_entry *de) {
     kheap_free(de);
 }
 
-/**
- * 在目录中按名称查找目录项
- *
- * @param dir 父目录 inode
- * @param dentry 待查找的 dentry（name 已填充）
- *
- * @return 传入的 dentry
- */
 static struct dentry *tmpfs_lookup(
     struct inode *dir,
     struct dentry *dentry
@@ -412,26 +358,20 @@ static struct dentry *tmpfs_lookup(
     // 调用辅助函数在目录链表中查找匹配项
     de = tmpfs_dir_lookup(tdir, dentry->name.name, dentry->name.len);
     if (de)
-        inode = tmpfs_iget(sb, de->ino);
+        inode = vfs_icache_find(sb, de->ino);
 
     spin_unlock(&tdir->dir_lock);
 
-    // 命中则关联 inode，清除可能的负缓存标志
+    // 命中则关联 inode
     if (inode) {
+        spin_lock(&dentry->lock);
         dentry->inode = inode;
-        dentry->flags &= ~DCACHE_NEGATIVE;
+        spin_unlock(&dentry->lock);
     }
 
     return dentry;
 }
 
-/**
- * 在目录中创建普通文件
- *
- * @param dir 父目录 inode
- * @param dentry 新文件的 dentry（name已填充）
- * @param mode 文件权限
- */
 static int tmpfs_create(
     struct inode *dir,
     struct dentry *dentry,
@@ -481,8 +421,10 @@ static int tmpfs_create(
         goto fail;
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
+    spin_lock(&dentry->lock);
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
+    spin_unlock(&dentry->lock);
     return 0;
 
 fail:
@@ -494,13 +436,6 @@ fail:
     return err;
 }
 
-/**
- * 创建软链接
- *
- * @param dir 父目录 inode
- * @param dentry 新软链接的 dentry（name 已设置）
- * @param target 软链接指向的目标路径字符串
- */
 static int tmpfs_symlink(
     struct inode *dir,
     struct dentry *dentry,
@@ -575,8 +510,10 @@ static int tmpfs_symlink(
         goto fail;
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
+    spin_lock(&dentry->lock);
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
+    spin_unlock(&dentry->lock);
     return 0;
 
 fail:
@@ -588,13 +525,6 @@ fail:
     return err;
 }
 
-/**
- * 创建硬链接
- *
- * @param old_dentry 已存在文件的 dentry
- * @param dir 目标目录 inode
- * @param new_dentry 新硬链接的 dentry（name 已设置）
- */
 static int tmpfs_link(
     struct dentry *old_dentry,
     struct inode *dir,
@@ -610,22 +540,16 @@ static int tmpfs_link(
     if (err)
         return err;
 
-    spin_lock(&inode->lock);
     inode->nlink++;
-    spin_unlock(&inode->lock);
 
+    spin_lock(&new_dentry->lock);
     new_dentry->inode = inode;
-    atomic_fetch_add(&inode->count, 1);
     new_dentry->flags &= ~DCACHE_NEGATIVE;
+    spin_unlock(&new_dentry->lock);
+    vfs_iget(inode);
     return 0;
 }
 
-/**
- * 删除文件
- *
- * @param dir 父目录 inode
- * @param dentry 待删除文件的 dentry
- */
 static int tmpfs_unlink(
     struct inode *dir,
     struct dentry *dentry
@@ -645,21 +569,14 @@ static int tmpfs_unlink(
     tmpfs_dir_remove(de);
     spin_unlock(&tdir->dir_lock);
 
-    spin_lock(&dentry->inode->lock);
     dentry->inode->nlink--;
-    spin_unlock(&dentry->inode->lock);
 
+    spin_lock(&dentry->lock);
     dentry->inode = NULL;
+    spin_unlock(&dentry->lock);
     return 0;
 }
 
-/**
- * 创建目录
- *
- * @param dir 父目录 inode
- * @param dentry 新目录的 dentry（name 已设置）
- * @param mode 目录权限
- */
 static int tmpfs_mkdir(
     struct inode *dir,
     struct dentry *dentry,
@@ -732,13 +649,13 @@ static int tmpfs_mkdir(
     spin_unlock(&ti->dir_lock);
 
     // 增加父目录的硬链接引用
-    spin_lock(&dir->lock);
     dir->nlink++;
-    spin_unlock(&dir->lock);
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
+    spin_lock(&dentry->lock);
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
+    spin_unlock(&dentry->lock);
     return 0;
 
 rollback_parent:
@@ -760,12 +677,6 @@ fail:
     return err;
 }
 
-/**
- * 删除空目录
- *
- * @param dir 父目录 inode
- * @param dentry 待删除目录的 dentry
- */
 static int tmpfs_rmdir(
     struct inode *dir,
     struct dentry *dentry
@@ -808,28 +719,18 @@ static int tmpfs_rmdir(
     spin_unlock(&tdir->dir_lock);
 
     // 减少目标目录硬链接引用
-    spin_lock(&child->lock);
     child->nlink--;
-    spin_unlock(&child->lock);
 
     // 减少父目录的硬链接引用（目标目录的 ".." 不再指向它）
-    spin_lock(&dir->lock);
     dir->nlink--;
-    spin_unlock(&dir->lock);
 
     // 解除 dentry 与 inode 的关联
+    spin_lock(&dentry->lock);
     dentry->inode = NULL;
+    spin_unlock(&dentry->lock);
     return 0;
 }
 
-/**
- * 重命名或移动文件/目录
- *
- * @param old_dir 源目录 inode
- * @param old_dentry 源目录项
- * @param new_dir 目标目录 inode
- * @param new_dentry 目标目录项
- */
 static int tmpfs_rename(
     struct inode *old_dir,
     struct dentry *old_dentry,
@@ -918,9 +819,7 @@ static int tmpfs_rename(
 
             tmpfs_dir_remove(new_de);
 
-            spin_lock(&new_inode->lock);
             new_inode->nlink--;
-            spin_unlock(&new_inode->lock);
         }
     }
 
@@ -959,20 +858,29 @@ static int tmpfs_rename(
 
             spin_unlock(&ti_old->dir_lock);
 
-            spin_lock(&old_dir->lock);
             old_dir->nlink--;
-            spin_unlock(&old_dir->lock);
 
-            spin_lock(&new_dir->lock);
             new_dir->nlink++;
-            spin_unlock(&new_dir->lock);
         }
     }
 
-    // 更新 dentry 关联
-    old_dentry->inode = NULL;
-    new_dentry->inode = old_inode;
-    new_dentry->flags &= ~DCACHE_NEGATIVE;
+    // 更新 dentry 关联，按地址排序获取锁，防止死锁
+    {
+        struct dentry *first = old_dentry, *second = new_dentry;
+        if ((uintptr_t)first > (uintptr_t)second) {
+            first = new_dentry;
+            second = old_dentry;
+        }
+        spin_lock(&first->lock);
+        spin_lock(&second->lock);
+
+        old_dentry->inode = NULL;
+        new_dentry->inode = old_inode;
+        new_dentry->flags &= ~DCACHE_NEGATIVE;
+
+        spin_unlock(&second->lock);
+        spin_unlock(&first->lock);
+    }
 
 out:
     if (same_dir) {
@@ -986,12 +894,6 @@ out:
     return err;
 }
 
-/**
- * 获取文件属性
- *
- * @param path 文件路径
- * @param stat 返回文件状态信息
- */
 static int tmpfs_getattr(
     struct path *path,
     struct kstat *stat
@@ -1016,12 +918,6 @@ static int tmpfs_getattr(
     return 0;
 }
 
-/**
- * 设置文件属性
- *
- * @param dentry 目标文件目录项
- * @param attr 要设置的属性
- */
 static int tmpfs_setattr(
     struct dentry *dentry,
     struct iattr *attr
@@ -1029,8 +925,6 @@ static int tmpfs_setattr(
     struct inode *inode = dentry->inode;
     struct tmpfs_inode *ti = inode->private;
     struct tmpfs_sb_info *sbi = inode->sb->private;
-
-    spin_lock(&inode->lock);
 
     // 处理文件大小变化
     if (attr->ia_valid & ATTR_SIZE) {
@@ -1055,8 +949,6 @@ static int tmpfs_setattr(
         } else if (new_size > inode->size && new_pages > old_pages) {
             // 先检查容量配额
             if (!tmpfs_alloc_pages(sbi, new_pages - old_pages)) {
-                spin_unlock(&inode->lock);
-
                 return -ENOSPC;
             }
 
@@ -1065,8 +957,6 @@ static int tmpfs_setattr(
                 ti->pages = dynarr_create(sizeof(void *), 0);
                 if (!ti->pages) {
                     tmpfs_free_pages(sbi, new_pages - old_pages);
-
-                    spin_unlock(&inode->lock);
 
                     return -ENOMEM;
                 }
@@ -1085,8 +975,6 @@ static int tmpfs_setattr(
                     ti->pages = NULL;
                     tmpfs_free_pages(sbi, new_pages - old_pages);
 
-                    spin_unlock(&inode->lock);
-
                     return -ENOMEM;
                 }
 
@@ -1103,8 +991,6 @@ static int tmpfs_setattr(
                     dynarr_destroy(ti->pages);
                     ti->pages = NULL;
                     tmpfs_free_pages(sbi, new_pages - old_pages);
-
-                    spin_unlock(&inode->lock);
 
                     return -ENOMEM;
                 }
@@ -1134,19 +1020,9 @@ static int tmpfs_setattr(
 
     // 更新修改时间
     time_get(&inode->ctime);
-    spin_unlock(&inode->lock);
     return 0;
 }
 
-/**
- * 读取符号链接指向的目标路径
- *
- * @param inode 符号链接 inode
- * @param buf 缓冲区，用于接收目标路径
- * @param bufsiz 缓冲区大小
- *
- * @return 实际写入的字节数
- */
 static ssize_t tmpfs_readlink(
     struct inode *inode,
     char *buf,
@@ -1168,14 +1044,6 @@ static ssize_t tmpfs_readlink(
     return copy_len;
 }
 
-/**
- * 创建设备节点
- *
- * @param dir 父目录 inode
- * @param dentry 新设备节点的 dentry（name已填充）
- * @param mode 文件类型和权限
- * @param dev 设备号
- */
 static int tmpfs_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev_t dev) {
     struct inode *inode;
     struct tmpfs_inode *ti;
@@ -1219,8 +1087,10 @@ static int tmpfs_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, de
     }
 
     // 将新创建的 inode 关联到 dentry，清除负缓存标志
+    spin_lock(&dentry->lock);
     dentry->inode = inode;
     dentry->flags &= ~DCACHE_NEGATIVE;
+    spin_unlock(&dentry->lock);
     return 0;
 }
 
@@ -1233,8 +1103,8 @@ static struct inode_operations tmpfs_inode_operations = {
     .mkdir = tmpfs_mkdir,
     .rmdir = tmpfs_rmdir,
     .rename = tmpfs_rename,
-    .setattr = tmpfs_setattr,
     .getattr = tmpfs_getattr,
+    .setattr = tmpfs_setattr,
     .readlink = tmpfs_readlink,
     .mknod = tmpfs_mknod,
 };
@@ -1293,8 +1163,7 @@ static uint64_t tmpfs_parse_size(const char *data) {
     return pages;
 }
 
-// 挂载 tmpfs
-static struct dentry *tmpfs_mount(
+static kresult_t tmpfs_mount(
     struct file_system_type *fst,
     mount_flags_t flags,
     const char *dev_name,
@@ -1309,7 +1178,7 @@ static struct dentry *tmpfs_mount(
     // 分配并初始化超级块私有数据
     sbi = kheap_alloc(sizeof(*sbi));
     if (!sbi)
-        return ERR_PTR(-ENOMEM);
+        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
 
     if (!tmpfs_ino_bitmap_init(sbi)) {
         err = -ENOMEM;
@@ -1380,7 +1249,6 @@ static struct dentry *tmpfs_mount(
     err = tmpfs_dir_add(root_ti, ".", 1, root_inode->ino);
     if (err) {
         spin_unlock(&root_ti->dir_lock);
-
         goto out_evict_root;
     }
 
@@ -1392,7 +1260,6 @@ static struct dentry *tmpfs_mount(
             tmpfs_dir_remove(dot);
 
         spin_unlock(&root_ti->dir_lock);
-
         goto out_evict_root;
     }
 
@@ -1432,7 +1299,7 @@ static struct dentry *tmpfs_mount(
 
     // 填充超级块根指针，返回根 dentry
     sb->root = root_dentry;
-    return root_dentry;
+    return (kresult_t){ .err = 0, .ptr = root_dentry };
 
 out_free_dentry:
     kheap_free(root_dentry);
@@ -1450,10 +1317,9 @@ out_free_bitmap:
     tmpfs_ino_bitmap_destroy(sbi);
 out_free_sbi:
     kheap_free(sbi);
-    return ERR_PTR(err);
+    return (kresult_t){ .err = err, .ptr = NULL };
 }
 
-// 卸载文件系统时释放所有资源
 static void tmpfs_kill_sb(struct super_block *sb) {
     struct inode *inode, *tmp;
 
@@ -1464,7 +1330,7 @@ static void tmpfs_kill_sb(struct super_block *sb) {
         spin_unlock(&sb->lock);
 
         // 确保在驱逐过程中不会被意外释放
-        atomic_fetch_add(&inode->count, 1);
+        vfs_iget(inode);
         tmpfs_evict_inode(inode);
         tmpfs_destroy_inode(inode);
 
@@ -1477,7 +1343,7 @@ static void tmpfs_kill_sb(struct super_block *sb) {
     tmpfs_put_super(sb);
 }
 
-void tmpfs_init(void) {
+static void tmpfs_init(void) {
     // 注册 tmpfs 文件系统类型
     static struct file_system_type tmpfs_type = {
         .name = "tmpfs",
@@ -1493,6 +1359,7 @@ static int tmpfs_open(struct inode *inode, struct file *file) {
 }
 
 static int tmpfs_release(struct inode *inode, struct file *file) {
+    vfs_iput(inode);
     return 0;
 }
 
@@ -1516,8 +1383,6 @@ static ssize_t tmpfs_read(
 
     if (offset + (off_t)count > (off_t)ti->data_size)
         count = ti->data_size - offset;
-
-    spin_lock(&inode->lock);
 
     remaining = count;
     while (remaining > 0) {
@@ -1561,8 +1426,6 @@ static ssize_t tmpfs_read(
         remaining -= chunk;
     }
 
-    spin_unlock(&inode->lock);
-
     // 更新偏移
     if (pos) {
         *pos = offset;
@@ -1600,12 +1463,9 @@ static ssize_t tmpfs_write(
     old_pages = (ti->data_size + PAGE_SIZE - 1) / PAGE_SIZE;
     new_pages = (end + PAGE_SIZE - 1) / PAGE_SIZE;
 
-    spin_lock(&inode->lock);
-
     // 若写入需要额外的页，先尝试预占容量配额
     if (new_pages > old_pages) {
         if (!tmpfs_alloc_pages(sbi, new_pages - old_pages)) {
-            spin_unlock(&inode->lock);
             return -ENOSPC;
         }
     }
@@ -1681,8 +1541,6 @@ out:
         if (new_pages > old_pages)
             tmpfs_free_pages(sbi, new_pages - old_pages);
     }
-
-    spin_unlock(&inode->lock);
 
     if (err)
         return err;
