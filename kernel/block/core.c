@@ -3,6 +3,7 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
+#include "core.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <block.h>
@@ -11,6 +12,7 @@
 #include <list.h>
 #include <klibc.h>
 #include <vfs.h>
+#include <dynarr.h>
 #include <shizi/types.h>
 
 #define BLOCK_DEVICE_PATH_MAX 32
@@ -35,6 +37,7 @@ typedef struct {
     void *priv;
     struct device *dev;
     uint64_t sector_count;  // 设备总扇区数
+    uint64_t start_sector;  // 分区起始扇区数，整盘为 0
     dev_t devt;
     struct block_type *type;
     char path[BLOCK_DEVICE_PATH_MAX];
@@ -83,7 +86,7 @@ static ssize_t block_read(
     sector = *pos >> 9;
     sector_count = count >> 9;
 
-    ret = hdr->read(info->priv, info->dev, sector, buf, sector_count);
+    ret = hdr->read(info->priv, info->dev, sector + info->start_sector, buf, sector_count);
     if (ret == 0)
         *pos += count;
     return ret == 0 ? count : ret;
@@ -106,7 +109,7 @@ static ssize_t block_write(
     sector = *pos >> 9;
     sector_count = count >> 9;
 
-    ret = hdr->write(info->priv, info->dev, sector, buf, sector_count);
+    ret = hdr->write(info->priv, info->dev, sector + info->start_sector, buf, sector_count);
     if (ret == 0)
         *pos += count;
     return ret == 0 ? count : ret;
@@ -217,6 +220,7 @@ int block_add_device(
     info->priv = priv;
     info->dev = dev;
     info->sector_count = sector_count;
+    info->start_sector = 0; // 表示整盘
     info->devt = devt;
     info->type = type;
     INIT_LIST_HEAD(&info->node);
@@ -226,7 +230,6 @@ int block_add_device(
 
     // 创建设备节点，路径格式为 /dev/nameX
     snprintk(info->path, sizeof(info->path), "/dev/%s%u", type->name, type->counter);
-
     root = vfs_get_root_path();
     ret = vfs_mknod(info->path, S_IFBLK | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP, devt, root);
     vfs_path_put(root);
@@ -235,6 +238,69 @@ int block_add_device(
         goto err_list;
 
     type->counter++;
+
+    // GPT 解析与分区节点创建
+    dynarr_t *partitions = dynarr_create(sizeof(struct block_partition_info), 0);
+    if (partitions) {
+        if (gpt_parse(devt, partitions)) {
+            uint64_t count = dynarr_count(partitions);
+            for (uint64_t i = 0; i < count; i++) {
+                struct block_partition_info *pinfo = dynarr_get(partitions, i);
+                if (!pinfo)
+                    continue;
+
+                // 分配次设备号
+                dev_t part_devt;
+                int ret = drivers_minor_alloc(type->major_handle, &part_devt);
+                if (ret < 0)
+                    continue; // 跳过该分区，继续处理下一个
+
+                // 分配并填充分区 block_dev_info
+                block_dev_info *part_info = kheap_alloc(sizeof(block_dev_info));
+                if (!part_info) {
+                    drivers_minor_free(type->major_handle, part_devt);
+                    continue;
+                }
+
+                part_info->priv = priv;
+                part_info->dev = dev;
+                part_info->sector_count = pinfo->size;
+                part_info->start_sector = pinfo->start_lba;
+                part_info->devt = part_devt;
+                part_info->type = type;
+                INIT_LIST_HEAD(&part_info->node);
+
+                // 挂入全局链表
+                list_add_tail(&part_info->node, &block_devt_to_info);
+
+                // 生成分区设备节点路径：/dev/nameXpN
+                snprintk(
+                    part_info->path, sizeof(part_info->path),
+                    "/dev/%s%up%u", type->name, type->counter, (unsigned int)(i + 1)
+                );
+
+                struct path *root = vfs_get_root_path();
+                ret = vfs_mknod(
+                    part_info->path,
+                    S_IFBLK | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP,
+                    part_devt, root
+                );
+
+                vfs_path_put(root);
+
+                if (ret < 0) {
+                    // 创建节点失败，回滚
+                    list_del(&part_info->node);
+                    kheap_free(part_info);
+                    drivers_minor_free(type->major_handle, part_devt);
+                    
+                    // 继续处理下一个分区
+                }
+            }
+        }
+        dynarr_destroy(partitions);
+    }
+
     return 0;
 
 err_list:
@@ -273,7 +339,8 @@ int block_remove_device(struct device *dev) {
             // 释放 info
             kheap_free(info);
             ret = 0;
-            break;
+
+            // 继续删除其他匹配项
         }
     }
 
@@ -304,7 +371,7 @@ int block_read_sectors(dev_t dev, uint64_t sector, void *buf, size_t count) {
         info = list_entry(pos, block_dev_info, node);
         if (info->devt == dev) {
             hdr = info->priv;
-            return hdr->read(info->priv, info->dev, sector, buf, count);
+            return hdr->read(info->priv, info->dev, sector + info->start_sector, buf, count);
         }
     }
 
@@ -328,7 +395,7 @@ int block_write_sectors(dev_t dev, uint64_t sector, const void *buf, size_t coun
         info = list_entry(pos, block_dev_info, node);
         if (info->devt == dev) {
             hdr = info->priv;
-            return hdr->write(info->priv, info->dev, sector, buf, count);
+            return hdr->write(info->priv, info->dev, sector + info->start_sector, buf, count);
         }
     }
 

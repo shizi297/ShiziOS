@@ -3,6 +3,8 @@
  * SPDX-FileCopyrightText: 2026 shizi <https://github.com/shizi297>
  */
 
+#pragma once
+
 #include <stdint.h>
 #include <stddef.h>
 #include <drivers.h>
