@@ -54,22 +54,31 @@ struct ext2_inode_info {
 static inline kresult_t ext2_mode_to_file_type(mode_t mode) {
     ext2_file_type_t type;
 
-    if (S_ISREG(mode))
-        type = EXT2_FT_REG_FILE;
-    else if (S_ISDIR(mode))
-        type = EXT2_FT_DIR;
-    else if (S_ISLNK(mode))
-        type = EXT2_FT_SYMLINK;
-    else if (S_ISCHR(mode))
-        type = EXT2_FT_CHRDEV;
-    else if (S_ISBLK(mode))
-        type = EXT2_FT_BLKDEV;
-    else if (S_ISFIFO(mode))
-        type = EXT2_FT_FIFO;
-    else if (S_ISSOCK(mode))
-        type = EXT2_FT_SOCK;
-    else
-        return (kresult_t){ .err = -EINVAL, .val = 0 };
+    switch (mode & S_IFMT) {
+        case S_IFREG:
+            type = EXT2_FT_REG_FILE;
+            break;
+        case S_IFDIR:
+            type = EXT2_FT_DIR;
+            break;
+        case S_IFLNK:
+            type = EXT2_FT_SYMLINK;
+            break;
+        case S_IFCHR:
+            type = EXT2_FT_CHRDEV;
+            break;
+        case S_IFBLK:
+            type = EXT2_FT_BLKDEV;
+            break;
+        case S_IFIFO:
+            type = EXT2_FT_FIFO;
+            break;
+        case S_IFSOCK:
+            type = EXT2_FT_SOCK;
+            break;
+        default:
+            return (kresult_t){ .err = -EINVAL, .val = 0 };
+    }
 
     return (kresult_t){ .err = 0, .val = type };
 }
@@ -83,28 +92,76 @@ static inline kresult_t ext2_mode_to_file_type(mode_t mode) {
 static inline kresult_t ext2_make_i_mode(mode_t mode) {
     ext2_inode_mode_t type;
 
-    if (S_ISREG(mode))
-        type = EXT2_S_IFREG;
-    else if (S_ISDIR(mode))
-        type = EXT2_S_IFDIR;
-    else if (S_ISLNK(mode))
-        type = EXT2_S_IFLNK;
-    else if (S_ISCHR(mode))
-        type = EXT2_S_IFCHR;
-    else if (S_ISBLK(mode))
-        type = EXT2_S_IFBLK;
-    else if (S_ISFIFO(mode))
-        type = EXT2_S_IFIFO;
-    else if (S_ISSOCK(mode))
-        type = EXT2_S_IFSOCK;
-    else
-        return (kresult_t){ .err = -EINVAL, .val = 0 };
+    switch (mode & S_IFMT) {
+        case S_IFREG:
+            type = EXT2_S_IFREG;
+            break;
+        case S_IFDIR:
+            type = EXT2_S_IFDIR;
+            break;
+        case S_IFLNK:
+            type = EXT2_S_IFLNK;
+            break;
+        case S_IFCHR:
+            type = EXT2_S_IFCHR;
+            break;
+        case S_IFBLK:
+            type = EXT2_S_IFBLK;
+            break;
+        case S_IFIFO:
+            type = EXT2_S_IFIFO;
+            break;
+        case S_IFSOCK:
+            type = EXT2_S_IFSOCK;
+            break;
+        default:
+            return (kresult_t){ .err = -EINVAL, .val = 0 };
+    }
 
     uint16_t perm = (mode & EXT2_S_PERM);
     if (S_ISLNK(mode))
-        perm = 0777;  // 符号链接始终 rwxrwxrwx
+        perm = 0777;
 
     return (kresult_t){ .err = 0, .val = type | perm };
+}
+
+/**
+ * 将 ext2 磁盘 inode 的 i_mode 转换为 VFS mode_t
+ *
+ * @param raw_mode ext2 的 i_mode 字段值
+ * @return 对应的 VFS mode_t
+ */
+static inline mode_t ext2_raw_mode_to_vfs(uint16_t raw_mode) {
+    mode_t type;
+
+    switch (raw_mode & EXT2_S_IFMT) {
+        case EXT2_S_IFREG:
+            type = S_IFREG;
+            break;
+        case EXT2_S_IFDIR:
+            type = S_IFDIR;
+            break;
+        case EXT2_S_IFLNK:
+            type = S_IFLNK;
+            break;
+        case EXT2_S_IFCHR:
+            type = S_IFCHR;
+            break;
+        case EXT2_S_IFBLK:
+            type = S_IFBLK;
+            break;
+        case EXT2_S_IFIFO:
+            type = S_IFIFO;
+            break;
+        case EXT2_S_IFSOCK:
+            type = S_IFSOCK;
+            break;
+        default:
+            type = 0;
+            break;
+    }
+
+    return type | (raw_mode & EXT2_S_PERM);
 }
 
 /**
@@ -824,9 +881,11 @@ static int ext2_write_data(
         remaining -= chunk;
     }
 
-    // 更新文件大小
-    if (offset > inode->size)
+    // 更新文件大小和块计数
+    if (offset > inode->size) {
         inode->size = offset;
+        inode->blocks = (offset + 511) / 512;
+    }
 
     return 0;
 }
@@ -1120,12 +1179,11 @@ static void ext2_evict_inode(struct inode *inode) {
 
     kheap_free(indirect_buf);
 
-    // 将清零后的 inode 写回磁盘
-    ext2_inode_write(inode->sb, sbi, inode->ino, &raw, ei, buf);
-
-    // 释放 inode 号并写回元数据
-    ext2_ino_free(inode->sb, sbi, inode->ino, buf);
-    ext2_sync_metadata(inode->sb, sbi, buf);
+    // 将清零后的 inode 写回磁盘，成功后才释放 inode 号
+    if (ext2_inode_write(inode->sb, sbi, inode->ino, &raw, ei, buf) == 0) {
+        ext2_ino_free(inode->sb, sbi, inode->ino, buf);
+        ext2_sync_metadata(inode->sb, sbi, buf);
+    }
 
     kheap_free(buf);
 }
@@ -1218,7 +1276,7 @@ static struct inode *ext2_iget(
     }
 
     inode->ino = ino;
-    inode->mode = raw.i_mode;
+    inode->mode = ext2_raw_mode_to_vfs(raw.i_mode);
     inode->uid = raw.i_uid;
     inode->gid = raw.i_gid;
     inode->size = raw.i_size;
@@ -1370,24 +1428,14 @@ static int ext2_rebuild_directory(
 
     uint32_t total_blocks = (total_size + block_size - 1) / block_size;
 
-    // 读取 inode 磁盘数据
+    // 读取磁盘 inode
     struct ext2_inode_info *ei = dir->private;
-    uint64_t inode_sector = ext2_block_to_sector(dir->sb, ei->i_disk_block);
-    uint32_t inode_offset = ei->i_disk_offset;
+    struct ext2_inode raw;
 
-    if (block_read_sectors(
-        dir->sb->dev,
-        inode_sector,
-        buf,
-        sectors_per_block
-        ) < 0
-    ) {
+    if (ext2_inode_read(dir->sb, ei, &raw, (uint8_t *)buf) < 0) {
         kheap_free(entry_sizes);
         return -EIO;
     }
-
-    struct ext2_inode raw;
-    memcpy(&raw, (uint8_t *)buf + inode_offset, sizeof(raw));
 
     // 释放不再需要的旧块
     uint32_t old_total_blocks = (dir->size + block_size - 1) / block_size;
@@ -1409,17 +1457,6 @@ static int ext2_rebuild_directory(
         }
         if (lb < 12)
             raw.i_block[lb] = phys;
-    }
-
-    // 写回 inode
-    if (total_blocks != old_total_blocks) {
-        memcpy((uint8_t *)buf + inode_offset, &raw, sizeof(raw));
-        block_write_sectors(
-            dir->sb->dev,
-            inode_sector,
-            buf,
-            sectors_per_block
-        );
     }
 
     // 逐块构建并写回目录内容
@@ -1479,8 +1516,14 @@ static int ext2_rebuild_directory(
 
     kheap_free(entry_sizes);
 
+    // 同步内存中的目录大小和块计数
     dir->size = total_size;
     dir->blocks = (total_size + 511) / 512;
+
+    // 将更新后的 i_size、i_blocks 以及 i_block 数组写回磁盘
+    raw.i_size = total_size;
+    raw.i_blocks = dir->blocks;
+    ext2_inode_write(dir->sb, sbi, dir->ino, &raw, ei, (uint8_t *)buf);
 
     return 0;
 }
@@ -1774,7 +1817,7 @@ static int ext2_create(struct inode *dir, struct dentry *dentry, mode_t mode) {
 
     // 填充 VFS inode 字段
     inode->ino = new_ino;
-    inode->mode = raw.i_mode;
+    inode->mode = ext2_raw_mode_to_vfs(raw.i_mode);
     inode->uid = raw.i_uid;
     inode->gid = raw.i_gid;
     inode->size = 0;
@@ -1905,7 +1948,7 @@ static int ext2_symlink(struct inode *dir, struct dentry *dentry, const char *ta
 
     // 填充 VFS inode 字段
     inode->ino = new_ino;
-    inode->mode = raw.i_mode;
+    inode->mode = ext2_raw_mode_to_vfs(raw.i_mode);
     inode->uid = raw.i_uid;
     inode->gid = raw.i_gid;
     inode->size = raw.i_size;
@@ -1918,7 +1961,7 @@ static int ext2_symlink(struct inode *dir, struct dentry *dentry, const char *ta
     inode->fop = NULL;
     inode->sb = sb;
 
-    // 慢速路径：写入目标路径到数据块
+    // 慢速路径：写入目标路径到数据块，并写回 i_size 和 i_blocks
     if (target_len >= 60) {
         err = ext2_write_data(
             inode,
@@ -1931,6 +1974,16 @@ static int ext2_symlink(struct inode *dir, struct dentry *dentry, const char *ta
 
         inode->size = target_len;
         inode->blocks = (target_len + 511) / 512;
+
+        // 将更新后的 i_size 和 i_blocks 写回磁盘
+        err = ext2_inode_read(sb, ei, &raw, buf);
+        if (err) goto err_icache;
+
+        raw.i_size = inode->size;
+        raw.i_blocks = inode->blocks;
+
+        err = ext2_inode_write(sb, sbi, new_ino, &raw, ei, buf);
+        if (err) goto err_icache;
     }
 
     // 插入 icache
@@ -2212,7 +2265,7 @@ static int ext2_mkdir(struct inode *dir, struct dentry *dentry, mode_t mode) {
 
     // 填充 VFS inode 字段
     inode->ino = new_ino;
-    inode->mode = raw.i_mode;
+    inode->mode = ext2_raw_mode_to_vfs(raw.i_mode);
     inode->uid = raw.i_uid;
     inode->gid = raw.i_gid;
     inode->size = block_size;
@@ -2885,6 +2938,7 @@ static int ext2_setattr(struct dentry *dentry, struct iattr *attr) {
         raw.i_size = attr->ia_size;
         raw.i_mtime = now.tv_sec;
         ext2_truncate(inode, attr->ia_size, &raw, buf);
+        raw.i_blocks = (attr->ia_size + 511) / 512;
     }
     if (attr->ia_valid & ATTR_ATIME)
         raw.i_atime = attr->ia_atime.tv_sec;
@@ -2899,7 +2953,7 @@ static int ext2_setattr(struct dentry *dentry, struct iattr *attr) {
         return err;
     }
 
-    inode->mode  = raw.i_mode;
+    inode->mode = ext2_raw_mode_to_vfs(raw.i_mode);
     inode->uid   = raw.i_uid;
     inode->gid   = raw.i_gid;
     inode->size  = raw.i_size;
@@ -2938,8 +2992,8 @@ static ssize_t ext2_readlink(
     }
 
     // 快速符号链接：目标路径直接存储在 i_block 中
-    if (inode->blocks == 0 && inode->size < 60) {
-        size_t copy_len = inode->size;
+    if (raw.i_blocks == 0 && raw.i_size < 60) {
+        size_t copy_len = raw.i_size;
         if (copy_len > bufsiz)
             copy_len = bufsiz;
         memcpy(buf, raw.i_block, copy_len);
@@ -3031,7 +3085,7 @@ static int ext2_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev
 
     // 填充 VFS inode 字段
     inode->ino = new_ino;
-    inode->mode = raw.i_mode;
+    inode->mode = ext2_raw_mode_to_vfs(raw.i_mode);
     inode->uid = raw.i_uid;
     inode->gid = raw.i_gid;
     inode->size = 0;
@@ -3195,12 +3249,14 @@ static ssize_t ext2_write(struct file *file, const char *buf, size_t count, off_
     else
         file->pos = offset;
 
-    // 更新时间戳
+    // 更新时间戳、i_size 和 i_blocks
     struct timespec now;
     time_get(&now);
 
     struct ext2_inode raw;
     if (ext2_inode_read(inode->sb, ei, &raw, (uint8_t *)work_buf) == 0) {
+        raw.i_size = inode->size;
+        raw.i_blocks = inode->blocks;
         raw.i_mtime = now.tv_sec;
         raw.i_ctime = now.tv_sec;
         if (ext2_inode_write(inode->sb, sbi, inode->ino, &raw, ei, (uint8_t *)work_buf) == 0) {
