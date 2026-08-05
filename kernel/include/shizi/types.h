@@ -14,14 +14,35 @@
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 
-// 用于统一同时包括错误码和返回值的传递
 typedef struct {
-    int err;          
-    union {
-        uint64_t val;  
-        void *ptr;      
-    };
-} kresult_t;
+    int err;
+    uint64_t val;
+} ku64;
+
+typedef struct {
+    int err;
+    uint32_t val;
+} ku32;
+
+typedef struct {
+    int err;
+    uint16_t val;
+} ku16;
+
+typedef struct {
+    int err;
+    uint8_t val;
+} ku8;
+
+typedef struct {
+    int err;
+    void *ptr;
+} kptr;
+
+typedef struct {
+    int err;
+    uintptr_t val;
+} kuptr;
 
 typedef int64_t ssize_t;
 

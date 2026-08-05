@@ -11,23 +11,63 @@
 
 #define EPROBE_DEFER    -517    // 设备依赖未就绪，需要推迟探测
 
-// 判断值是否为错误码
-#define IS_ERR_VALUE(x) ((unsigned long)(x) >= (unsigned long)-4095)
+// 构造成功返回值
+#define K_OK(v)   { .err = 0, .val = v }
 
-// 将错误码转换为指针
-#define ERR_PTR(error)   ((void *)(long)(error))
+// 构造成功返回指针
+#define K_PTR(p)  { .err = 0, .ptr = p }
 
-// 从错误指针提取错误码
-#define PTR_ERR(ptr)     ((long)(ptr))
+// 构造错误返回
+#define K_ERR(e)    { .err = (e) }
 
-// 将错误码转为指针
-#define ERR_CAST(x) ((void *)(long)(x))
+// 判断是否出错
+#define K_IS_ERR(res)       ((res).err != 0)
 
-// 判断指针是否为错误指针
-#define IS_ERR(ptr)      IS_ERR_VALUE((unsigned long)(ptr))
+// 如果出错，直接返回 err
+#define K_ERR_RETURN(res) \
+    do { \
+        if ((res).err) \
+            return (res).err; \
+    } while(0)
 
-// 判断指针是否为NULL或错误指针
-#define IS_ERR_OR_NULL(ptr) (!(ptr) || IS_ERR(ptr))
+// 如果出错，返回原类型
+#define K_ERR_RETURN_SELF(res) \
+    do { \
+        if ((res).err) \
+            return res; \
+    } while(0)
+
+// 如果错误，跳转到标签
+#define K_ERR_LABEL(res, label) \
+    do { \
+        if ((res).err) \
+            goto label; \
+    } while(0)
+
+// 如果错误，设置 err 变量，并跳转到标签
+#define K_ERR_LABEL_AND_SAVE(res, label, err_name) \
+    do { \
+        if ((res).err) { \
+            err_name = (res).err; \
+            goto label; \
+        } \
+    } while(0)
+    
+// 如果出错，直接 break
+#define K_ERR_BREAK(res) \
+    { \
+        if ((res).err) \
+            break; \
+    }
+    
+// 如果出错，保存错误码并 break
+#define K_ERR_BREAK_AND_SAVE(res, err_name) \
+    { \
+        if ((res).err) { \
+            err_name = (res).err; \
+            break; \
+        } \
+    }
 
 #define CONCAT(a, b) a##b
 
