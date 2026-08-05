@@ -266,7 +266,7 @@ static int virtio_blk_probe(struct device *dev) {
     uint64_t blk_bits = 0;
     int ret;
     int created;
-    kresult_t irq_res;
+    ku32 irq_res;
     uint8_t vector;
 
     // 获取设备能力
@@ -317,10 +317,7 @@ static int virtio_blk_probe(struct device *dev) {
 
     // 分配并注册 CPU 中断号
     irq_res = smp_irq_alloc_handler((uint64_t)virtio_blk_isr);
-    if (irq_res.err < 0) {
-        ret = irq_res.err;
-        goto err_free_priv;
-    }
+    K_ERR_LABEL_AND_SAVE(irq_res, err_free_priv, ret);
     vector = (uint8_t)irq_res.val;
 
     // 注册到块设备层

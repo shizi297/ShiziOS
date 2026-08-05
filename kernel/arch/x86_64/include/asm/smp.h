@@ -118,7 +118,7 @@ void smp_irq_unregister_handler(uint8_t vector);
  * 
  * @return 向量号
  */
-kresult_t smp_irq_alloc_handler(uint64_t handler_addr);
+ku32 smp_irq_alloc_handler(uint64_t handler_addr);
 
 // 获取当前cpu的内核tls
 per_cpu *smp_get_kernel_tls(void);

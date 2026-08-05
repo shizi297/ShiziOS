@@ -327,13 +327,13 @@ struct file_operations *drivers_dev_find(dev_t dev, mode_t mode) {
 }
 
 // 分配一个新的主设备号，返回一个次设备号分配器
-drivers_minor_devt *drivers_major_alloc(void) {
+kptr drivers_major_alloc(void) {
     spin_lock(&major_state.lock);   // 保护全局主设备号位图
 
     uint32_t major;
     if (!dynarr_bitmap_alloc(major_state.bitmap, 1, &major)) {
         spin_unlock(&major_state.lock);
-        return ERR_PTR(-ENOSPC);    // 无空闲主设备号
+        return (kptr)K_ERR(-ENOSPC);    // 无空闲主设备号
     }
 
     spin_unlock(&major_state.lock);
@@ -345,11 +345,11 @@ drivers_minor_devt *drivers_major_alloc(void) {
         dynarr_bitmap_free(major_state.bitmap, major);
         spin_unlock(&major_state.lock);
 
-        return ERR_PTR(-ENOMEM);
+        return (kptr)K_ERR(-ENOMEM);
     }
 
     handle->major = major;
-    return handle;
+    return (kptr)K_PTR(handle);
 }
 
 // 初始化次设备号分配器

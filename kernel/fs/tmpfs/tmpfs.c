@@ -344,7 +344,7 @@ static void tmpfs_dir_remove(struct tmpfs_dir_entry *de) {
     kheap_free(de);
 }
 
-static struct dentry *tmpfs_lookup(
+static kptr tmpfs_lookup(
     struct inode *dir,
     struct dentry *dentry
 ) {
@@ -369,7 +369,7 @@ static struct dentry *tmpfs_lookup(
         spin_unlock(&dentry->lock);
     }
 
-    return dentry;
+    return (kptr)K_PTR(dentry);
 }
 
 static int tmpfs_create(
@@ -1163,7 +1163,7 @@ static uint64_t tmpfs_parse_size(const char *data) {
     return pages;
 }
 
-static kresult_t tmpfs_mount(
+static kptr tmpfs_mount(
     struct file_system_type *fst,
     mount_flags_t flags,
     const char *dev_name,
@@ -1178,7 +1178,7 @@ static kresult_t tmpfs_mount(
     // 分配并初始化超级块私有数据
     sbi = kheap_alloc(sizeof(*sbi));
     if (!sbi)
-        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
+        return (kptr)K_ERR(-ENOMEM);
 
     if (!tmpfs_ino_bitmap_init(sbi)) {
         err = -ENOMEM;
@@ -1299,7 +1299,7 @@ static kresult_t tmpfs_mount(
 
     // 填充超级块根指针，返回根 dentry
     sb->root = root_dentry;
-    return (kresult_t){ .err = 0, .ptr = root_dentry };
+    return (kptr)K_PTR(root_dentry);
 
 out_free_dentry:
     kheap_free(root_dentry);
@@ -1317,7 +1317,7 @@ out_free_bitmap:
     tmpfs_ino_bitmap_destroy(sbi);
 out_free_sbi:
     kheap_free(sbi);
-    return (kresult_t){ .err = err, .ptr = NULL };
+    return (kptr)K_ERR(err);
 }
 
 static void tmpfs_kill_sb(struct super_block *sb) {

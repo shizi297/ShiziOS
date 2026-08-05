@@ -398,15 +398,16 @@ static inline bool vfs_file_exists(
     if (!exist)
         return false;
 
-    exist = parent_dentry->inode->ops->lookup(parent_dentry->inode, exist);
-    if (!exist || IS_ERR(exist))
+    kptr lookup_res = parent_dentry->inode->ops->lookup(parent_dentry->inode, exist);
+    if (lookup_res.err)
         return false;
 
     bool has_inode;
-    spin_lock(&exist->lock);
-    has_inode = (exist->inode != NULL);
-    spin_unlock(&exist->lock);
-    vfs_dput(exist);
+    struct dentry *found = lookup_res.ptr;
+    spin_lock(&found->lock);
+    has_inode = (found->inode != NULL);
+    spin_unlock(&found->lock);
+    vfs_dput(lookup_res.ptr);
     return has_inode;
 }
 
@@ -535,14 +536,15 @@ static struct vfsmount *vfs_find_mount(struct dentry *dentry) {
 }
 
 // 获取下一个目录或文件的名称
-static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pwd) {
-    if (!prs || !prs->path) 
-        return ERR_PTR(-EINVAL);
+static kptr vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pwd) {
+    if (!prs || !prs->path)
+        return (kptr)K_ERR(-EINVAL);
 
     // curr_path 为空，进行初始化
     if (!prs->curr_path) {
         struct path *new_cur = kheap_alloc(sizeof(struct path));
-        if (!new_cur) return ERR_PTR(-ENOMEM);
+        if (!new_cur)
+            return (kptr)K_ERR(-ENOMEM);
 
         if (prs->path[0] == '/') {
             // 是根目录，使用vfs_root变量
@@ -562,15 +564,15 @@ static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pw
     while (prs->path[prs->offset] == '/')
         prs->offset++;
 
-    // 如果已经到达字符串末尾，返回 NULL
+    // 如果已经到达字符串末尾，返回 NULL（成功，但无更多组件）
     if (prs->path[prs->offset] == '\0')
-        return NULL;
+        return (kptr)K_PTR(NULL);
 
     // 保存当前起始位置
     const char *start = prs->path + prs->offset;
 
     // 找到这个字符的末尾
-    while (prs->path[prs->offset] != '/' && prs->path[prs->offset] != '\0') 
+    while (prs->path[prs->offset] != '/' && prs->path[prs->offset] != '\0')
         prs->offset++;
 
     // 计算长度用于传给目录项查找函数
@@ -585,7 +587,7 @@ static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pw
         // 缓存未命中，创建一个新的 dentry
         char *name = kheap_alloc(len + 1);
         if (!name)
-            return ERR_PTR(-ENOMEM);
+            return (kptr)K_ERR(-ENOMEM);
 
         // 复制目录名到临时缓冲区
         memcpy(name, start, len);
@@ -595,20 +597,20 @@ static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pw
         dentry = vfs_dalloc(parent_dentry, name);
         if (!dentry) {
             kheap_free(name);
-            return ERR_PTR(-ENOMEM);
+            return (kptr)K_ERR(-ENOMEM);
         }
 
         // 创建inode并关联到dentry
-        struct dentry *found = parent_dentry->inode->ops->lookup(parent_dentry->inode, dentry);
-        if (found && found != dentry) {
-            // 查找成功，释放新创建的 dentry 并使用找到的 dentry
-            vfs_dput(dentry);
-            dentry = found;
-        } else if (IS_ERR(found)) {
-            // 查找失败，释放资源并返回错误
+        kptr lookup_res = parent_dentry->inode->ops->lookup(parent_dentry->inode, dentry);
+        if (lookup_res.err) {
             vfs_dput(dentry);
             kheap_free(name);
-            return ERR_CAST(found);
+            return (kptr)K_ERR(lookup_res.err);
+        }
+        struct dentry *found = lookup_res.ptr;
+        if (found && found != dentry) {
+            vfs_dput(dentry);
+            dentry = found;
         }
 
         kheap_free(name);
@@ -617,24 +619,24 @@ static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pw
     // 更新句柄中的当前路径
     struct path *new_path_ptr = kheap_alloc(sizeof(struct path));
     if (!new_path_ptr)
-        return ERR_PTR(-ENOMEM);
-    
+        return (kptr)K_ERR(-ENOMEM);
+
     // 设置新的mnt，并增加它的引用
     new_path_ptr->mnt = prs->curr_path->mnt;
     vfs_mntget(new_path_ptr->mnt);
-    
+
     // 设置新的dentry（查找时，已添加引用，这里不做重复添加）
     new_path_ptr->dentry = dentry;
-    
+
     // 释放旧路径的引用
     vfs_path_put(prs->curr_path);
-    
+
     // 释放临时分配的 path
     kheap_free(prs->curr_path);
-        
+
     prs->curr_path = new_path_ptr;
 
-    return prs->curr_path;
+    return (kptr)K_PTR(prs->curr_path);
 }
 
 /**
@@ -646,7 +648,7 @@ static struct path *vfs_path_prs_next(vfs_path_prs_t *prs, const struct path *pw
  *
  * @return 路径的path对象
  */
-static struct path *vfs_path_lookup(
+static kptr vfs_path_lookup(
     const char *path,
     vfs_lookup_flags_t flags,
     const struct path *pwd
@@ -658,17 +660,15 @@ static struct path *vfs_path_lookup(
 
     // 初始化最外层的解析器，统一使用动态分配的路径副本
     stack[0].path = strdup(path);
-    if (!stack[0].path) return ERR_PTR(-ENOMEM);
+    if (!stack[0].path) return (kptr)K_ERR(-ENOMEM);
     stack[0].offset = 0;
     stack[0].curr_path = NULL;
 
     // 解析每一个组件
     while (1) {
-        struct path *p = vfs_path_prs_next(&stack[depth-1], pwd);
-        if (IS_ERR(p)) {
-            err = PTR_ERR(p);
-            break;
-        }
+        kptr prs_res = vfs_path_prs_next(&stack[depth-1], pwd);
+        K_ERR_BREAK_AND_SAVE(prs_res, err);
+        struct path *p = prs_res.ptr;
 
         // 所有组件解析完成
         if (p == NULL) {
@@ -698,7 +698,7 @@ static struct path *vfs_path_lookup(
                 // 释放主解析器的路径副本
                 kheap_free((void *)stack[0].path);
                 stack[0].path = NULL;
-                return res;
+                return (kptr)K_PTR(res);
             } else {
                 /*
                  * 符号链接目标路径解析完毕
@@ -747,7 +747,7 @@ static struct path *vfs_path_lookup(
                 err = -ENOMEM;
                 break;
             }
-            
+
             /*
              * 切换到挂载点根
              * 引用已在 vfs_find_mount 函数增加过
@@ -829,7 +829,7 @@ static struct path *vfs_path_lookup(
         }
     }
 
-    return ERR_PTR(err);
+    return (kptr)K_ERR(err);
 }
 
 /**
@@ -842,7 +842,7 @@ static struct path *vfs_path_lookup(
  *
  * @return 父目录的 path 指针
  */
-static struct path *vfs_path_parent(
+static kptr vfs_path_parent(
     const char *path,
     const struct path *pwd,
     const char **name,
@@ -851,18 +851,18 @@ static struct path *vfs_path_parent(
     const char *last_slash;
     const char *end;
     char *parent_buf;
-    struct path *parent;
+    kptr parent;
     size_t parent_len;
 
     if (!path || !name || !len)
-        return ERR_PTR(-EINVAL);
+        return (kptr)K_ERR(-EINVAL);
 
     // 跳过末尾的斜杠，定位到实际路径的最后一个非斜杠字符
     end = path + strlen(path);
     while (end > path && end[-1] == '/')
         end--;
     if (end == path)                // 路径全部由斜杠组成，无效
-        return ERR_PTR(-ENOENT);
+        return (kptr)K_ERR(-ENOENT);
 
     // 在有效范围内查找最后一个 '/' 字符
     last_slash = memrchr(path, '/', end - path);
@@ -876,34 +876,35 @@ static struct path *vfs_path_parent(
             // 分配父目录字符串
             parent_buf = kheap_alloc(parent_len + 1);
             if (!parent_buf)
-                return ERR_PTR(-ENOMEM);
+                return (kptr)K_ERR(-ENOMEM);
 
             memcpy(parent_buf, path, parent_len);
             parent_buf[parent_len] = '\0';
             parent = vfs_path_lookup(parent_buf, LOOKUP_DIRECTORY, pwd);
             kheap_free(parent_buf);
         }
-        
+
+        K_ERR_RETURN_SELF(parent);
+
         // 输出最后一个组件的名称和长度（跳过斜杠）
         *name = last_slash + 1;
         *len = end - (last_slash + 1);
     } else {
         // 没有斜杠：整个路径就是最后一个组件，父目录为当前目录
         parent = vfs_path_lookup(".", LOOKUP_DIRECTORY, pwd);
+        K_ERR_RETURN_SELF(parent);
+
         *name = path;
         *len = end - path;
     }
 
-    if (IS_ERR(parent))
-        return parent;
-
     // 确保最后一个组件非空
     if (*len == 0) {
-        vfs_path_put(parent);
-        return ERR_PTR(-ENOENT);
+        vfs_path_put(parent.ptr);
+        return (kptr)K_ERR(-ENOENT);
     }
 
-    return parent;
+    return (kptr)K_PTR(parent.ptr);
 }
 
 // 挂载根文件系统
@@ -912,7 +913,7 @@ static int vfs_root_mount(void) {
     struct dentry *root_dentry;
     struct vfsmount *mnt;
     struct path *root_path;
-    kresult_t res;
+    kptr res;
 
     // 查找 tmpfs 文件系统类型
     tmpfs = vfs_find_filesystem("tmpfs");
@@ -968,7 +969,7 @@ static int vfs_dev_mount(void) {
     struct dentry *root_dentry;
     struct vfsmount *mnt;
     struct file_system_type *tmpfs;
-    kresult_t res;
+    kptr res;
     int err;
 
     // 创建 /dev 目录
@@ -977,9 +978,10 @@ static int vfs_dev_mount(void) {
         return err;
 
     // 获取 /dev 的 path（已增加引用）
-    dev_path = vfs_path_lookup("/dev", LOOKUP_FOLLOW, vfs_root);
-    if (IS_ERR(dev_path))
-        return PTR_ERR(dev_path);
+    kptr dev_res = vfs_path_lookup("/dev", LOOKUP_FOLLOW, vfs_root);
+    if (dev_res.err)
+        return dev_res.err;
+    dev_path = dev_res.ptr;
 
     // 查找 tmpfs 文件系统类型
     tmpfs = vfs_find_filesystem("tmpfs");
@@ -1240,7 +1242,7 @@ struct dentry *vfs_dcache_find(struct dentry *parent, const char *name, size_t l
  *
  * @return file 指针
  */
-static struct file *vfs_do_open(struct path *ps, open_flags_t flags, int perm_mask) {
+static kptr vfs_do_open(struct path *ps, open_flags_t flags, int perm_mask) {
     struct file *file = NULL;
     int err = 0;
     struct inode *inode = ps->dentry->inode;
@@ -1294,7 +1296,7 @@ static struct file *vfs_do_open(struct path *ps, open_flags_t flags, int perm_ma
             goto out_free_file;
     }
 
-    return file;
+    return (kptr)K_PTR(file);
 
 out_free_file:
     vfs_path_put(&file->path);
@@ -1302,7 +1304,7 @@ out_free_file:
     file = NULL;
 out:
     vfs_path_put(ps);
-    return ERR_PTR(err);
+    return (kptr)K_ERR(err);
 }
 
 /**
@@ -1417,7 +1419,7 @@ void vfs_path_put(struct path *path) {
  *
  * @return .ptr 指向挂载点的 vfsmount
  */
-kresult_t vfs_mount(
+kptr vfs_mount(
     const char *dev_name,
     const char *dir_name,
     const char *type,
@@ -1431,41 +1433,37 @@ kresult_t vfs_mount(
     struct file_system_type *fs = NULL;
     struct path *root_path = NULL;
     struct path *pwd_path = NULL;
-    kresult_t result;
+    kptr result;
     int err;
 
     // 校验 dir_name 非空
     if (!dir_name)
-        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
+        return (kptr)K_ERR(-EINVAL);
 
     // 用户调用时不能指定 MS_NOUSER 标志
     if (!from_kernel && (flags & MS_NOUSER))
-        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
+        return (kptr)K_ERR(-EINVAL);
 
     // 用户不能挂载 devtmpfs
     if (!from_kernel && type && !strcmp(type, "devtmpfs"))
-        return (kresult_t){ .err = -EPERM, .ptr = NULL };
+        return (kptr)K_ERR(-EPERM);
 
     // 获取当前任务的文件系统上下文
     vfs_get_current_fs(&root_path, &pwd_path);
     if (!root_path || !pwd_path) {
         vfs_put_current_fs(&root_path, &pwd_path);
-        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
+        return (kptr)K_ERR(-ENOMEM);
     }
 
     // 解析挂载点路径
-    mountpoint = vfs_path_lookup(dir_name, LOOKUP_DIRECTORY, pwd_path);
-    if (IS_ERR(mountpoint)) {
-        err = PTR_ERR(mountpoint);
-        vfs_put_current_fs(&root_path, &pwd_path);
-        return (kresult_t){ .err = err, .ptr = NULL };
-    }
+    kptr mountpoint_res = vfs_path_lookup(dir_name, LOOKUP_DIRECTORY, pwd_path);
+    K_ERR_LABEL_AND_SAVE(mountpoint_res, out_fs, err);
+    mountpoint = mountpoint_res.ptr;
 
     // 普通挂载：需要文件系统类型
     if (!type) {
-        vfs_path_put(mountpoint);
-        vfs_put_current_fs(&root_path, &pwd_path);
-        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
+        err = -EINVAL;
+        goto out_mp;
     }
 
     // 查找文件系统类型
@@ -1477,27 +1475,20 @@ kresult_t vfs_mount(
 
     spin_unlock_irqrestore(&fs_list_head.lock, irqflags);
     if (!fs) {
-        vfs_path_put(mountpoint);
-        vfs_put_current_fs(&root_path, &pwd_path);
-        return (kresult_t){ .err = -ENODEV, .ptr = NULL };
+        err = -ENODEV;
+        goto out_mp;
     }
 
     // 调用文件系统的 mount 回调，获取根 dentry
     result = fs->mount(fs, flags, dev_name, data);
-    if (result.err) {
-        vfs_path_put(mountpoint);
-        vfs_put_current_fs(&root_path, &pwd_path);
-        return result;
-    }
+    K_ERR_LABEL_AND_SAVE(result, out_mp, err);
     root_dentry = result.ptr;
 
     // 分配 vfsmount 结构体
     mnt = kheap_alloc(sizeof(struct vfsmount));
     if (!mnt) {
-        vfs_dput(root_dentry);
-        vfs_path_put(mountpoint);
-        vfs_put_current_fs(&root_path, &pwd_path);
-        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
+        err = -ENOMEM;
+        goto out_root;
     }
 
     // 初始化 mnt 字段
@@ -1519,7 +1510,15 @@ kresult_t vfs_mount(
 
     vfs_path_put(mountpoint);
     vfs_put_current_fs(&root_path, &pwd_path);
-    return (kresult_t){ .err = 0, .ptr = mnt };
+    return (kptr)K_PTR(mnt);
+
+out_root:
+    vfs_dput(root_dentry);
+out_mp:
+    vfs_path_put(mountpoint);
+out_fs:
+    vfs_put_current_fs(&root_path, &pwd_path);
+    return (kptr)K_ERR(err);
 }
 
 /**
@@ -1548,11 +1547,9 @@ int vfs_umount(const char *dir_name, int flags, bool from_kernel) {
     }
 
     // 解析挂载点路径
-    mountpoint = vfs_path_lookup(dir_name, LOOKUP_DIRECTORY, pwd_path);
-    if (IS_ERR(mountpoint)) {
-        err = PTR_ERR(mountpoint);
-        goto out_put_fs;
-    }
+    kptr mp_res = vfs_path_lookup(dir_name, LOOKUP_DIRECTORY, pwd_path);
+    K_ERR_LABEL_AND_SAVE(mp_res, out_put_fs, err);
+    mountpoint = mp_res.ptr;
 
     mnt = mountpoint->mnt;
     sb = mnt->sb;
@@ -1843,9 +1840,9 @@ int vfs_mkdir(const char *path, mode_t mode, const struct path *pwd) {
     int err;
 
     // 解析父目录路径
-    parent_path = vfs_path_parent(path, pwd, &name, &namelen);
-    if (IS_ERR(parent_path))
-        return PTR_ERR(parent_path);
+    kptr parent_res = vfs_path_parent(path, pwd, &name, &namelen);
+    K_ERR_LABEL_AND_SAVE(parent_res, out, err);
+    parent_path = parent_res.ptr;
 
     // 权限检查
     err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
@@ -1907,9 +1904,9 @@ int vfs_rmdir(const char *path, const struct path *pwd) {
     int err;
 
     // 解析目标路径
-    target = vfs_path_lookup(path, LOOKUP_DIRECTORY, pwd);
-    if (IS_ERR(target))
-        return PTR_ERR(target);
+    kptr target_res = vfs_path_lookup(path, LOOKUP_DIRECTORY, pwd);
+    K_ERR_LABEL_AND_SAVE(target_res, out, err);
+    target = target_res.ptr;
 
     child_inode = target->dentry->inode;
 
@@ -1968,9 +1965,9 @@ int vfs_unlink(const char *path, const struct path *pwd) {
     int err;
 
     // 解析父目录路径和最后一个组件名
-    parent_path = vfs_path_parent(path, pwd, &name, &namelen);
-    if (IS_ERR(parent_path))
-        return PTR_ERR(parent_path);
+    kptr parent_res = vfs_path_parent(path, pwd, &name, &namelen);
+    K_ERR_LABEL_AND_SAVE(parent_res, out_parent, err);
+    parent_path = parent_res.ptr;
 
     // 权限检查（需要父目录的写和执行权限）
     err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
@@ -2019,9 +2016,9 @@ int vfs_symlink(const char *target, const char *linkpath, const struct path *pwd
     int err;
 
     // 解析链接的父目录路径
-    parent_path = vfs_path_parent(linkpath, pwd, &name, &namelen);
-    if (IS_ERR(parent_path))
-        return PTR_ERR(parent_path);
+    kptr parent_res = vfs_path_parent(linkpath, pwd, &name, &namelen);
+    K_ERR_LABEL_AND_SAVE(parent_res, out, err);
+    parent_path = parent_res.ptr;
 
     // 权限检查
     err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
@@ -2087,9 +2084,9 @@ int vfs_link(const char *oldpath, const char *newpath, const struct path *pwd) {
     int err;
 
     // 解析现有文件路径
-    old_path = vfs_path_lookup(oldpath, LOOKUP_FOLLOW, pwd);
-    if (IS_ERR(old_path))
-        return PTR_ERR(old_path);
+    kptr old_res = vfs_path_lookup(oldpath, LOOKUP_FOLLOW, pwd);
+    K_ERR_LABEL_AND_SAVE(old_res, out_old, err);
+    old_path = old_res.ptr;
 
     // 确保不是目录（硬链接不允许对目录）
     if (S_ISDIR(old_path->dentry->inode->mode)) {
@@ -2098,11 +2095,9 @@ int vfs_link(const char *oldpath, const char *newpath, const struct path *pwd) {
     }
 
     // 解析新链接的父目录路径
-    new_parent_path = vfs_path_parent(newpath, pwd, &name, &namelen);
-    if (IS_ERR(new_parent_path)) {
-        err = PTR_ERR(new_parent_path);
-        goto out_old;
-    }
+    kptr new_parent_res = vfs_path_parent(newpath, pwd, &name, &namelen);
+    K_ERR_LABEL_AND_SAVE(new_parent_res, out_old, err);
+    new_parent_path = new_parent_res.ptr;
 
     // 权限检查（需要父目录的写和执行权限）
     err = vfs_inode_permission(new_parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
@@ -2167,24 +2162,19 @@ int vfs_rename(const char *oldpath, const char *newpath, const struct path *pwd)
     int err;
 
     // 解析源路径
-    old_path = vfs_path_lookup(oldpath, LOOKUP_FOLLOW, pwd);
-    if (IS_ERR(old_path))
-        return PTR_ERR(old_path);
+    kptr old_res = vfs_path_lookup(oldpath, LOOKUP_FOLLOW, pwd);
+    K_ERR_LABEL_AND_SAVE(old_res, out_old, err);
+    old_path = old_res.ptr;
 
     // 解析目标路径（可能已存在）
-    new_path = vfs_path_lookup(newpath, LOOKUP_FOLLOW, pwd);
-    if (IS_ERR(new_path)) {
-        if (PTR_ERR(new_path) != -ENOENT) {
-            err = PTR_ERR(new_path);
-            goto out_old;
-        }
-        
+    kptr new_res = vfs_path_lookup(newpath, LOOKUP_FOLLOW, pwd);
+    if (!new_res.err) {
+        new_path = new_res.ptr;
+    } else if (new_res.err == -ENOENT) {
         // 目标路径不存在，需要创建负缓存 dentry
-        new_parent_path = vfs_path_parent(newpath, pwd, &name, &namelen);
-        if (IS_ERR(new_parent_path)) {
-            err = PTR_ERR(new_parent_path);
-            goto out_old;
-        }
+        kptr np_res = vfs_path_parent(newpath, pwd, &name, &namelen);
+        K_ERR_LABEL_AND_SAVE(np_res, out_old, err);
+        new_parent_path = np_res.ptr;
 
         // 权限检查（父目录写和执行权限）
         err = vfs_inode_permission(new_parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);
@@ -2221,6 +2211,10 @@ int vfs_rename(const char *oldpath, const char *newpath, const struct path *pwd)
         vfs_mntget(new_path->mnt);
         new_path->dentry = new_dentry;
         vfs_path_put(new_parent_path);
+        new_parent_path = NULL;
+    } else {
+        err = new_res.err;
+        goto out_old;
     }
 
     // 权限检查（需要源和目标父目录的写和执行权限）
@@ -2268,16 +2262,14 @@ out_old:
  * @param pwd 当前工作目录
  */
 int vfs_getattr(const char *path, struct kstat *stat, const struct path *pwd) {
-    struct path *ps = NULL;
-    int err;
-
     // 解析路径
-    ps = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
-    if (IS_ERR(ps))
-        return PTR_ERR(ps);
+    kptr ps_res = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
+    K_ERR_RETURN(ps_res);
+
+    struct path *ps = ps_res.ptr;
 
     // 调用对应文件系统的 getattr
-    err = ps->dentry->inode->ops->getattr(ps, stat);
+    int err = ps->dentry->inode->ops->getattr(ps, stat);
 
     vfs_path_put(ps);
     return err;
@@ -2291,13 +2283,12 @@ int vfs_getattr(const char *path, struct kstat *stat, const struct path *pwd) {
  * @param pwd 当前工作目录
  */
 int vfs_setattr(const char *path, struct iattr *attr, const struct path *pwd) {
-    struct path *ps = NULL;
-    int err;
-
     // 解析路径
-    ps = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
-    if (IS_ERR(ps))
-        return PTR_ERR(ps);
+    kptr ps_res = vfs_path_lookup(path, LOOKUP_FOLLOW, pwd);
+    K_ERR_RETURN(ps_res);
+
+    struct path *ps = ps_res.ptr;
+    int err;
 
     // 权限检查（修改属性通常需要写权限或自己是属主）
     err = vfs_inode_permission(ps->dentry->inode, MAY_WRITE);
@@ -2324,10 +2315,13 @@ out:
  *
  * @return file 指针
  */
-struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const struct path *pwd) {
-    struct path *ps = NULL;
+kptr vfs_open(
+    const char *path, 
+    open_flags_t flags, 
+    mode_t mode, 
+    const struct path *pwd
+) {
     struct dentry *dentry = NULL;
-    struct file *file = NULL;
     int err = 0;
     int perm_mask;
 
@@ -2335,13 +2329,16 @@ struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const s
     vfs_lookup_flags_t lookup_flags = (flags & O_NOFOLLOW) ? 0 : LOOKUP_FOLLOW;
 
     // 首先尝试直接查找路径
-    ps = vfs_path_lookup(path, lookup_flags, pwd);
-    if (!IS_ERR(ps)) {
+    kptr lookup_res = vfs_path_lookup(path, lookup_flags, pwd);
+    if (!lookup_res.err) {
+        struct path *ps = lookup_res.ptr;
+
         // 路径已存在，如果指定了 O_EXCL，返回 -EEXIST
         if (flags & O_EXCL) {
             vfs_path_put(ps);
-            return ERR_PTR(-EEXIST);
+            return (kptr)K_ERR(-EEXIST);
         }
+
         // 计算权限掩码并直接打开
         struct inode *inode = ps->dentry->inode;
         int acc = flags & O_RDWR;
@@ -2352,8 +2349,8 @@ struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const s
     }
 
     // 路径不存在：如果不是 O_CREAT，直接返回错误
-    if (PTR_ERR(ps) != -ENOENT || !(flags & O_CREAT))
-        return ERR_CAST(ps);
+    if (lookup_res.err != -ENOENT || !(flags & O_CREAT))
+        return (kptr)K_ERR(lookup_res.err);
 
     // O_CREAT 且文件不存在，准备创建
     char *path_copy = strdup(path);
@@ -2376,11 +2373,12 @@ struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const s
     }
 
     // 解析父目录
-    struct path *parent_ps = vfs_path_lookup(parent_path_str, lookup_flags, pwd);
-    if (IS_ERR(parent_ps)) {
-        err = PTR_ERR(parent_ps);
+    kptr parent_res = vfs_path_lookup(parent_path_str, lookup_flags, pwd);
+    if (parent_res.err) {
+        err = parent_res.err;
         goto err_free_copy;
     }
+    struct path *parent_ps = parent_res.ptr;
 
     // 分配一个临时 dentry
     dentry = vfs_dalloc(parent_ps->dentry, filename);
@@ -2416,7 +2414,7 @@ struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const s
             goto err_put_parent;
         }
 
-        ps = kheap_alloc(sizeof(struct path));
+        struct path *ps = kheap_alloc(sizeof(struct path));
         if (!ps) {
             vfs_dput(dentry);
             err = -ENOMEM;
@@ -2442,7 +2440,7 @@ struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const s
         goto err_free_dentry;
 
     // 创建成功，构造 path 对象
-    ps = kheap_alloc(sizeof(struct path));
+    struct path *ps = kheap_alloc(sizeof(struct path));
     if (!ps) {
         err = -ENOMEM;
         goto err_free_dentry;
@@ -2464,7 +2462,7 @@ err_put_parent:
 err_free_copy:
     kheap_free(path_copy);
 out_err:
-    return ERR_PTR(err);
+    return (kptr)K_ERR(err);
 }
 
 /**
@@ -2491,9 +2489,9 @@ int vfs_mknod(const char *path, mode_t mode, dev_t dev, const struct path *pwd) 
         return -EINVAL;
 
     // 解析父目录路径和最后一个组件名
-    parent_path = vfs_path_parent(path, pwd, &name, &namelen);
-    if (IS_ERR(parent_path))
-        return PTR_ERR(parent_path);
+    kptr parent_res = vfs_path_parent(path, pwd, &name, &namelen);
+    K_ERR_LABEL_AND_SAVE(parent_res, out_parent, err);
+    parent_path = parent_res.ptr;
 
     // 权限检查
     err = vfs_inode_permission(parent_path->dentry->inode, MAY_WRITE | MAY_EXEC);

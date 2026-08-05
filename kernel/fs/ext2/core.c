@@ -51,7 +51,7 @@ struct ext2_inode_info {
  * @param mode VFS 文件模式
  * @return ext2_file_type_t
  */
-static inline kresult_t ext2_mode_to_file_type(mode_t mode) {
+static inline ku8 ext2_mode_to_file_type(mode_t mode) {
     ext2_file_type_t type;
 
     switch (mode & S_IFMT) {
@@ -77,10 +77,10 @@ static inline kresult_t ext2_mode_to_file_type(mode_t mode) {
             type = EXT2_FT_SOCK;
             break;
         default:
-            return (kresult_t){ .err = -EINVAL, .val = 0 };
+            return (ku8)K_ERR(-EINVAL);
     }
 
-    return (kresult_t){ .err = 0, .val = type };
+    return (ku8)K_OK(type);
 }
 
 /**
@@ -89,7 +89,7 @@ static inline kresult_t ext2_mode_to_file_type(mode_t mode) {
  * @param mode VFS 文件模式，类型位必须有效
  * @return ext2_inode_mode_t
  */
-static inline kresult_t ext2_make_i_mode(mode_t mode) {
+static inline ku16 ext2_make_i_mode(mode_t mode) {
     ext2_inode_mode_t type;
 
     switch (mode & S_IFMT) {
@@ -115,14 +115,14 @@ static inline kresult_t ext2_make_i_mode(mode_t mode) {
             type = EXT2_S_IFSOCK;
             break;
         default:
-            return (kresult_t){ .err = -EINVAL, .val = 0 };
+            return (ku16)K_ERR(-EINVAL);
     }
 
     uint16_t perm = (mode & EXT2_S_PERM);
     if (S_ISLNK(mode))
         perm = 0777;
 
-    return (kresult_t){ .err = 0, .val = type | perm };
+    return (ku16)K_OK(type | perm);
 }
 
 /**
@@ -1689,7 +1689,7 @@ static int ext2_dir_collect_and_remove(
     return err;
 }
 
-static struct dentry *ext2_lookup(
+static kptr ext2_lookup(
     struct inode *dir,
     struct dentry *dentry
 ) {
@@ -1703,7 +1703,7 @@ static struct dentry *ext2_lookup(
 
     // 分配工作缓冲区
     buf = kheap_alloc(block_size);
-    if (!buf) return dentry;
+    if (!buf) return (kptr)K_PTR(dentry);
 
     // 逐逻辑块遍历目录文件
     for (uint32_t lb = 0; lb < total_blocks; lb++) {
@@ -1753,7 +1753,7 @@ out:
         spin_unlock(&dentry->lock);
     }
 
-    return dentry;
+    return (kptr)K_PTR(dentry);
 }
 
 static int ext2_create(struct inode *dir, struct dentry *dentry, mode_t mode) {
@@ -1797,8 +1797,8 @@ static int ext2_create(struct inode *dir, struct dentry *dentry, mode_t mode) {
 
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
-    
-    kresult_t imode_res = ext2_make_i_mode(mode | S_IFREG);
+
+    ku16 imode_res = ext2_make_i_mode(mode | S_IFREG);
     if (imode_res.err) {
         err = imode_res.err;
         goto err_bitmap;
@@ -1918,7 +1918,7 @@ static int ext2_symlink(struct inode *dir, struct dentry *dentry, const char *ta
 
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
-    kresult_t imode_res = ext2_make_i_mode(S_IFLNK | 0777);
+    ku16 imode_res = ext2_make_i_mode(S_IFLNK | 0777);
     if (imode_res.err) {
         err = imode_res.err;
         goto err_bitmap;
@@ -2048,10 +2048,10 @@ static int ext2_link(
         return -EPERM;
 
     // 根据源 inode 的文件类型确定目录项类型
-    kresult_t type_res = ext2_mode_to_file_type(inode->mode);
+    ku8 type_res = ext2_mode_to_file_type(inode->mode);
     if (type_res.err)
         return type_res.err;
-        
+
     type = (ext2_file_type_t)type_res.val;
 
     time_get(&now);
@@ -2242,7 +2242,7 @@ static int ext2_mkdir(struct inode *dir, struct dentry *dentry, mode_t mode) {
 
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
-    kresult_t imode_res = ext2_make_i_mode(mode | S_IFDIR);
+    ku16 imode_res = ext2_make_i_mode(mode | S_IFDIR);
     if (imode_res.err) {
         err = imode_res.err;
         goto err_bitmap;
@@ -2625,7 +2625,7 @@ static int ext2_rename(
     }
 
     // 确定新条目的文件类型
-    kresult_t type_res = ext2_mode_to_file_type(old_inode->mode);
+    ku8 type_res = ext2_mode_to_file_type(old_inode->mode);
     if (type_res.err) {
         kheap_free(buf);
         err = type_res.err;
@@ -3029,7 +3029,7 @@ static int ext2_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev
     int err;
 
     // 根据文件类型确定目录项类型
-    kresult_t type_res = ext2_mode_to_file_type(mode);
+    ku8 type_res = ext2_mode_to_file_type(mode);
     if (type_res.err)
         return type_res.err;
     type = (ext2_file_type_t)type_res.val;
@@ -3060,7 +3060,7 @@ static int ext2_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev
 
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
-    kresult_t imode_res = ext2_make_i_mode(mode);
+    ku16 imode_res = ext2_make_i_mode(mode);
     if (imode_res.err) {
         err = imode_res.err;
         goto err_bitmap;
@@ -3333,7 +3333,7 @@ static struct dentry_operations ext2_dentry_ops = {
     .release = ext2_dentry_release,
 };
 
-static kresult_t ext2_mount(
+static kptr ext2_mount(
     struct file_system_type *fst,
     mount_flags_t flags,
     const char *dev_name,
@@ -3354,23 +3354,21 @@ static kresult_t ext2_mount(
 
     // 拒绝无设备名的挂载
     if (!dev_name || !dev_name[0])
-        return (kresult_t){ .err = -EINVAL, .ptr = NULL };
+        return (kptr)K_ERR(-EINVAL);
 
     // 获取当前任务的文件系统上下文，用于解析设备路径
     struct path *root, *pwd;
     task_get_current_fs(&root, &pwd);
     if (!root || !pwd)
-        return (kresult_t){ .err = -ENOMEM, .ptr = NULL };
+        return (kptr)K_ERR(-ENOMEM);
 
-    // 使用 VFS 公共接口打开设备文件，获取设备号
-    dev_file = vfs_open(dev_name, O_RDONLY, 0, pwd);
-    if (IS_ERR(dev_file)) {
-        err = PTR_ERR(dev_file);
-        vfs_path_put(root);
-        vfs_path_put(pwd);
-        return (kresult_t){ .err = err, .ptr = NULL };
-    }
+    // 打开设备文件，获取设备号
+    kptr dev_res = vfs_open(dev_name, O_RDONLY, 0, pwd);
+    K_ERR_LABEL_AND_SAVE(dev_res, out_put_fs, err);
+    dev_file = dev_res.ptr;
     dev = vfs_inode_get_rdev(dev_file->path.dentry->inode);
+
+    // 设备路径解析完成，释放文件系统上下文
     vfs_path_put(root);
     vfs_path_put(pwd);
 
@@ -3534,7 +3532,7 @@ static kresult_t ext2_mount(
     // 挂载成功，释放临时缓冲区，返回根 dentry
     kheap_free(buf);
     vfs_close(dev_file);
-    return (kresult_t){ .err = 0, .ptr = root_dentry };
+    return (kptr)K_PTR(root_dentry);
 
 out_free_root:
     kheap_free(root_dentry);
@@ -3554,7 +3552,10 @@ out_free_initial_buf:
 out_close_dev:
     if (dev_file)
         vfs_close(dev_file);
-    return (kresult_t){ .err = err, .ptr = NULL };
+out_put_fs:
+    vfs_path_put(root);
+    vfs_path_put(pwd);
+    return (kptr)K_ERR(err);
 }
 
 static void ext2_kill_sb(struct super_block *sb) {

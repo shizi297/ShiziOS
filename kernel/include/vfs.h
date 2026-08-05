@@ -208,7 +208,7 @@ void vfs_path_put(struct path *path);
  *
  * @return .ptr 指向挂载点的 vfsmount
  */
-kresult_t vfs_mount(
+kptr vfs_mount(
     const char *dev_name,
     const char *dir_name,
     const char *type,
@@ -370,7 +370,7 @@ int vfs_setattr(const char *path, struct iattr *attr, const struct path *pwd);
  *
  * @return file 指针
  */
-struct file *vfs_open(const char *path, open_flags_t flags, mode_t mode, const struct path *pwd);
+kptr vfs_open(const char *path, open_flags_t flags, mode_t mode, const struct path *pwd);
 
 /**
  * 创建设备节点

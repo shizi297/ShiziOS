@@ -108,7 +108,7 @@ struct file_system_type {
      *
      * @return .ptr 指向根 dentry
      */
-    kresult_t (*mount)(
+    kptr (*mount)(
         struct file_system_type *fst, 
         mount_flags_t flags,
         const char *dev_name,
@@ -216,7 +216,7 @@ struct inode_operations {
      *
      * @return 传入的 dentry
      */
-    struct dentry *(*lookup)(struct inode *dir, struct dentry *dentry);    
+    kptr (*lookup)(struct inode *dir, struct dentry *dentry);
 
     /**
      * 在目录中创建普通文件

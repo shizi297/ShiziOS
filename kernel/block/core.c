@@ -156,7 +156,7 @@ static struct file_operations block_file_operations = {
     .fsync   = block_fsync,
 };
 
-/**
+/*
  * 注册设备到块系统
  * 
  * @param name 创建的设备节点名称
@@ -173,11 +173,12 @@ struct block_type *block_register_type(const char *name) {
     type->name = name;
     type->counter = 0;
 
-    type->major_handle = drivers_major_alloc();
-    if (!type->major_handle) {
+    kptr major_res = drivers_major_alloc();
+    if (K_IS_ERR(major_res)) {
         kheap_free(type);
         return NULL;
     }
+    type->major_handle = major_res.ptr;
 
     // 注册统一的 VFS 函数到 fops
     drivers_register_fops(type->major_handle, &block_file_operations);

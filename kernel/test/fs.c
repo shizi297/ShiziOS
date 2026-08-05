@@ -66,15 +66,16 @@ static void concurrent_create_thread_func(void *arg) {
 
     char path[64];
     snprintk(path, sizeof(path), "/concurrent_%d", t->id);
-    struct file *file = vfs_open(path, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR, t->pwd);
-    if (!IS_ERR(file)) {
+    kptr res = vfs_open(path, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR, t->pwd);
+    if (!res.err) {
+        struct file *file = res.ptr;
         char data[4];
         snprintk(data, sizeof(data), "t%d", t->id);
         vfs_write(file, data, 2, NULL);
         vfs_close(file);
         t->error = 0;
     } else {
-        t->error = PTR_ERR(file);
+        t->error = res.err;
     }
     t->done = true;
     atomic_fetch_sub(t->remaining, 1);
@@ -89,18 +90,19 @@ static void concurrent_create_same_func(void *arg) {
         task_sched();
     }
 
-    struct file *file = vfs_open(
+    kptr res = vfs_open(
         "/concurrent_same",
         O_CREAT | O_RDWR | O_TRUNC | O_EXCL,
         S_IRUSR | S_IWUSR,
         t->pwd
     );
-    if (!IS_ERR(file)) {
+    if (!res.err) {
+        struct file *file = res.ptr;
         vfs_write(file, "data", 4, NULL);
         vfs_close(file);
         t->error = 0;
     } else {
-        t->error = PTR_ERR(file);
+        t->error = res.err;
     }
     t->done = true;
     atomic_fetch_sub(t->remaining, 1);
@@ -116,8 +118,9 @@ static void concurrent_rw_thread_func(void *arg) {
     }
 
     if (t->is_reader) {
-        struct file *file = vfs_open("/concurrent_rw", O_RDONLY, 0, t->pwd);
-        if (!IS_ERR(file)) {
+        kptr res = vfs_open("/concurrent_rw", O_RDONLY, 0, t->pwd);
+        if (!res.err) {
+            struct file *file = res.ptr;
             char buf[128];
             for (int i = 0; i < 5; i++) {
                 vfs_lseek(file, 0, SEEK_SET);
@@ -126,18 +129,19 @@ static void concurrent_rw_thread_func(void *arg) {
             vfs_close(file);
             t->error = 0;
         } else {
-            t->error = PTR_ERR(file);
+            t->error = res.err;
         }
     } else {
-        struct file *file = vfs_open("/concurrent_rw", O_RDWR | O_APPEND, 0, t->pwd);
-        if (!IS_ERR(file)) {
+        kptr res = vfs_open("/concurrent_rw", O_RDWR | O_APPEND, 0, t->pwd);
+        if (!res.err) {
+            struct file *file = res.ptr;
             for (int i = 0; i < 2; i++) {
                 vfs_write(file, "wdat", 4, NULL);
             }
             vfs_close(file);
             t->error = 0;
         } else {
-            t->error = PTR_ERR(file);
+            t->error = res.err;
         }
     }
     t->done = true;
@@ -146,6 +150,7 @@ static void concurrent_rw_thread_func(void *arg) {
 
 // 基本文件操作
 TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[32];
     ssize_t ret;
@@ -154,13 +159,14 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
     // 创建文件并写入
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create and write /test_basic");
-        file = vfs_open(
+        res = vfs_open(
             "/test_basic",
             O_CREAT | O_RDWR | O_TRUNC,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create /test_basic failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create /test_basic failed");
+        file = res.ptr;
 
         ret = vfs_write(file, "hello", 5, NULL);
         TEST_ASSERT_STEP(global_step + step, ret == 5, "write failed: got %d", ret);
@@ -169,8 +175,9 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
     // 只读测试：以只读方式打开，期望写入失败
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "reopen O_RDONLY and verify read-only");
-        file = vfs_open("/test_basic", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "reopen /test_basic (O_RDONLY) failed");
+        res = vfs_open("/test_basic", O_RDONLY, 0, pwd);
+        TEST_ASSERT_STEP(global_step + step, !res.err, "reopen /test_basic (O_RDONLY) failed");
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ret = vfs_read(file, buf, 5, NULL);
@@ -186,8 +193,9 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
     // 重新打开（读写方式）并进行追加写入、读取等完整测试
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "reopen O_RDWR, append and read full");
-        file = vfs_open("/test_basic", O_RDWR, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "reopen /test_basic (O_RDWR) failed");
+        res = vfs_open("/test_basic", O_RDWR, 0, pwd);
+        TEST_ASSERT_STEP(global_step + step, !res.err, "reopen /test_basic (O_RDWR) failed");
+        file = res.ptr;
 
         off_t pos = vfs_lseek(file, 0, SEEK_END);
         TEST_ASSERT_STEP(global_step + step, pos == 5, "lseek SEEK_END failed: got %d", pos);
@@ -221,6 +229,7 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
 
 // 目录操作
 TEST_ENTRY(test_directory, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     int ret;
 
@@ -234,13 +243,14 @@ TEST_ENTRY(test_directory, step, do_run, (struct path *pwd, int global_step), {
         );
         TEST_ASSERT_STEP(global_step + step, ret == 0, "mkdir failed: %d", ret);
 
-        file = vfs_open(
+        res = vfs_open(
             "/testdir/file",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create file in dir failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create file in dir failed");
+        file = res.ptr;
 
         vfs_write(file, "test", 4, NULL);
         vfs_close(file);
@@ -277,6 +287,7 @@ TEST_ENTRY(test_directory, step, do_run, (struct path *pwd, int global_step), {
 
 // 链接操作
 TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[8];
     int ret;
@@ -284,13 +295,14 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
     // 创建源文件
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create source file");
-        file = vfs_open(
+        res = vfs_open(
             "/link_src",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create link_src failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create link_src failed");
+        file = res.ptr;
 
         vfs_write(file, "linkdata", 8, NULL);
         vfs_close(file);
@@ -302,8 +314,9 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
         ret = vfs_symlink("/link_src", "/symlink", pwd);
         TEST_ASSERT_STEP(global_step + step, ret == 0, "symlink failed: %d", ret);
 
-        file = vfs_open("/symlink", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "open symlink failed");
+        res = vfs_open("/symlink", O_RDONLY, 0, pwd);
+        TEST_ASSERT_STEP(global_step + step, !res.err, "open symlink failed");
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 8, NULL);
@@ -322,8 +335,9 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
         ret = vfs_unlink("/link_src", pwd);
         TEST_ASSERT_STEP(global_step + step, ret == 0, "unlink src failed: %d", ret);
 
-        file = vfs_open("/hardlink", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "open hardlink after src removal failed");
+        res = vfs_open("/hardlink", O_RDONLY, 0, pwd);
+        TEST_ASSERT_STEP(global_step + step, !res.err, "open hardlink after src removal failed");
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 8, NULL);
@@ -342,6 +356,7 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
 
 // 重命名
 TEST_ENTRY(test_rename, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[8];
     int ret;
@@ -349,13 +364,14 @@ TEST_ENTRY(test_rename, step, do_run, (struct path *pwd, int global_step), {
     // 创建文件并写入
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create file for rename");
-        file = vfs_open(
+        res = vfs_open(
             "/rename_old",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create rename_old failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create rename_old failed");
+        file = res.ptr;
 
         vfs_write(file, "renamed", 7, NULL);
         vfs_close(file);
@@ -371,12 +387,13 @@ TEST_ENTRY(test_rename, step, do_run, (struct path *pwd, int global_step), {
     // 旧路径应该不存在，新路径应该可用且数据一致
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "verify old path gone, new path valid");
-        file = vfs_open("/rename_old", O_RDONLY, 0, pwd);
-        ret = IS_ERR(file) ? PTR_ERR(file) : 0;
+        res = vfs_open("/rename_old", O_RDONLY, 0, pwd);
+        ret = res.err;
         TEST_ASSERT_STEP(global_step + step, ret == -ENOENT, "old path should be gone");
 
-        file = vfs_open("/rename_new", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "open rename_new failed");
+        res = vfs_open("/rename_new", O_RDONLY, 0, pwd);
+        TEST_ASSERT_STEP(global_step + step, !res.err, "open rename_new failed");
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 7, NULL);
@@ -394,6 +411,7 @@ TEST_ENTRY(test_rename, step, do_run, (struct path *pwd, int global_step), {
 
 // 截断
 TEST_ENTRY(test_truncate, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[16];
     struct kstat stat;
@@ -402,13 +420,14 @@ TEST_ENTRY(test_truncate, step, do_run, (struct path *pwd, int global_step), {
     // 创建文件并写入初始数据
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create file and write initial data");
-        file = vfs_open(
+        res = vfs_open(
             "/trunc_test",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create trunc_test failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create trunc_test failed");
+        file = res.ptr;
 
         ret = vfs_write(file, "1234567890", 10, NULL);
         TEST_ASSERT_STEP(global_step + step, ret == 10, "write failed: got %d", ret);
@@ -454,6 +473,7 @@ TEST_ENTRY(test_truncate, step, do_run, (struct path *pwd, int global_step), {
 
 // 符号链接后接剩余路径组件
 TEST_ENTRY(test_symlink_trailing_path, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[16];
     int ret;
@@ -468,13 +488,14 @@ TEST_ENTRY(test_symlink_trailing_path, step, do_run, (struct path *pwd, int glob
         );
         TEST_ASSERT_STEP(global_step + step, ret == 0, "mkdir /real_dir failed: %d", ret);
 
-        file = vfs_open(
+        res = vfs_open(
             "/real_dir/subfile",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create /real_dir/subfile failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create /real_dir/subfile failed");
+        file = res.ptr;
 
         vfs_write(file, "trailing", 8, NULL);
         vfs_close(file);
@@ -490,13 +511,14 @@ TEST_ENTRY(test_symlink_trailing_path, step, do_run, (struct path *pwd, int glob
     // 通过符号链接访问子文件——核心测试
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "access subfile via symlink");
-        file = vfs_open("/link_to_dir/subfile", O_RDONLY, 0, pwd);
+        res = vfs_open("/link_to_dir/subfile", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "open /link_to_dir/subfile failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 8, NULL);
@@ -521,6 +543,7 @@ TEST_ENTRY(test_symlink_trailing_path, step, do_run, (struct path *pwd, int glob
 
 // 嵌套符号链接
 TEST_ENTRY(test_symlink_nested, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[8];
     int ret;
@@ -528,13 +551,14 @@ TEST_ENTRY(test_symlink_nested, step, do_run, (struct path *pwd, int global_step
     // 创建源文件
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create source file");
-        file = vfs_open(
+        res = vfs_open(
             "/nested_src",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create /nested_src failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create /nested_src failed");
+        file = res.ptr;
 
         vfs_write(file, "nestdata", 8, NULL);
         vfs_close(file);
@@ -553,8 +577,9 @@ TEST_ENTRY(test_symlink_nested, step, do_run, (struct path *pwd, int global_step
     // 通过两层符号链接访问
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "read through nested symlinks");
-        file = vfs_open("/sym1", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "open /sym1 failed");
+        res = vfs_open("/sym1", O_RDONLY, 0, pwd);
+        TEST_ASSERT_STEP(global_step + step, !res.err, "open /sym1 failed");
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 8, NULL);
@@ -579,6 +604,7 @@ TEST_ENTRY(test_symlink_nested, step, do_run, (struct path *pwd, int global_step
 
 // 符号链接指向不存在的目标
 TEST_ENTRY(test_symlink_dangling, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     int ret;
 
@@ -592,8 +618,8 @@ TEST_ENTRY(test_symlink_dangling, step, do_run, (struct path *pwd, int global_st
     // 尝试打开应该返回 -ENOENT
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "open dangling symlink");
-        file = vfs_open("/dangling_link", O_RDONLY, 0, pwd);
-        ret = IS_ERR(file) ? PTR_ERR(file) : 0;
+        res = vfs_open("/dangling_link", O_RDONLY, 0, pwd);
+        ret = res.err;
         TEST_ASSERT_STEP(
             global_step + step,
             ret == -ENOENT,
@@ -610,6 +636,7 @@ TEST_ENTRY(test_symlink_dangling, step, do_run, (struct path *pwd, int global_st
 
 // 负缓存测试：先访问不存在，再创建，再访问
 TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[16];
     int ret;
@@ -617,8 +644,8 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
     // 先访问不存在的文件，建立负缓存
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "first open - expect ENOENT");
-        file = vfs_open("/neg_test", O_RDONLY, 0, pwd);
-        ret = IS_ERR(file) ? PTR_ERR(file) : 0;
+        res = vfs_open("/neg_test", O_RDONLY, 0, pwd);
+        ret = res.err;
         TEST_ASSERT_STEP(
             global_step + step,
             ret == -ENOENT,
@@ -630,13 +657,14 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
     // 创建这个文件
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create the file");
-        file = vfs_open(
+        res = vfs_open(
             "/neg_test",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create /neg_test failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create /neg_test failed");
+        file = res.ptr;
 
         vfs_write(file, "negative", 8, NULL);
         vfs_close(file);
@@ -645,13 +673,14 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
     // 再次访问，验证负缓存已被正确失效
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "reopen - expect success");
-        file = vfs_open("/neg_test", O_RDONLY, 0, pwd);
+        res = vfs_open("/neg_test", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "reopen /neg_test after create failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 8, NULL);
@@ -674,6 +703,7 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
 
 // 路径规范化：.、..、连续斜杠
 TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[8];
     int ret;
@@ -688,13 +718,14 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
         );
         TEST_ASSERT_STEP(global_step + step, ret == 0, "mkdir /normdir failed: %d", ret);
 
-        file = vfs_open(
+        res = vfs_open(
             "/normdir/file",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create /normdir/file failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create /normdir/file failed");
+        file = res.ptr;
 
         vfs_write(file, "normdata", 8, NULL);
         vfs_close(file);
@@ -703,13 +734,14 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
     // 测试 .. 处理
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "test parent dir traversal");
-        file = vfs_open("/normdir/../normdir/file", O_RDONLY, 0, pwd);
+        res = vfs_open("/normdir/../normdir/file", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "open /normdir/../normdir/file failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 8, NULL);
@@ -721,13 +753,14 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
     // 测试 . 处理
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "test current dir reference");
-        file = vfs_open("/normdir/./file", O_RDONLY, 0, pwd);
+        res = vfs_open("/normdir/./file", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "open /normdir/./file failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         vfs_close(file);
     });
@@ -735,13 +768,14 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
     // 测试连续斜杠
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "test multiple slashes");
-        file = vfs_open("//normdir///file", O_RDONLY, 0, pwd);
+        res = vfs_open("//normdir///file", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "open //normdir///file failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         vfs_close(file);
     });
@@ -755,10 +789,11 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
 
 // 挂载点与符号链接结合
 TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_step), {
+    kptr res;
     struct file *file = NULL;
     char buf[8];
     int ret;
-    kresult_t mnt_res;
+    kptr mnt_res;
 
     // 创建挂载点并挂载 tmpfs
     TEST_IMPL(do_run, step, {
@@ -777,13 +812,14 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
     // 在挂载点下创建文件
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "create file under mount");
-        file = vfs_open(
+        res = vfs_open(
             "/mnt/mountfile",
             O_CREAT | O_RDWR,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !IS_ERR(file), "create /mnt/mountfile failed");
+        TEST_ASSERT_STEP(global_step + step, !res.err, "create /mnt/mountfile failed");
+        file = res.ptr;
 
         vfs_write(file, "mounted", 7, NULL);
         vfs_close(file);
@@ -792,13 +828,14 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
     // 通过挂载点访问文件
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "access file through mount");
-        file = vfs_open("/mnt/mountfile", O_RDONLY, 0, pwd);
+        res = vfs_open("/mnt/mountfile", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "open /mnt/mountfile failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 7, NULL);
@@ -818,13 +855,14 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
     // 通过符号链接访问挂载点内的文件
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "access mount through symlink");
-        file = vfs_open("/link_to_mount", O_RDONLY, 0, pwd);
+        res = vfs_open("/link_to_mount", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !res.err,
             "open /link_to_mount failed: %d",
-            IS_ERR(file) ? PTR_ERR(file) : 0
+            res.err
         );
+        file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
         ssize_t r = vfs_read(file, buf, 7, NULL);
@@ -876,23 +914,24 @@ TEST_ENTRY(test_concurrent_create_different, step, do_run, (struct path *pwd, in
         for (int i = 0; i < NUM_THREADS; i++) {
             char path[64];
             snprintk(path, sizeof(path), "/concurrent_%d", i);
-            struct file *file = vfs_open(path, O_RDONLY, 0, pwd);
+            kptr vres = vfs_open(path, O_RDONLY, 0, pwd);
             TEST_ASSERT_STEP(
                 global_step + step,
-                !IS_ERR(file),
+                !vres.err,
                 "concurrent file %d not found",
                 i
             );
-            if (!IS_ERR(file)) {
+            if (!vres.err) {
+                struct file *vfile = vres.ptr;
                 char buf[4] = {0};
-                ssize_t r = vfs_read(file, buf, 2, NULL);
+                ssize_t r = vfs_read(vfile, buf, 2, NULL);
                 TEST_ASSERT_STEP(
                     global_step + step,
                     r == 2,
                     "concurrent file %d read failed",
                     i
                 );
-                vfs_close(file);
+                vfs_close(vfile);
             }
         }
     });
@@ -975,18 +1014,19 @@ TEST_ENTRY(test_concurrent_read_write, step, do_run, (struct path *pwd, int glob
         TEST_DESC(global_step + step, "concurrent read/write test");
 
         // 创建初始文件
-        struct file *file = vfs_open("/concurrent_rw", O_CREAT | O_RDWR | O_TRUNC,
+        kptr init_res = vfs_open("/concurrent_rw", O_CREAT | O_RDWR | O_TRUNC,
             S_IRUSR | S_IWUSR, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !init_res.err,
             "create /concurrent_rw failed"
         );
-        if (!IS_ERR(file)) {
+        if (!init_res.err) {
+            struct file *init_file = init_res.ptr;
             const char *init_str = "initial";
             size_t init_len = strlen(init_str);
-            vfs_write(file, init_str, init_len, NULL);
-            vfs_close(file);
+            vfs_write(init_file, init_str, init_len, NULL);
+            vfs_close(init_file);
         }
 
         // 初始化线程数据
@@ -1012,13 +1052,14 @@ TEST_ENTRY(test_concurrent_read_write, step, do_run, (struct path *pwd, int glob
         }
 
         // 验证：最终文件大小 = 初始大小 + 每个写线程写入的4字节 * 2次
-        file = vfs_open("/concurrent_rw", O_RDONLY, 0, pwd);
+        kptr verify_res = vfs_open("/concurrent_rw", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !IS_ERR(file),
+            !verify_res.err,
             "open /concurrent_rw after test failed"
         );
-        if (!IS_ERR(file)) {
+        if (!verify_res.err) {
+            struct file *verify_file = verify_res.ptr;
             struct kstat stat;
             int err = vfs_getattr("/concurrent_rw", &stat, pwd);
             TEST_ASSERT_STEP(
@@ -1034,7 +1075,7 @@ TEST_ENTRY(test_concurrent_read_write, step, do_run, (struct path *pwd, int glob
                 expected_size,
                 stat.st_size
             );
-            vfs_close(file);
+            vfs_close(verify_file);
         }
     });
 

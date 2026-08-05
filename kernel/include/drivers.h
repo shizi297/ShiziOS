@@ -30,7 +30,7 @@ void drivers_free_anon_id(dev_t dev);
 struct file_operations *drivers_dev_find(dev_t dev, mode_t mode);
 
 // 分配一个新的主设备号，返回一个次设备号分配器
-drivers_minor_devt *drivers_major_alloc(void);
+kptr drivers_major_alloc(void);
 
 // 初始化次设备号分配器
 void drivers_minor_allocator_init(drivers_minor_devt *handle, bool is_dynamic);

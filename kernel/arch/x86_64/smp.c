@@ -394,18 +394,19 @@ void smp_irq_unregister_handler(uint8_t vector) {
  * 
  * @return 向量号
  */
-kresult_t smp_irq_alloc_handler(uint64_t handler_addr) {
+ku32 smp_irq_alloc_handler(uint64_t handler_addr) {
     if (handler_addr == 0)
-        return (kresult_t){.err = -EINVAL, .val = 0};
+        return (ku32)K_ERR(-EINVAL);
 
     for (int vector = 32; vector < 256; vector++) {
         if (irq_table[vector] == 0) {
             irq_table[vector] = handler_addr;
-            return (kresult_t){.err = 0, .val = vector};
+            uint32_t irq_vector = (uint32_t)vector;
+            return (ku32)K_OK(irq_vector);
         }
     }
 
-    return (kresult_t){.err = -ENOSPC, .val = 0};
+    return (ku32)K_ERR(-ENOSPC);
 }
 
 // 获取当前cpu的内核tls
