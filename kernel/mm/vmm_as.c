@@ -10,13 +10,15 @@
 #include <list.h>
 #include <libtree.h>
 #include <klibc.h>
+#include <errno.h>
+#include <vfs.h>
 
 /**
  * 红黑树节点比较（按 start 地址）
- * 
+ *
  * @param a 要比较的红黑树的第一个节点
  * @param b 要比较的红黑树的第二个节点
- * 
+ *
  * @return -1 a小于b
  * @return 0 相等
  * @return 1 a大于b
@@ -33,10 +35,10 @@ static int vma_rb_cmp(const struct rbtree_node *a, const struct rbtree_node *b) 
 
 /**
  * 在红黑树中查找第一个 start >= addr 的节点
- * 
+ *
  * @param tree 红黑树头节点
  * @param addr 要找的地址
- * 
+ *
  * @return vma指针
  */
 static vm_area_t *vma_rb_find_ge(struct rbtree *tree, uintptr_t addr) {
@@ -57,10 +59,10 @@ static vm_area_t *vma_rb_find_ge(struct rbtree *tree, uintptr_t addr) {
 
 /**
  * 在红黑树中查找最后一个 start <= addr 的节点
- * 
+ *
  * @param tree 红黑树头节点
  * @param addr 要找的地址
- * 
+ *
  * @return vma指针
  */
 static vm_area_t *vma_rb_find_le(struct rbtree *tree, uintptr_t addr) {
@@ -97,20 +99,23 @@ static vm_area_t *vma_find_end(as_t *as) {
  * @param end 结束虚拟地址（页对齐）
  * @param prot 权限标志
  * @param flags 映射标志
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
-                     vm_prot_t prot, uint8_t flags) {
+int vma_add(
+    as_t *as,
+    uintptr_t start,
+    uintptr_t end,
+    vm_prot_t prot,
+    uint8_t flags
+) {
     // 参数检查
     if (as == NULL) {
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
     if (start >= end) {
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
     if ((start & (PAGE_SIZE - 1)) != 0 || (end & (PAGE_SIZE - 1)) != 0) {
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
 
     // 重叠检查
@@ -118,14 +123,14 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
     if (next) {
         // 检查 next 自身是否与新区间重叠
         if (next->start < end)
-            return VMM_INVALID_ARGUMENT;
+            return -EINVAL;
 
         // 检查 next 的前驱
         struct rbtree_node *prev_node = rbtree_prev(&next->rb_node);
         if (prev_node) {
             vm_area_t *prev = container_of(prev_node, vm_area_t, rb_node);
             if (prev->end > start)
-                return VMM_INVALID_ARGUMENT;
+                return -EINVAL;
         }
     } else {
         // 没有 start >= start 的节点，检查最后一个节点
@@ -133,21 +138,25 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
         if (last_node) {
             vm_area_t *last = container_of(last_node, vm_area_t, rb_node);
             if (last->end > start)
-                return VMM_INVALID_ARGUMENT;
+                return -EINVAL;
         }
     }
 
     // 分配vma结构
     vm_area_t *new_vma = (vm_area_t *)kheap_alloc(sizeof(vm_area_t));
     if (new_vma == NULL) {
-        return VMM_OUT_OF_MEMORY;
+        return -ENOMEM;
     }
-    
+
     // 初始化vma
     new_vma->start = start;
     new_vma->end = end;
     new_vma->prot = prot;
     new_vma->flags = flags;
+    new_vma->linear_addr = 0;
+    new_vma->offset_or_anon = -1;
+    new_vma->anon_vma = NULL;
+    new_vma->file = NULL;
     // kheap_alloc 已清零，其他字段已为0或NULL
     INIT_LIST_HEAD(&new_vma->list_node);
 
@@ -156,13 +165,51 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
     if (exist) {
         // 重叠检查已做，若发生说明代码错误
         kheap_free(new_vma);
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
 
     // 插入链表尾部
     list_add_tail(&new_vma->list_node, &as->vma_list);
 
-    return VMM_OK;
+    return 0;
+}
+
+/*
+ * 读取 VMA 中一个页面的内容到目标内存地址
+ *
+ * @param vma VMA 指针
+ * @param vaddr 要读取的虚拟地址（必须位于 vma 范围内）
+ * @param dest 目标内存地址（用于存放读取的数据）
+ */
+int vma_read_page(vm_area_t *vma, uintptr_t vaddr, void *dest) {
+    if (!vma || !dest) return -EINVAL;
+    if (vaddr < vma->start || vaddr >= vma->end) return -EFAULT;
+
+    uintptr_t offset = vaddr - vma->start;
+
+    if (vma->offset_or_anon < 0) {
+        // 匿名映射
+        if (vma->linear_addr != 0) {
+            void *src = (void *)(vma->linear_addr + offset);
+            memcpy(dest, src, PAGE_SIZE);
+        } else {
+            memset(dest, 0, PAGE_SIZE);
+        }
+        return 0;
+    } else {
+        // 文件映射
+        uint64_t file_offset = (uint64_t)vma->offset_or_anon + offset;
+        off_t pos = (off_t)file_offset;
+        ssize_t ret = vfs_read(vma->file, (char *)dest, PAGE_SIZE, &pos);
+        if (ret != PAGE_SIZE) {
+            if (ret > 0) {
+                memset((char *)dest + ret, 0, PAGE_SIZE - ret);
+                return 0;
+            }
+            return (ret < 0) ? ret : -EIO;
+        }
+        return 0;
+    }
 }
 
 /*
@@ -171,10 +218,9 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end,
  * @param as 进程地址空间
  * @param addr 虚拟地址
  *
- * @return 失败：NULL
- * @return 成功：vma 指针
+ * @return vma 指针
  */
-vm_area_t* vma_find(as_t *as, uintptr_t addr) {
+vm_area_t *vma_find(as_t *as, uintptr_t addr) {
     if (as == NULL) {
         return NULL;
     }
@@ -191,12 +237,10 @@ vm_area_t* vma_find(as_t *as, uintptr_t addr) {
  *
  * @param as 进程地址空间
  * @param vma 要移除的 vma 指针
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vma_remove(as_t *as, vm_area_t *vma) {
+int vma_remove(as_t *as, vm_area_t *vma) {
     if (as == NULL || vma == NULL) {
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
 
     // 从链表中移除
@@ -206,28 +250,23 @@ vmm_result_t vma_remove(as_t *as, vm_area_t *vma) {
     rbtree_remove(&vma->rb_node, &as->vma_tree);
 
     // 释放vma关联的资源
-    if (vma->anon_vma != NULL && vma->anon_vma->refcount > 0) {
-        vma->anon_vma->refcount--;
-        if (vma->anon_vma->refcount == 0) {
-            kheap_free(vma->anon_vma); 
+    if (vma->offset_or_anon < 0) {
+        // 匿名映射
+        anon_vma_t *anon = vma->anon_vma;
+        if (anon && anon->refcount > 0) {
+            anon->refcount--;
+            if (anon->refcount == 0) {
+                kheap_free(anon);
+            }
         }
+    } else {
+        // 文件映射：不操作引用计数，由 VFS 管理
+        vma->file = NULL;
     }
-    if (vma->file != NULL && vma->file->refcount > 0) {
-        vma->file->refcount--;
-        if (vma->file->refcount == 0) {
-            kheap_free(vma->file);
-        }
-    }
-    if (vma->device != NULL && vma->device->refcount > 0) {
-        vma->device->refcount--;
-        if (vma->device->refcount == 0) {
-            kheap_free(vma->device);
-        }
-    }
-    
+
     kheap_free(vma);
-    
-    return VMM_OK;
+
+    return 0;
 }
 
 // 清理地址空间内部资源（释放所有 vma 和 pgd）
@@ -249,8 +288,7 @@ static void as_cleanup(as_t *as) {
  *
  * @param pgd 页全局目录物理地址
  *
- * @return 失败：NULL
- * @return 成功：进程地址空间的虚拟地址
+ * @return 进程地址空间的虚拟地址
  */
 as_t *as_create(uintptr_t pgd) {
     as_t *vaddr = (as_t *)kheap_alloc(sizeof(as_t));
@@ -308,7 +346,7 @@ void as_destroy(as_t *as) {
     if (as == NULL) {
         return;
     }
-    
+
     int new_ref = as_sub_ref(as);
     if (new_ref == 0) {
         as_cleanup(as);
@@ -322,23 +360,22 @@ void as_destroy(as_t *as) {
  * @param as 进程地址空间
  * @param size 需要的大小（字节）
  *
- * @return 失败：0
- * @return 成功：分配的虚拟地址
+ * @return 分配的虚拟地址
  */
 uintptr_t as_alloc_addr(as_t *as, uint64_t size) {
     if (as == NULL || size == 0) {
         return 0;
     }
-    
+
     // 计算需要多少页
     uint64_t page_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
     uint64_t total_size = page_count * PAGE_SIZE;
-    
+
     // 查找最后一个vma
     vm_area_t *last_vma = vma_find_end(as);
-    
+
     uintptr_t start_addr;
-    
+
     if (last_vma == NULL) {
         // 第一个vma，从USER_START开始
         start_addr = USER_START;
@@ -347,12 +384,12 @@ uintptr_t as_alloc_addr(as_t *as, uint64_t size) {
         start_addr = last_vma->end + 4096;
         start_addr = (start_addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     }
-    
+
     // 检查是否超过栈区域
     if (start_addr + total_size > USER_STACK_TOP) {
         return 0;
     }
-    
+
     return start_addr;
 }
 
@@ -361,18 +398,16 @@ uintptr_t as_alloc_addr(as_t *as, uint64_t size) {
  *
  * @param as 进程地址空间
  * @param addr 虚拟地址
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t as_unmap(as_t *as, uintptr_t addr) {
+int as_unmap(as_t *as, uintptr_t addr) {
     if (as == NULL) {
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
 
     // 查找对应的vma
     vm_area_t *vma = vma_find(as, addr);
     if (vma == NULL) {
-        return VMM_INVALID_ADDRESS;
+        return -ENOENT;
     }
 
     // 读取vma的 start 和 end 用于tlb刷新
@@ -382,12 +417,12 @@ vmm_result_t as_unmap(as_t *as, uintptr_t addr) {
     // 释放页表页
     page_table_blocks_struct *ptb = &vma->page_table_blocks;
     mmu_remove_map(ptb);
-    
+
     // 释放线性地址
     if (vma->linear_addr != 0) {
         kheap_free((void *)vma->linear_addr);
     }
-    
+
     // 根据映射大小选择TLB刷新策略
     uint64_t page_count = (end - start) / PAGE_SIZE;
     if (page_count > TLB_FLUSH_THRESHOLD_PAGES) {
@@ -399,7 +434,7 @@ vmm_result_t as_unmap(as_t *as, uintptr_t addr) {
             mmu_invalidate(va);
         }
     }
-    
+
     // 从地址空间中移除vma
     return vma_remove(as, vma);
 }

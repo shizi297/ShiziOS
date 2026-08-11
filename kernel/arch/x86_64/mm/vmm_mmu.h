@@ -81,10 +81,7 @@ typedef struct _page_table_blocks {
     uint64_t page_table_blocks_count;
 } page_table_blocks_struct;
 
-/*
- * 初始化
- * 获取内核页表页物理地址
- */
+// 初始化
 void mmu_init(void);
 
 // 获取内核pgd
@@ -92,48 +89,50 @@ uintptr_t mmu_get_kernel_pgd(void);
 
 /*
  * 遍历页表
- * 找到虚拟地址对应的页表项的虚拟地址 
+ * 找到虚拟地址对应的页表的虚拟地址
  *
  * @param pgd 页全局目录，cr3寄存器的值，一般是pml4的地址
  * @param addr 要找的虚拟地址
  * @param create 是否自动分配缺失的页
- * 
- * @return 失败：NULL
- * @return 成功：PTE的虚拟地址
+ * @param prot 创建页表时的权限（仅在create=true时使用，可以设置为0）
+ * @param out_blocks 输出：包含3个页表页的虚拟地址[0]=PDPT,[1]=PD,[2]=PT
+ *
+ * @return PTE 的虚拟地址
  */
 pte_t* mmu_walk(uintptr_t pgd, uintptr_t addr, bool create, vm_prot_t prot, uintptr_t out_blocks[3]);
 
 /*
  * 设置PTE
- * 
+ *
  * @param pte 页表项的虚拟地址指针
  * @param pfn 要映射的物理地址页帧号
  * @param huge 是否设置大页
  * @param prot 权限标志
- * 
+ *
  * huge只在PDPTE和PDE中是有意义的
  */
 void mmu_set_pte(pte_t *pte, uint64_t pfn, bool huge, vm_prot_t prot);
 
 /*
  * 清除页表条目（设为0）
+ *
  * @param pte 指向PTE的指针
  */
 void mmu_clear_pte(pte_t *pte);
 
 /*
  * 刷新TLB条目
+ *
  * @param vaddr 要刷新的虚拟地址
  */
 void mmu_invalidate(uintptr_t vaddr);
 
-/*
- * 刷新所有TLB
- */
+// 刷新所有TLB
 void mmu_invalidate_all(void);
 
 /*
  * 设置 CR3（切换页表）
+ *
  * @param pgd_phys cr3 寄存器所需的物理 PML4 基地址（物理地址）
  */
 void mmu_set_pgd(uintptr_t pgd_phys);
@@ -143,7 +142,7 @@ void mmu_set_pgd(uintptr_t pgd_phys);
 
 /*
  * 创建页表映射
- * 
+ *
  * @param pgd 页全局目录物理地址
  * @param vaddr_start 需要映射到的虚拟地址起始位置
  * @param paddr_start 需要映射的物理地址
@@ -151,40 +150,38 @@ void mmu_set_pgd(uintptr_t pgd_phys);
  * @param prot 权限
  * @param flags 映射标志
  * @param page_table_blocks 存储分配的页表页信息
- * @return vmm_result_t
- * 
+ *
  * 调用需要刷新TLB
  */
-vmm_result_t mmu_add_map(
-    uintptr_t pgd, 
-    uintptr_t vaddr_start, 
-    uintptr_t paddr_start, 
-    uint64_t page_count, 
-    vm_prot_t prot, 
+int mmu_add_map(
+    uintptr_t pgd,
+    uintptr_t vaddr_start,
+    uintptr_t paddr_start,
+    uint64_t page_count,
+    vm_prot_t prot,
     uint8_t flags,
     page_table_blocks_struct *page_table_blocks
 );
 
 /*
  * 创建新的页全局目录（PML4）
+ *
  * @param pgd_ptr 指向存储PML4物理地址的指针
- * @return vmm_result_t
  */
-vmm_result_t mmu_add_pgd(uintptr_t *pgd);
+int mmu_add_pgd(uintptr_t *pgd);
 
 /*
  * 删除页全局目录
+ *
  * @param pgd 页全局目录物理地址
- * @return vmm_result_t
  */
-vmm_result_t mmu_remove_pgd(uintptr_t pgd);
+int mmu_remove_pgd(uintptr_t pgd);
 
 /*
  * 移除页表映射
- * 
+ *
  * @param page_table_blocks 存储分配的页表页信息
- * @return vmm_result_t
- * 
+ *
  * 调用者需要自行刷新TLB
  */
-vmm_result_t mmu_remove_map(page_table_blocks_struct *page_table_blocks);
+int mmu_remove_map(page_table_blocks_struct *page_table_blocks);

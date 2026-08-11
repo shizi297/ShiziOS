@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include "vmm_types.h"
 #include "vmm_as.h"
+#include <vfs.h>
 
 #define TLB_FLUSH_THRESHOLD_PAGES 32
 
@@ -18,8 +19,7 @@ void vmm_init(void);
 /*
  * 创建一个新的进程地址空间（自动分配页全局目录）
  *
- * @return 失败：NULL
- * @return 成功：进程地址空间的虚拟地址
+ * @return 进程地址空间的虚拟地址
  */
 as_t *vmm_create_as(void);
 
@@ -34,10 +34,8 @@ uintptr_t vmm_get_kernel_pgd(void);
  *
  * @param as 进程地址空间
  * @param addr 虚拟地址
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vmm_unmap(as_t *as, uintptr_t addr);
+int vmm_unmap(as_t *as, uintptr_t addr);
 
 /*
  * 切换到指定的进程地址空间
@@ -52,8 +50,7 @@ void vmm_switch_as(as_t *as);
  * @param phy_addr 物理地址
  * @param page_count 大小
  *
- * @return 成功 ： 映射的虚拟内存
- * @return 失败 ：0
+ * @return 映射的虚拟内存
  */
 uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count);
 
@@ -73,8 +70,7 @@ void vmm_as_add_ref(as_t *as);
  *
  * @param as 进程地址空间的虚拟地址
  *
- * @return 失败：NULL
- * @return 成功：进程地址空间的虚拟地址
+ * @return 进程地址空间的虚拟地址
  */
 as_t *vmm_copy_as(as_t *as);
 
@@ -86,37 +82,40 @@ as_t *vmm_copy_as(as_t *as);
  * @param page 映射页数
  * @param prot 映射权限
  * @param flags 映射标志
- * @param anon_vma 匿名内存结构体指针
+ * @param anon_vma 匿名内存结构体指针（目前未使用，可传NULL）
  * @param alloc 是否预分配
- * @param out_addr 输出的实际映射地址
  *
- * anon_vma目前没有用
- * 可以先传入NULL
- *
- * @return vmm_result_t
+ * @return 映射的虚拟地址
  */
-vmm_result_t vmm_map_anon(
-    as_t *as, 
-    uintptr_t addr, 
-    uint64_t page, 
-    vm_prot_t prot, 
-    uint8_t flags, 
-    anon_vma_t *anon_vma, 
-    bool alloc,
-    uintptr_t *out_addr
+kuptr vmm_map_anon(
+    as_t *as,
+    uintptr_t addr,
+    uint64_t page,
+    vm_prot_t prot,
+    uint8_t flags,
+    anon_vma_t *anon_vma,
+    bool alloc
 );
 
-
 /*
- * 映射文件到内存
- * 暂时不支持
- * 
- * vmm_result_t vmm_map_file(){}
+ * 映射文件到进程地址空间
+ *
+ * @param as 进程地址空间
+ * @param addr 建议的虚拟地址（0 表示自动分配）
+ * @param size 映射大小（字节）
+ * @param prot 内存权限
+ * @param flags 映射标志（当前必须传 0）
+ * @param file 已打开的 file 结构体指针（由 VFS 层提供）
+ * @param offset 文件内偏移（必须页对齐）
+ *
+ * @return 映射的虚拟地址
  */
-
-/*
- * 映射设备内存
- * 暂时不支持
- * 
- * vmm_result_t vmm_map_device(){}
- */
+kuptr vmm_map_file(
+    as_t *as,
+    uintptr_t addr,
+    uint64_t size,
+    vm_prot_t prot,
+    uint8_t flags,
+    struct file *file,
+    uint64_t offset
+);

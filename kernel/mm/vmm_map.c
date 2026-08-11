@@ -13,7 +13,9 @@
 #include <stddef.h>
 #include <kio.h>
 #include <klibc.h>
- 
+#include <errno.h>
+#include <vfs.h>
+
 #define VMM_PANIC(fmt, ...) \
     printp("[VMM] ERROR : " fmt, ##__VA_ARGS__)
 
@@ -42,13 +44,12 @@ uintptr_t vmm_get_kernel_pgd(void) {
 /*
  * 创建一个新的进程地址空间（自动分配页全局目录）
  *
- * @return 失败：NULL
- * @return 成功：进程地址空间的虚拟地址
+ * @return 进程地址空间的虚拟地址
  */
 as_t *vmm_create_as(void) {
     uintptr_t pgd_phys = 0;
-    vmm_result_t result = mmu_add_pgd(&pgd_phys);
-    if (result != VMM_OK || pgd_phys == 0) {
+    int ret = mmu_add_pgd(&pgd_phys);
+    if (ret < 0 || pgd_phys == 0) {
         return NULL;
     }
 
@@ -68,15 +69,13 @@ as_t *vmm_create_as(void) {
  *
  * @param as 进程地址空间
  * @param addr 虚拟地址
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vmm_unmap(as_t *as, uintptr_t addr) {
+int vmm_unmap(as_t *as, uintptr_t addr) {
     if (as == NULL) {
-        return VMM_INVALID_ARGUMENT;
+        return -EINVAL;
     }
     as_lock(as);
-    vmm_result_t ret = as_unmap(as, addr);
+    int ret = as_unmap(as, addr);
     as_unlock(as);
     return ret;
 }
@@ -99,8 +98,7 @@ void vmm_switch_as(as_t *as) {
  * @param phy_addr 物理地址
  * @param page_count 大小
  *
- * @return 成功 ： 映射的虚拟内存
- * @return 失败 ：0
+ * @return 映射的虚拟内存
  */
 uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
     spin_lock(&mmio_map_lock);
@@ -111,22 +109,20 @@ uintptr_t vmm_map_mmio(uint64_t phy_addr, uint64_t page_count) {
     page_table_blocks_struct *ptb = kheap_alloc(PAGE_SIZE);
     if (!ptb) goto fail;
 
-    vmm_result_t result = mmu_add_map(
+    int ret = mmu_add_map(
         mmu_get_kernel_pgd(),
-        mmio_addr,  
+        mmio_addr,
         (uintptr_t)phy_addr,
-        page_count,   
-        mmio_prot,  
+        page_count,
+        mmio_prot,
         0,
         ptb
     );
 
-    if (result != VMM_OK) goto fail;
+    if (ret < 0) goto fail;
 
     // 设置下一次映射的虚拟起始地址
     mmio_addr += page_count * PAGE_SIZE;
-
-    // 每次映射的地址都不同且没有条目，不需要刷新tlb    
 
     spin_unlock(&mmio_map_lock);
 
@@ -162,8 +158,7 @@ void vmm_destroy_as(as_t *as) {
  *
  * @param as 进程地址空间的虚拟地址
  *
- * @return 失败：NULL
- * @return 成功：进程地址空间的虚拟地址
+ * @return 进程地址空间的虚拟地址
  */
 as_t *vmm_copy_as(as_t *as) {
     if (!as) return NULL;
@@ -186,8 +181,8 @@ as_t *vmm_copy_as(as_t *as) {
         uintptr_t linear = vma->linear_addr;
 
         // 在新地址空间添加vma
-        vmm_result_t res = vma_add(new_as, start, end, prot, flags);
-        if (res != VMM_OK) goto fail;
+        int ret = vma_add(new_as, start, end, prot, flags);
+        if (ret < 0) goto fail;
 
         // 如果原vma已分配物理内存，则复制
         if (linear != 0) {
@@ -196,8 +191,8 @@ as_t *vmm_copy_as(as_t *as) {
             memcpy(new_linear, (void*)linear, size);
             uintptr_t paddr = LINEAR_TO_PHYS((uintptr_t)new_linear);
             page_table_blocks_struct ptb;
-            res = mmu_add_map(as_get_pgd(new_as), start, paddr, size / PAGE_SIZE, prot, flags, &ptb);
-            if (res != VMM_OK) {
+            ret = mmu_add_map(as_get_pgd(new_as), start, paddr, size / PAGE_SIZE, prot, flags, &ptb);
+            if (ret < 0) {
                 kheap_free(new_linear);
                 goto fail;
             }
@@ -231,30 +226,22 @@ fail:
  * @param page 映射页数
  * @param prot 映射权限
  * @param flags 映射标志
- * @param anon_vma 匿名内存结构体指针
+ * @param anon_vma 匿名内存结构体指针（目前未使用，可传NULL）
  * @param alloc 是否预分配
- * @param out_addr 输出的实际映射地址
  *
- * anon_vma目前没有用
- * 可以先传入NULL
- *
- * @return vmm_result_t
+ * @return 映射的虚拟地址
  */
-vmm_result_t vmm_map_anon(
-    as_t *as, 
-    uintptr_t addr, 
-    uint64_t page, 
-    vm_prot_t prot, 
-    uint8_t flags, 
-    anon_vma_t *anon_vma, 
-    bool alloc,
-    uintptr_t *out_addr
+kuptr vmm_map_anon(
+    as_t *as,
+    uintptr_t addr,
+    uint64_t page,
+    vm_prot_t prot,
+    uint8_t flags,
+    anon_vma_t *anon_vma,
+    bool alloc
 ) {
     if (as == NULL || page == 0) {
-        if (out_addr != NULL) {
-            *out_addr = 0;
-        }
-        return VMM_INVALID_ARGUMENT;
+        return (kuptr)K_ERR(-EINVAL);
     }
     
     uint64_t size = page * PAGE_SIZE;
@@ -266,51 +253,40 @@ vmm_result_t vmm_map_anon(
         addr = as_alloc_addr(as, size);
         if (addr == 0) {
             as_unlock(as);
-            if (out_addr != NULL) {
-                *out_addr = 0;
-            }
-            return VMM_OUT_OF_ADDRESS_SPACE;
+            return (kuptr)K_ERR(-ENOMEM);
         }
         // 自动分配的地址已经满足所有条件，跳过后续检查
     } else {
         // 手动指定地址，需要检查一些参数
         if (addr < USER_START || addr + size > USER_STACK_TOP) {
             as_unlock(as);
-            if (out_addr != NULL) {
-                *out_addr = 0;
-            }
-            return VMM_INVALID_ADDRESS;
+            return (kuptr)K_ERR(-EFAULT);
         }
         
         // 检查地址是否页对齐
         if ((addr & (PAGE_SIZE - 1)) != 0) {
             as_unlock(as);
-            if (out_addr != NULL) {
-                *out_addr = 0;
-            }
-            return VMM_INVALID_ADDRESS;
+            return (kuptr)K_ERR(-EINVAL);
         }
     }
     
     // 添加vma
-    vmm_result_t result = vma_add(as, addr, addr + size, prot, flags);
-    if (result != VMM_OK) {
+    int ret = vma_add(as, addr, addr + size, prot, flags);
+    if (ret < 0) {
         as_unlock(as);
-        if (out_addr != NULL) {
-            *out_addr = 0;
-        }
-        return result;
+        return (kuptr)K_ERR(ret);
     }
     
     // 查找刚添加的vma
     vm_area_t *vma = vma_find(as, addr);
     if (vma == NULL) {
         as_unlock(as);
-        if (out_addr != NULL) {
-            *out_addr = 0;
-        }
-        return VMM_INTERNAL_ERROR;
+        return (kuptr)K_ERR(-EIO);
     }
+    
+    // 设置为匿名映射
+    vma->offset_or_anon = -1;
+    vma->anon_vma = anon_vma;
     
     if (alloc) {
         // 预分配物理内存
@@ -319,50 +295,92 @@ vmm_result_t vmm_map_anon(
             // 分配失败，移除vma
             vma_remove(as, vma);
             as_unlock(as);
-            if (out_addr != NULL) {
-                *out_addr = 0;
-            }
-            return VMM_OUT_OF_MEMORY;
+            return (kuptr)K_ERR(-ENOMEM);
         }
         
         // 建立映射，传入page_table_blocks指针
         uintptr_t paddr_start = LINEAR_TO_PHYS(alloc_addr);
         page_table_blocks_struct ptb;
-        result = mmu_add_map(as_get_pgd(as), addr, paddr_start, page, prot, flags, &ptb);
-        if (result != VMM_OK) {
+        ret = mmu_add_map(as_get_pgd(as), addr, paddr_start, page, prot, flags, &ptb);
+        if (ret < 0) {
             kheap_free((void *)alloc_addr);
             vma_remove(as, vma);
             as_unlock(as);
-            if (out_addr != NULL) {
-                *out_addr = 0;
-            }
-            return result;
+            return (kuptr)K_ERR(ret);
         }
         vma_set_map(vma, alloc_addr, &ptb);
-    } 
-    // 不预分配，页表块数组为空，无需额外操作
+    }
     
     as_unlock(as);
     
-    // 返回实际分配的地址
-    if (out_addr != NULL) {
-        *out_addr = addr;
-    }
-    
-    return VMM_OK;
+    return (kuptr)K_OK(addr);
 }
 
-
 /*
- * 映射文件到内存
- * 暂时不支持
- * 
- * vmm_result_t vmm_map_file(){}
+ * 映射文件到进程地址空间
+ *
+ * @param as 进程地址空间
+ * @param addr 建议的虚拟地址（0 表示自动分配）
+ * @param size 映射大小（字节）
+ * @param prot 内存权限
+ * @param flags 映射标志（当前必须传 0）
+ * @param file 已打开的 file 结构体指针（由 VFS 层提供）
+ * @param offset 文件内偏移（必须页对齐）
+ *
+ * @return 映射的虚拟地址
  */
+kuptr vmm_map_file(
+    as_t *as,
+    uintptr_t addr,
+    uint64_t size,
+    vm_prot_t prot,
+    uint8_t flags,
+    struct file *file,
+    uint64_t offset
+) {
+    if (as == NULL || file == NULL || size == 0) {
+        return (kuptr)K_ERR(-EINVAL);
+    }
+    if ((offset & (PAGE_SIZE - 1)) != 0) {
+        return (kuptr)K_ERR(-EINVAL);
+    }
+    if (addr != 0) {
+        if ((addr & (PAGE_SIZE - 1)) != 0) {
+            return (kuptr)K_ERR(-EINVAL);
+        }
+        if (addr < USER_START || addr + size > USER_STACK_TOP) {
+            return (kuptr)K_ERR(-EFAULT);
+        }
+    }
 
-/*
- * 映射设备内存
- * 暂时不支持
- * 
- * vmm_result_t vmm_map_device(){}
- */
+    uint64_t aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    as_lock(as);
+
+    if (addr == 0) {
+        addr = as_alloc_addr(as, aligned_size);
+        if (addr == 0) {
+            as_unlock(as);
+            return (kuptr)K_ERR(-ENOMEM);
+        }
+    }
+
+    int ret = vma_add(as, addr, addr + aligned_size, prot, flags);
+    if (ret < 0) {
+        as_unlock(as);
+        return (kuptr)K_ERR(ret);
+    }
+
+    vm_area_t *vma = vma_find(as, addr);
+    if (vma == NULL) {
+        as_unlock(as);
+        return (kuptr)K_ERR(-EIO);
+    }
+
+    // 设置为文件映射
+    vma->offset_or_anon = (int64_t)offset;
+    vma->file = file;
+
+    as_unlock(as);
+    return (kuptr)K_OK(addr);
+}

@@ -12,6 +12,7 @@
 #include <list.h>
 #include <libtree.h>
 #include <klibc.h>
+#include <vfs.h>
 
 // vma结构体
 typedef struct vm_area {
@@ -20,9 +21,13 @@ typedef struct vm_area {
     uintptr_t linear_addr; // 映射区的线性虚拟地址（PHYS_TO_LINEAR(phys)），0 表示未预分配
     vm_prot_t prot;       // 权限标志
     uint8_t flags;      // 映射标志
-    struct anon_vma *anon_vma;  
-    struct file *file;         
-    struct device *device;  
+
+    int64_t offset_or_anon; // >=0 表示文件偏移，<0 表示匿名映射
+    union {
+        struct file *file;
+        struct anon_vma *anon_vma;
+    };
+
     page_table_blocks_struct page_table_blocks; // 页表块信息
 
     struct list_head list_node;
@@ -38,32 +43,11 @@ typedef struct vmm_as {
     spinlock_t lock;
 } as_t;
 
-/*
- * anon_vma_t
- * file_t device_t
- * vm_area_t
- * 目前只是占位
- * 只包含基础字段
- * 后面会添加字段
- * 以及添加与链接函数 
- */
+// 占位
 typedef struct anon_vma {
     struct anon_vma *next;
-    uint32_t refcount;       // 引用计数
+    uint32_t refcount;
 } anon_vma_t;
-
-typedef struct file {
-    int flags;              // 文件标志
-    void *private;          // 文件私有数据指针
-    uint32_t refcount;      // 引用计数
-} file_t;
-
-typedef struct device {
-    int major;              // 主设备号
-    int minor;              // 次设备号
-    unsigned int type;      // 设备类型
-    uint32_t refcount;      // 引用计数
-} device_t;
 
 // 获取 vma 的起止地址
 static inline void vma_range(const vm_area_t *vma, uintptr_t *out_start, uintptr_t *out_end) {
@@ -91,10 +75,23 @@ void as_unlock(as_t *as);
  * @param end 结束虚拟地址（页对齐）
  * @param prot 权限标志
  * @param flags 映射标志
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t prot, uint8_t flags);
+int vma_add(
+    as_t *as,
+    uintptr_t start,
+    uintptr_t end,
+    vm_prot_t prot,
+    uint8_t flags
+);
+
+/*
+ * 读取 VMA 中一个页面的内容到目标内存地址
+ *
+ * @param vma VMA 指针
+ * @param vaddr 要读取的虚拟地址（必须位于 vma 范围内）
+ * @param dest 目标内存地址（用于存放读取的数据）
+ */
+int vma_read_page(vm_area_t *vma, uintptr_t vaddr, void *dest);
 
 /*
  * 查找包含 addr 的 vma
@@ -102,20 +99,17 @@ vmm_result_t vma_add(as_t *as, uintptr_t start, uintptr_t end, vm_prot_t prot, u
  * @param as 进程地址空间
  * @param addr 虚拟地址
  *
- * @return 失败：NULL
- * @return 成功：vma 指针
+ * @return vma 指针
  */
-vm_area_t* vma_find(as_t *as, uintptr_t addr);
+vm_area_t *vma_find(as_t *as, uintptr_t addr);
 
 /*
  * 从地址空间中移除 vma
  *
  * @param as 进程地址空间
  * @param vma 要移除的 vma 指针
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t vma_remove(as_t *as, vm_area_t *vma);
+int vma_remove(as_t *as, vm_area_t *vma);
 
 /*
  * 为地址空间分配一个新的虚拟地址
@@ -123,8 +117,7 @@ vmm_result_t vma_remove(as_t *as, vm_area_t *vma);
  * @param as 进程地址空间
  * @param size 需要的大小（字节）
  *
- * @return 失败：0
- * @return 成功：分配的虚拟地址
+ * @return 分配的虚拟地址
  */
 uintptr_t as_alloc_addr(as_t *as, uint64_t size);
 
@@ -133,18 +126,15 @@ uintptr_t as_alloc_addr(as_t *as, uint64_t size);
  *
  * @param as 进程地址空间
  * @param addr 虚拟地址
- *
- * @return VMM_OK 成功，否则错误码
  */
-vmm_result_t as_unmap(as_t *as, uintptr_t addr);
+int as_unmap(as_t *as, uintptr_t addr);
 
 /*
  * 创建进程地址空间描述符
  *
  * @param pgd 页全局目录物理地址
  *
- * @return 失败：NULL
- * @return 成功：进程地址空间的虚拟地址
+ * @return 进程地址空间的虚拟地址
  */
 as_t *as_create(uintptr_t pgd);
 
