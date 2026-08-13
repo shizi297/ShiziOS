@@ -10,7 +10,12 @@
 #include <mm/vmm_as.h>
 #include <kio.h>
 #include <errno.h>
+#include <desc.h>
+#include <asm/smp.h>
+#include <bootboot.h>
 #include "vmm_mmu.h"
+
+const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;
 
 static uintptr_t kernel_pgd = 0;
 
@@ -39,9 +44,16 @@ struct need_page_tables {
     uintptr_t vaddr;
 };
 
+static void mmu_tlb_process(void) {
+    uintptr_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+}
+
 // 初始化
 __attribute__((noinline)) void mmu_init(void) {
     __asm__ volatile("mov %%cr3, %0" : "=r" (kernel_pgd));
+    smp_irq_register_handler(IRQ_TLB_REFRESH, (uint64_t)mmu_tlb_process);
 }
 
 // 获取内核pgd
@@ -453,14 +465,37 @@ void mmu_clear_pte(pte_t *pte) {
  * @param vaddr 要刷新的虚拟地址
  */
 void mmu_invalidate(uintptr_t vaddr) {
+    // 本地刷新
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+
+    as_t *current_as = smp_get_as();
+    uint32_t local = get_logical_id();
+    uint32_t num_cores = bootboot->numcores;
+
+    for (uint32_t cpu = 0; cpu < num_cores; cpu++) {
+        if (cpu == local) continue;
+        if (smp_get_cpu_as(cpu) == current_as) {
+            smp_send_irq(cpu, IRQ_TLB_REFRESH);
+        }
+    }
 }
 
 // 刷新所有TLB
 void mmu_invalidate_all(void) {
-    uintptr_t cr3_val;
-    __asm__ volatile("mov %%cr3, %0" : "=r" (cr3_val));
-    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3_val) : "memory");
+    uintptr_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+
+    as_t *current_as = smp_get_as();
+    uint32_t local = get_logical_id();
+    uint32_t num_cores = bootboot->numcores;
+
+    for (uint32_t cpu = 0; cpu < num_cores; cpu++) {
+        if (cpu == local) continue;
+        if (smp_get_cpu_as(cpu) == current_as) {
+            smp_send_irq(cpu, IRQ_TLB_REFRESH);
+        }
+    }
 }
 
 /*
