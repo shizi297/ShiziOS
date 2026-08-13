@@ -838,11 +838,24 @@ void task_sched(void) {
 
     // 设置下一次中断
     task_set_next_timer();
+    
+    smp_set_as(next->as);
 
     switch_to(prev->thread, next->thread);
 
 out:
     write_cpu_flags(flags);
+}
+
+/*
+ * 向指定任务发送信号
+ *
+ * @param task 目标任务
+ * @param sig 要发送的信号
+ */
+void task_send_signal(struct task_struct *task, int sig) {
+    if (!task || !task->signal) return;
+    signal_send(task, task->signal, sig, true, false);
 }
 
 // 任务退出

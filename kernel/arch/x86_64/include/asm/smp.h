@@ -13,6 +13,8 @@
 #include <bootboot.h>
 #include <list.h>
 #include <shizi/types.h>
+#include <stdatomic.h>
+#include <heap.h>
 
 struct sched_class;
 
@@ -46,6 +48,9 @@ _arch typedef struct {
 
     // 用于在中断返回时判断是否需要重新调度
     uint64_t need_sched;
+    
+    // 记录当前cpu的地址空间
+    _Atomic(as_t *) current_as;
 
     // 用于任务迁移
     struct list_head migration;
@@ -259,6 +264,24 @@ static inline struct clockevent_timer *smp_get_sched_timer(void) {
 // 设置当前cpu的调度定时器句柄
 static inline void smp_set_sched_timer(struct clockevent_timer *timer) {
     PROCESSOR_WRITE_GS(PER_CPU_SCHED_TIMER_OFFSET, timer);
+}
+
+// 获取当前CPU的地址空间
+static inline as_t *smp_get_as(void) {
+    per_cpu *cpu_ptr = smp_get_kernel_tls();
+    return atomic_load_explicit(&cpu_ptr->current_as, memory_order_acquire);
+}
+
+// 获取目标CPU的地址空间
+static inline as_t *smp_get_cpu_as(uint64_t logical_id) {
+    extern per_cpu *per_cpu_ptr;
+    return atomic_load_explicit(&per_cpu_ptr[logical_id].current_as, memory_order_acquire);
+}
+
+// 设置当前CPU的地址空间
+static inline void smp_set_as(as_t *as) {
+    per_cpu *cpu_ptr = smp_get_kernel_tls();
+    atomic_store_explicit(&cpu_ptr->current_as, as, memory_order_release);
 }
 
 // 获取当前cpu迁移队列链表头
