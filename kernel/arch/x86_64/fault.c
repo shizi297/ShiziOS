@@ -6,6 +6,18 @@
 #include <fault.h>
 #include <kio.h>
 #include <processor.h>
+#include <heap.h>
+#include <task.h>
+#include <signal.h>
+#include <bootboot.h>
+#include <asm/smp.h>
+
+enum pf_flags {
+    PF_PROT  = 1 << 0,
+    PF_WRITE = 1 << 1,
+    PF_USER  = 1 << 2,
+    PF_INSTR = 1 << 4,
+};
 
 static void print_regs(const struct pt_regs *regs) {
     printk(
@@ -141,9 +153,39 @@ void exc_gp(struct pt_regs *regs) {
 }
 
 void exc_pf(struct pt_regs *regs) {
-    printk("Page Fault\n");
-    print_regs(regs);
-    printp("Page Fault\n");
+    uintptr_t fault_addr = processor_read_cr2();
+    uint64_t error_code = regs->error_code;
+
+    // 内核态缺页：无法恢复，打印信息后挂起
+    if (!(error_code & PF_USER)) {
+        printk("Page Fault\n");
+        print_regs(regs);
+        printp("Page Fault\n");
+    }
+
+    // 转换硬件错误码为 VMM 访问类型
+    uint32_t access_flags = 0;
+    if (error_code & PF_WRITE) {
+        access_flags |= VM_WRITE;
+    } else {
+        access_flags |= VM_READ;
+    }
+    if (error_code & PF_INSTR) {
+        access_flags |= VM_EXEC;
+    }
+
+    as_t *as = smp_get_as();
+    int ret = vheap_handle_fault(as, fault_addr, access_flags);
+
+    // 修复失败，发送 SIGSEGV 终止进程
+    if (ret < 0) {
+        task_struct *curr = smp_get_task_current();
+        if (curr) {
+            task_send_signal(curr, SIGSEGV);
+        } else {
+            printp("Page fault handling error\n");
+        }
+    }
 }
 
 void exc_mf(struct pt_regs *regs) {

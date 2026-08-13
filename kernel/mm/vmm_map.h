@@ -16,18 +16,27 @@
 // 初始化
 void vmm_init(void);
 
+// 获取内核地址空间
+as_t *vmm_get_kernel_as(void);
+
+// 获取内核的页全局目录
+uintptr_t vmm_get_kernel_pgd(void);
+
+/*
+ * 处理缺页异常
+ *
+ * @param as 进程地址空间
+ * @param fault_addr 触发缺页的虚拟地址
+ * @param access_flags 访问类型
+ */
+int vmm_handle_fault(as_t *as, uintptr_t fault_addr, uint32_t access_flags);
+
 /*
  * 创建一个新的进程地址空间（自动分配页全局目录）
  *
  * @return 进程地址空间的虚拟地址
  */
 as_t *vmm_create_as(void);
-
-// 获取内核地址空间
-as_t *vmm_get_kernel_as(void);
-
-// 获取内核的页全局目录
-uintptr_t vmm_get_kernel_pgd(void);
 
 /*
  * 解除映射
@@ -81,7 +90,7 @@ as_t *vmm_copy_as(as_t *as);
  * @param addr 要映射的虚拟地址，如果为0则自动分配
  * @param page 映射页数
  * @param prot 映射权限
- * @param flags 映射标志
+ * @param flags 映射标志（当前必须传 0）
  * @param anon_vma 匿名内存结构体指针（目前未使用，可传NULL）
  * @param alloc 是否预分配
  *
@@ -105,8 +114,9 @@ kuptr vmm_map_anon(
  * @param size 映射大小（字节）
  * @param prot 内存权限
  * @param flags 映射标志（当前必须传 0）
- * @param file 已打开的 file 结构体指针（由 VFS 层提供）
+ * @param path 文件路径
  * @param offset 文件内偏移（必须页对齐）
+ * @param pwd 当前工作目录
  *
  * @return 映射的虚拟地址
  */
@@ -116,6 +126,7 @@ kuptr vmm_map_file(
     uint64_t size,
     vm_prot_t prot,
     uint8_t flags,
-    struct file *file,
-    uint64_t offset
+    const char *path,
+    uint64_t offset,
+    const struct path *pwd
 );

@@ -193,6 +193,12 @@ static inline bool processor_xsave_init(void) {
     return true;
 }
 
+static inline uintptr_t processor_read_cr2(void) {
+    uintptr_t val;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(val));
+    return val;
+}
+
 // 写入CR4(使用CR4_CONFIG)
 static inline void set_cr4(void) {
     uint64_t current_cr4;

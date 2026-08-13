@@ -81,6 +81,15 @@ uintptr_t kheap_get_on_pte_ptr(void *vaddr);
 // 获取内存总页数
 uint64_t kheap_max_page(void);
 
+/*
+ * 处理缺页异常
+ *
+ * @param as 进程地址空间
+ * @param fault_addr 触发缺页的虚拟地址
+ * @param access_flags 访问类型
+ */
+int vheap_handle_fault(as_t *as, uintptr_t fault_addr, uint32_t access_flags);
+
 /**
  * 虚拟堆分配（匿名映射）
  *
@@ -112,8 +121,9 @@ void *vheap_alloc(
  * @param size 要映射的内存大小(字节)
  * @param prot 内存属性
  * @param flags 分配标志（预留扩展，当前必须传0）
- * @param file 已打开的文件结构体指针
+ * @param path 文件路径
  * @param offset 文件内偏移（必须页对齐）
+ * @param pwd 当前工作目录
  *
  * @return 虚拟地址
  *
@@ -125,8 +135,9 @@ void *vheap_file_alloc(
     size_t size,
     vm_prot_t prot,
     uint8_t flags,
-    struct file *file,
-    uint64_t offset
+    const char *path,
+    uint64_t offset,
+    const struct path *pwd
 );
 
 /**
