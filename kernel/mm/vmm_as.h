@@ -27,6 +27,8 @@ typedef struct vm_area {
         struct file *file;
         struct anon_vma *anon_vma;
     };
+    
+    char *file_path;          // 文件映射时保存路径，用于 copy 时重新打开
 
     page_table_blocks_struct page_table_blocks; // 页表块信息
 
@@ -59,6 +61,34 @@ static inline void vma_range(const vm_area_t *vma, uintptr_t *out_start, uintptr
 static inline void vma_set_map(vm_area_t *vma, uintptr_t linear, const page_table_blocks_struct *ptb) {
     vma->linear_addr = linear;
     vma->page_table_blocks = *ptb;
+}
+
+/*
+ * 设置 VMA 为匿名映射
+ *
+ * @param vma VMA 指针
+ * @param anon_vma 匿名内存结构体指针
+ */
+static inline void vma_set_anon(vm_area_t *vma, anon_vma_t *anon_vma) {
+    vma->offset_or_anon = -1;
+    vma->anon_vma = anon_vma;
+    vma->file = NULL;
+    vma->file_path = NULL;
+}
+
+/*
+ * 设置 VMA 为文件映射
+ *
+ * @param vma VMA 指针
+ * @param file 已打开的文件结构体指针
+ * @param offset 文件内偏移
+ * @param path 文件路径
+ */
+static inline void vma_set_file(vm_area_t *vma, struct file *file, uint64_t offset, const char *path) {
+    vma->offset_or_anon = (int64_t)offset;
+    vma->file = file;
+    vma->file_path = strdup(path);
+    vma->anon_vma = NULL;
 }
 
 // 获取地址空间锁

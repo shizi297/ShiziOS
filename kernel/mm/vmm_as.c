@@ -243,13 +243,9 @@ int vma_remove(as_t *as, vm_area_t *vma) {
         return -EINVAL;
     }
 
-    // 从链表中移除
     list_del(&vma->list_node);
-
-    // 从红黑树中移除
     rbtree_remove(&vma->rb_node, &as->vma_tree);
 
-    // 释放vma关联的资源
     if (vma->offset_or_anon < 0) {
         // 匿名映射
         anon_vma_t *anon = vma->anon_vma;
@@ -260,12 +256,18 @@ int vma_remove(as_t *as, vm_area_t *vma) {
             }
         }
     } else {
-        // 文件映射：不操作引用计数，由 VFS 管理
-        vma->file = NULL;
+        // 文件映射：关闭文件并释放路径
+        if (vma->file) {
+            vfs_close(vma->file);
+            vma->file = NULL;
+        }
+        if (vma->file_path) {
+            kheap_free(vma->file_path);
+            vma->file_path = NULL;
+        }
     }
 
     kheap_free(vma);
-
     return 0;
 }
 
