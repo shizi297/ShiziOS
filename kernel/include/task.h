@@ -70,6 +70,14 @@ void task_wakeup(task_struct *task);
 // 重新调度任务
 void task_sched(void);
 
+/*
+ * 向指定任务发送信号
+ *
+ * @param task 目标任务
+ * @param sig 要发送的信号
+ */
+void task_send_signal(struct task_struct *task, int sig);
+
 // 任务退出
 void task_exit(void);
 
