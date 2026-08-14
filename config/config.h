@@ -5,9 +5,10 @@
  
 #pragma once
 
-#define ARCH_X86_64   0
-#define ARCH_ARM      1
-#define ARCH_RISCV    2
+#define ARCH_UNKNOWN   0
+#define ARCH_X86_64    1
+#define ARCH_ARM       2
+#define ARCH_RISCV     3
 
 // 所有线程的内核栈大小
 #define KERNEL_START_SIZE 16384     // 内核栈数量

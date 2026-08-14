@@ -14,6 +14,9 @@ typedef uint64_t gdte;
 struct tss;
 struct idt_gate;
 
+// 平台标识字符串
+#define PLATFORM_STRING "x86_64"
+
 #define IRQ_MIGRATION    35
 
 // 仅架构相关内部使用
