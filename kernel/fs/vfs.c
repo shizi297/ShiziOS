@@ -801,8 +801,8 @@ static kptr vfs_path_lookup(
             const struct path *base = (target[0] == '/') ? vfs_root : stack[depth-2].curr_path;
             stack[depth-1].curr_path = kheap_alloc(sizeof(struct path));
             if (!stack[depth-1].curr_path) {
-                depth--;
                 kheap_free((void *)stack[depth-1].path);
+                depth--;
                 vfs_path_put(stack[depth-1].curr_path);
                 err = -ENOMEM;
                 break;
