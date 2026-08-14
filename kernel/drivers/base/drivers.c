@@ -7,7 +7,6 @@
 #include <drivers.h>
 #include <stdatomic.h>
 #include <kio.h>
-#include <errno.h>
 #include <bitmap.h>
 #include <dynarr.h>
 #include <spinlock.h>

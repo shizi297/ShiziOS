@@ -10,7 +10,6 @@
 #include <list.h>
 #include <libtree.h>
 #include <klibc.h>
-#include <errno.h>
 #include <vfs.h>
 
 /**

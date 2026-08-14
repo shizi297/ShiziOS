@@ -9,7 +9,6 @@
 #include <mm/linear_map.h>
 #include <mm/vmm_map.h>
 #include <klibc.h>
-#include <errno.h>
 #include <vfs.h>
 
 // 计算要分配的内存大小属于哪个order
@@ -242,9 +241,7 @@ void *vheap_alloc(
         alloc
     );
 
-    if (K_IS_ERR(res)) {
-        return NULL;
-    }
+    K_ERR_RESULT(res, NULL);
     return (void *)res.val;
 }
 
@@ -294,9 +291,7 @@ void *vheap_file_alloc(
         pwd
     );
 
-    if (K_IS_ERR(res)) {
-        return NULL;
-    }
+    K_ERR_RESULT(res, NULL);
     return (void *)res.val;
 }
 

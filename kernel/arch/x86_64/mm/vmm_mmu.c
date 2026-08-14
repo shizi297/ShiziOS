@@ -9,10 +9,10 @@
 #include <stddef.h>
 #include <mm/vmm_as.h>
 #include <kio.h>
-#include <errno.h>
 #include <desc.h>
 #include <asm/smp.h>
 #include <bootboot.h>
+#include <klibc.h>
 #include "vmm_mmu.h"
 
 const BOOTBOOT *bootboot = (const BOOTBOOT *)BOOTBOOT_INFO;

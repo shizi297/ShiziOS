@@ -174,10 +174,8 @@ struct block_type *block_register_type(const char *name) {
     type->counter = 0;
 
     kptr major_res = drivers_major_alloc();
-    if (K_IS_ERR(major_res)) {
-        kheap_free(type);
-        return NULL;
-    }
+    K_ERR_LABEL(major_res, err);
+
     type->major_handle = major_res.ptr;
 
     // 注册统一的 VFS 函数到 fops
@@ -186,6 +184,10 @@ struct block_type *block_register_type(const char *name) {
     BLOCK_TYPE_INFO(type->name);
 
     return type;
+
+err:
+    kheap_free(type);
+    return NULL;
 }
 
 /*

@@ -13,7 +13,6 @@
 #include <stddef.h>
 #include <kio.h>
 #include <klibc.h>
-#include <errno.h>
 #include <vfs.h>
 
 #define VMM_PANIC(fmt, ...) \
@@ -280,9 +279,7 @@ as_t *vmm_copy_as(as_t *as) {
             // 文件映射：重新打开文件，获得独立的 file 对象
             if (vma->file_path) {
                 kptr res = vfs_open(vma->file_path, O_RDONLY, 0, NULL);
-                if (K_IS_ERR(res)) {
-                    goto fail;
-                }
+                K_ERR_LABEL(res, fail);
                 struct file *new_file = (struct file *)res.ptr;
                 new_vma->offset_or_anon = vma->offset_or_anon;
                 new_vma->file = new_file;
@@ -440,10 +437,8 @@ kuptr vmm_map_file(
 
     // 打开文件，生命周期由 VMM 管理
     kptr file_res = vfs_open(path, O_RDONLY, 0, pwd);
-    if (K_IS_ERR(file_res)) {
-        return (kuptr)K_ERR(file_res.err);
-    }
-    struct file *file = (struct file *)file_res.ptr;
+    K_ERR_RETURN_SELF_TYPE(file_res, kuptr);
+    struct file *fp = (struct file *)file_res.ptr;
 
     uint64_t aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
@@ -454,7 +449,7 @@ kuptr vmm_map_file(
         addr = as_alloc_addr(as, aligned_size);
         if (addr == 0) {
             as_unlock(as);
-            vfs_close(file);
+            vfs_close(fp);
             return (kuptr)K_ERR(-ENOMEM);
         }
     }
@@ -463,19 +458,19 @@ kuptr vmm_map_file(
     int ret = vma_add(as, addr, addr + aligned_size, prot, flags);
     if (ret < 0) {
         as_unlock(as);
-        vfs_close(file);
+        vfs_close(fp);
         return (kuptr)K_ERR(ret);
     }
 
     vm_area_t *vma = vma_find(as, addr);
     if (vma == NULL) {
         as_unlock(as);
-        vfs_close(file);
+        vfs_close(fp);
         return (kuptr)K_ERR(-EIO);
     }
 
     // 设置为文件映射
-    vma_set_file(vma, file, offset, path);
+    vma_set_file(vma, fp, offset, path);
 
     as_unlock(as);
     return (kuptr)K_OK(addr);

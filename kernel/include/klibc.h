@@ -20,9 +20,6 @@
 // 构造错误返回
 #define K_ERR(e)    { .err = (e) }
 
-// 判断是否出错
-#define K_IS_ERR(res)       ((res).err != 0)
-
 // 如果出错，直接返回 err
 #define K_ERR_RETURN(res) \
     do { \
@@ -35,6 +32,13 @@
     do { \
         if ((res).err) \
             return res; \
+    } while(0)
+    
+// 如果出错，用指定的类型重新构造错误值并返回
+#define K_ERR_RETURN_SELF_TYPE(res, type) \
+    do { \
+        if ((res).err) \
+            return (type){ .err = (res).err }; \
     } while(0)
 
 // 如果错误，跳转到标签
@@ -68,6 +72,13 @@
             break; \
         } \
     }
+  
+// 如果出错，返回指定的值
+#define K_ERR_RESULT(res, result) \
+    do { \
+        if ((res).err) \
+            return (result); \
+    } while(0)
 
 #define CONCAT(a, b) a##b
 
