@@ -10,6 +10,7 @@
 #include <kio.h>  
 #include <time.h>
 #include <drivers.h>
+#include <exec.h>
 #include <config.h>
 
 #define KERNEL_PRINT(fmt, ...) \
@@ -47,6 +48,8 @@ void kernel_main(uint32_t logical_id, uint32_t apic_id) {
     
     // 初始化time系统
     time_init();
+    
+    exec_init();
 
     // 初始化驱动框架的数据
     if (!drivers_data_init()) KERNEL_PANIC("drivers data init failed");

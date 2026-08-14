@@ -43,9 +43,11 @@ typedef enum : uint16_t {
 
 // 目标指令集
 typedef enum : uint16_t {
-    EM_NONE   = 0,  // 未指定
-    EM_X86_32 = 3,  // x86 32 位
-    EM_X86_64 = 62, // x86-64
+    EM_NONE     = 0,   // 未指定
+    EM_X86_32   = 3,   // x86 32 位
+    EM_X86_64   = 62,  // x86-64
+    EM_AARCH64  = 183, // ARM 64 位 (AArch64)
+    EM_RISCV    = 243, // RISC-V (64/32 位)
 } elf_machine_t;
 
 // 程序头类型

@@ -26,6 +26,7 @@ add_subdirectory(ipc)              # IPC模块
 add_subdirectory(sync)             # 同步原语模块
 add_subdirectory(block)            # 块设备层模块
 add_subdirectory(fs)               # 文件系统模块
+add_subdirectory(exec)             # 可执行文件加载模块
 
 # 测试模块
 if(TEST)
@@ -54,6 +55,7 @@ target_link_libraries(kernel.elf
     kernel_sync
     kernel_block
     kernel_fs
+    kernel_exec
     $<$<BOOL:${TEST}>:kernel_test>
     -Wl,--no-whole-archive
     libc
