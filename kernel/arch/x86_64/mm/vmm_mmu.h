@@ -71,10 +71,6 @@
 #define PTE_CAN_USER_ACCESS(pte, is_user_mode) \
     (PTE_IS_VALID(pte) && (PTE_IS_USER(pte) || !(is_user_mode)))              // 检查页表项(PTE)对应的页是否允许当前模式访问
 
-#define USER_END            0x00007FFFFFFFFFFFULL     // 用户空间结束地址
-#define USER_START          0x0000000000400000ULL     // 用户空间起始地址
-#define USER_STACK_TOP      0x00007FFFFF000000ULL     // 用户栈顶地址
-
 // 页表块结构体，用于快速获取分配的页表页信息
 typedef struct _page_table_blocks {
     uintptr_t *page_table_blocks;

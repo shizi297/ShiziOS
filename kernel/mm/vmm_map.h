@@ -13,6 +13,17 @@
 
 #define TLB_FLUSH_THRESHOLD_PAGES 32
 
+/*
+ * 获取地址空间的页全局目录物理地址
+ *
+ * @param as 地址空间描述符
+ *
+ * @return 页全局目录的物理地址
+ */
+static inline uintptr_t vmm_get_as_pgd(as_t *as) {
+    return as_get_pgd(as);
+}
+
 // 初始化
 void vmm_init(void);
 

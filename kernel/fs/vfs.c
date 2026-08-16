@@ -1408,6 +1408,15 @@ uint32_t vfs_full_name_hash(const char *name, unsigned int len) {
     return hash;
 }
 
+/*
+ * 增加文件对象的引用计数
+ *
+ * @param file 文件对象指针
+ */
+void vfs_file_get(struct file *file) {
+    if (file) atomic_fetch_add(&file->count, 1);
+}
+
 // 增加路径引用
 void vfs_path_get(struct path *path) {
     vfs_mntget(path->mnt);

@@ -205,3 +205,12 @@ as_t *vheap_get_kernel_as(void);
 
 // 获取内核的页全局目录
 uintptr_t vheap_get_kernel_pgd(void);
+
+/*
+ * 获取地址空间的页全局目录物理地址
+ *
+ * @param as 地址空间描述符
+ *
+ * @return 页全局目录的物理地址
+ */
+uintptr_t vheap_get_as_pgd(as_t *as);

@@ -9,6 +9,9 @@
 #include <errno.h>
 #include <heap.h>
 
+// 用于标注类型
+#define __ktype(type)
+
 #define EPROBE_DEFER    -517    // 设备依赖未就绪，需要推迟探测
 
 // 构造成功返回值

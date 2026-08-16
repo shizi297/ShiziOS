@@ -190,6 +190,13 @@ struct file_operations {
     int (*fsync)(struct file *file, bool meta); 
 };
 
+/*
+ * 增加文件对象的引用计数
+ *
+ * @param file 文件对象指针
+ */
+void vfs_file_get(struct file *file);
+
 // 增加路径引用
 void vfs_path_get(struct path *path);
 
