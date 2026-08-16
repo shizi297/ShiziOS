@@ -49,6 +49,8 @@ typedef struct task_struct {
     id_t tgid; // 线程组id，每个进程有一个，同一进程的线程共享
 
     task_state state;  // 任务当前的状态
+    
+    struct files_descriptor *files; // 文件描述符
 
     as_t *as;    // 进程地址空间描述符，线程间共享
 
