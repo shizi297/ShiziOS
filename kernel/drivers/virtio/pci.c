@@ -253,6 +253,16 @@ static struct virtio_pci_caps *virtio_pci_parse_caps(struct device *dev) {
         uint64_t bar_phys = dev->res[entry->bar].start;
         entry->phys_addr = bar_phys + offset;
 
+        // 长度为 0 的能力不需要映射 MMIO，直接跳过
+        if (length == 0) {
+            off = pci_config_read_byte(
+                dev, off + offsetof(struct virtio_pci_cap, cap_next)
+            );
+            if (off == 0)
+                break;
+            continue;
+        }
+
         // 映射 MMIO
         entry->virt_addr = vheap_map_mmio(entry->phys_addr, length);
         if (!entry->virt_addr) {

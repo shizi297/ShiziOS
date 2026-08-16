@@ -748,6 +748,12 @@ int virtio_probe(struct device *dev, struct virtio_dev_ops *ops, struct device *
     if (!priv)
         goto err_ret;
 
+    // 只支持标准 VirtIO 设备类型
+    if (priv->type > 255) {
+        ret = -ENODEV;
+        goto err_destroy;
+    }
+
     // 后面失败均为内存不足
     ret = -ENOMEM;
 
