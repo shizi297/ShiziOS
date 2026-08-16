@@ -29,8 +29,8 @@ kuptr exec_load(
     as_t *as,
     const char *path,
     const struct path *pwd,
-    char **argv,
-    char **envp,
+    const char **argv,
+    const char **envp,
     uintptr_t stack_top,
     uintptr_t *out_stack_top
 );

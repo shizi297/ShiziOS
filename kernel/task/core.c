@@ -4,6 +4,7 @@
  */
 
 #include "types.h" 
+#include "files.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <list.h>
@@ -21,7 +22,9 @@
 #include <kio.h>
 #include <stdatomic.h>
 #include <initcall.h>
+#include <asm/mm_addr.h>
 #include <wait.h>
+#include <exec.h>
 
 #define TASK_PRINT(fmt, ...) \
     printk("[TASK]" fmt, ##__VA_ARGS__)
@@ -540,105 +543,261 @@ void task_add_current_tick(uint64_t tick) {
     sched_class_ptr->update_tick(current, tick);
 }
 
-/**
- * 复制任务
- * 
- * @param task 要复制的任务
- * @param flags 标志位
- * 
- * @return 成功：task指针
- * @return 失败：NULL
+/*
+ * 创建新任务
+ *
+ * @param attrs 任务属性
+ * @param size 结构体大小
+ *
+ * @return 任务控制块指针
  */
-task_struct *task_copy(struct task_struct *task, task_flags flags) {
-    struct task_struct *new_task = NULL;
-    bool tgid_allocated = false;   // 标记是否为新进程分配了独立的tgid
+__ktype(struct task_struct *)
+kptr task_create_new(struct task_attrs *attrs, size_t size) {
+    struct task_struct *parent = smp_get_task_current();
+    struct task_struct *task = NULL;
+    struct thread_struct *thread = NULL;
+    void *kernel_stack = NULL;
+    as_t *as = NULL;
+    struct files_descriptor *files = NULL;
+    struct signal_struct *sig = NULL;
+    id_t pid = -1, tgid = -1;
+    uintptr_t entry = 0, stack_top = 0, pgd_phys = 0;
+    int err = 0;
+    uint32_t flags = 0;
 
-    // 分配任务结构体
-    new_task = (struct task_struct *)kheap_alloc(sizeof(struct task_struct));
-    if (!new_task) return NULL;
-    spinlock_init(&new_task->list_lock);   // 初始化锁
+    // 参数校验：结构体大小必须有效，标志位必须合法
+    if (!attrs || size < sizeof(struct task_attrs)) {
+        err = -EINVAL;
+        goto err_return;
+    }
+
+    flags = attrs->flags;
+    if (flags & ~(TASK_IS_THREAD)) {
+        err = -EINVAL;
+        goto err_return;
+    }
+
+    // 根据模式检查必需参数
+    if (flags & TASK_IS_THREAD) {
+        if (!attrs->thread.entry_point || !attrs->thread.stack_base) {
+            err = -EINVAL;
+            goto err_return;
+        }
+    } else {
+        if (!attrs->process.exec_path) {
+            err = -EINVAL;
+            goto err_return;
+        }
+    }
+
+    // 分配任务控制块
+    task = (struct task_struct *)kheap_alloc(sizeof(*task));
+    if (!task) {
+        err = -ENOMEM;
+        goto err_return;
+    }
+    memset(task, 0, sizeof(*task));
+    spinlock_init(&task->list_lock);
 
     // 分配内核栈
-    new_task->stack = kheap_alloc(KERNEL_START_SIZE);
-    if (!new_task->stack) goto fail;
+    kernel_stack = kheap_alloc(KERNEL_START_SIZE);
+    if (!kernel_stack) {
+        err = -ENOMEM;
+        goto err_task;
+    }
+    task->stack = kernel_stack;
 
-    // 分配pid
-    new_task->pid = id_alloc();
-    if (new_task->pid == -1) goto fail;
+    // 分配线程上下文结构体
+    thread = thread_struct_create();
+    if (!thread) {
+        err = -ENOMEM;
+        goto err_stack;
+    }
+    task->thread = thread;
 
-    // 设置tgid
-    if (flags & TASK_THREAD) {
-        new_task->tgid = task->tgid;               // 线程：共享父任务的tgid
+    // 分配进程 ID
+    pid = id_alloc();
+    if (pid < 0) {
+        err = -ENOMEM;
+        goto err_thread;
+    }
+    task->pid = pid;
+
+    // 确定线程组 ID
+    if (flags & TASK_IS_THREAD) {
+        tgid = parent->tgid;
     } else {
-        new_task->tgid = id_alloc();                // 新进程：分配新的tgid
-        if (new_task->tgid == -1) goto fail;
-        tgid_allocated = true;
+        tgid = pid;
+    }
+    task->tgid = tgid;
+
+    // 从父任务继承用户 ID
+    task->user_id.uid = parent->user_id.uid;
+    task->user_id.gid = parent->user_id.gid;
+
+    // 从父任务继承文件系统上下文
+    if (parent->fs.root) {
+        task->fs.root = parent->fs.root;
+        vfs_path_get(task->fs.root);
+    }
+    if (parent->fs.pwd) {
+        task->fs.pwd = parent->fs.pwd;
+        vfs_path_get(task->fs.pwd);
     }
 
-    // 复制地址空间
-    if (flags & TASK_VM) {
-        new_task->as = task->as;                     // 共享地址空间
-        vheap_as_add_ref(new_task->as);
+    // 处理地址空间
+    if (flags & TASK_IS_THREAD) {
+        // 线程：共享父任务的地址空间
+        as = parent->as;
+        if (as) vheap_as_add_ref(as);
+        task->as = as;
+        pgd_phys = vheap_get_as_pgd(as);
     } else {
-        new_task->as = vheap_copy_as(task->as);      // 复制地址空间
-        if (!new_task->as) goto fail;
+        // 进程：创建新的独立地址空间
+        as = vheap_create_as();
+        if (!as) {
+            err = -ENOMEM;
+            goto err_pid;
+        }
+        task->as = as;
+        pgd_phys = vheap_get_as_pgd(as);
+
+        // 分配用户栈（默认大小 USER_STACK_SIZE）
+        uintptr_t stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
+        void *mapped = vheap_alloc(
+            as,
+            (void *)stack_bottom,
+            USER_STACK_SIZE,
+            VM_READ | VM_WRITE,
+            0,
+            false
+        );
+        if (!mapped) {
+            err = -ENOMEM;
+            goto err_as;
+        }
+
+        // 进程模式：加载可执行文件，获取用户态入口和栈顶地址
+        uintptr_t out_stack_top;
+        kuptr entry_res = exec_load(
+            as,
+            attrs->process.exec_path,
+            parent->fs.pwd,
+            attrs->process.argv,
+            attrs->process.envp,
+            USER_STACK_TOP,
+            &out_stack_top
+        );
+        K_ERR_LABEL_AND_SAVE(entry_res, err_as, err);
+        entry = (uintptr_t)entry_res.val;
+        stack_top = out_stack_top;
     }
 
-    // TODO: 文件系统上下文（TASK_FS）和文件描述符表（TASK_FILES）处理
+    // 初始化 thread_struct，供调度器首次切换时使用
+    void *kernel_stack_top = (void *)((uintptr_t)kernel_stack + KERNEL_START_SIZE);
+    thread_struct_to_user_init(thread, (void *)pgd_phys, kernel_stack_top);
 
-    // 复制信号处理表
-    bool share_signal = (flags & TASK_SIGHAND) ? true : false;
-    if (!signal_copy(task->signal, &new_task->signal, share_signal)) goto fail;
+    // 在内核栈上布局 pt_regs，填充用户态入口信息
+    struct pt_regs *regs = processor_set_user_stack(thread, entry, stack_top);
+    task->regs = regs;
+
+    // 处理文件描述符表
+    if (flags & TASK_IS_THREAD) {
+        // 线程：共享父任务的文件描述符表
+        files = parent->files;
+        if (files) task_files_get(files);
+        task->files = files;
+    } else {
+        // 进程：创建新的文件描述符表
+        files = task_files_alloc();
+        if (!files) {
+            err = -ENOMEM;
+            goto err_as;
+        }
+        task->files = files;
+
+        // 继承用户指定的文件描述符
+        if (attrs->fd_count > 0 && attrs->inherit_fds) {
+            err = task_files_copy_list(
+                files,
+                parent->files,
+                attrs->inherit_fds,
+                attrs->fd_count
+            );
+            if (err < 0) goto err_files;
+        }
+    }
+
+    // 处理信号
+    if (flags & TASK_IS_THREAD) {
+        // 线程：共享父任务的信号处理器表，但拥有独立的信号掩码
+        if (!signal_copy(parent->signal, &sig, true)) {
+            err = -ENOMEM;
+            goto err_files;
+        }
+        task->signal = sig;
+    } else {
+        // 进程：复制父任务的信号处理器表
+        if (!signal_copy(parent->signal, &sig, false)) {
+            err = -ENOMEM;
+            goto err_files;
+        }
+        task->signal = sig;
+    }
 
     // 初始化调度器私有数据
-    if (sched_class_ptr && sched_class_ptr->sched_init) sched_class_ptr->sched_init(new_task);
+    if (sched_class_ptr && sched_class_ptr->sched_init)
+        sched_class_ptr->sched_init(task);
 
-    // 设置任务状态
-    new_task->state = TASK_RUNNING;
-    new_task->sigchld = (flags & TASK_SIGCHLD) ? true : false;
+    // 设置任务状态为可运行
+    task->state = TASK_RUNNING;
+    task->sigchld = parent->sigchld;
 
-    // 初始化链表
-    INIT_LIST_HEAD(&new_task->zombie);
-    INIT_LIST_HEAD(&new_task->sibling);
-    INIT_LIST_HEAD(&new_task->children);
-    INIT_LIST_HEAD(&new_task->sleep);
-    INIT_LIST_HEAD(&new_task->thread_group);
+    // 初始化链表头
+    INIT_LIST_HEAD(&task->zombie);
+    INIT_LIST_HEAD(&task->sibling);
+    INIT_LIST_HEAD(&task->children);
+    INIT_LIST_HEAD(&task->sleep);
+    INIT_LIST_HEAD(&task->thread_group);
 
-    // 设置父子关系
-    new_task->father = task;
-    task_add_child(task, new_task);  
+    // 建立父子关系
+    task->father = parent;
+    task_add_child(parent, task);
 
-    // 设置线程组关系
-    if (flags & TASK_THREAD) {
-        new_task->group_leader = task->group_leader;
-        thread_group_add(new_task->group_leader, new_task);   
+    // 建立线程组关系
+    if (flags & TASK_IS_THREAD) {
+        task->group_leader = parent->group_leader;
+        thread_group_add(task->group_leader, task);
     } else {
-        new_task->group_leader = new_task;
+        task->group_leader = task;
     }
 
-    // 加入调度队列
-    if (sched_class_ptr && sched_class_ptr->enqueue) sched_class_ptr->enqueue(new_task);
+    // 将新任务加入调度器的运行队列
+    if (sched_class_ptr && sched_class_ptr->enqueue)
+        sched_class_ptr->enqueue(task);
 
-    // 添加到映射表
-    dynarr_set(id_map, new_task->pid, &new_task);
+    // 将任务指针存入 ID 映射表，方便通过 PID 查找
+    dynarr_set(id_map, pid, &task);
 
-    return new_task;
+    return (kptr)K_PTR(task);
 
-fail:
-    // 错误处理
-    if (new_task->group_leader && new_task->group_leader != new_task) thread_group_remove(new_task->group_leader, new_task);
-
-    if (new_task->father) task_remove_child(new_task->father, new_task);
-
-    if (new_task->signal) signal_destroy(new_task->signal);
-    if (!(flags & TASK_VM) && new_task->as) vheap_destroy_as(new_task->as);
-
-    if (tgid_allocated && new_task->tgid != -1) id_free(new_task->tgid);
-    if (new_task->pid != -1) id_free(new_task->pid);
-    if (new_task->stack) kheap_free(new_task->stack);
-
-    kheap_free(new_task);
-    return NULL;
+err_signal:
+    signal_destroy(sig);
+err_files:
+    task_files_put(files);
+err_as:
+    vheap_destroy_as(as);
+err_pid:
+    id_free(pid);
+    if (tgid != pid) id_free(tgid);
+err_thread:
+    thread_struct_destroy(thread);
+err_stack:
+    kheap_free(kernel_stack);
+err_task:
+    kheap_free(task);
+err_return:
+    return (kptr)K_ERR(err);
 }
 
 /**

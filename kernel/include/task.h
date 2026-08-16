@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <asm/processor.h>
 #include <vfs.h>
+#include <klibc.h>
 
 struct task_struct;
 typedef struct per_cpu_sched per_cpu_sched;
@@ -30,19 +31,43 @@ typedef enum {
     TASK_THREAD     = 1 << 5,       // 将新任务加入同一线程组（tgid 相同）
 } task_flags;
 
+typedef enum {
+    TASK_IS_THREAD         = 1 << 0,   // 创建线程
+} task_create_flags_t;
+
+struct task_attrs {
+    task_create_flags_t flags;   // 创建行为标志
+    int *inherit_fds;            // 显式继承的文件描述符数组
+    size_t fd_count;             // 数组长度
+
+    union {
+        struct {
+            void *entry_point;   // 线程入口函数地址
+            void *stack_base;    // 用户态栈底地址
+            size_t stack_size;   // 用户态栈大小
+        } thread;
+
+        struct {
+            const char *exec_path;  // 可执行文件路径
+            const char **argv;      // 命令行参数（以 NULL 结尾）
+            const char **envp;      // 环境变量（以 NULL 结尾）
+        } process;
+    };
+};
+
 // 更新当前任务的时间
 void task_add_current_tick(uint64_t tick);
 
-/**
- * 复制任务
- * 
- * @param task 要复制的任务
- * @param flags 标志位
- * 
- * @return 成功：task指针
- * @return 失败：NULL
+/*
+ * 创建新任务
+ *
+ * @param attrs 任务属性
+ * @param size 结构体大小
+ *
+ * @return 任务控制块指针
  */
-task_struct *task_copy(struct task_struct *task, task_flags flags);
+__ktype(struct task_struct *)
+kptr task_create_new(struct task_attrs *attrs, size_t size);
 
 /**
  * 创建内核线程

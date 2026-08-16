@@ -50,8 +50,8 @@ struct exec_load_frame {
  */
 static int exec_setup_user_stack(
     uintptr_t stack_top,
-    char **argv,
-    char **envp,
+    const char **argv,
+    const char **envp,
     uintptr_t entry,
     uintptr_t phdr,
     uint32_t phnum,
@@ -263,8 +263,8 @@ kuptr exec_load(
     as_t *as,
     const char *path,
     const struct path *pwd,
-    char **argv,
-    char **envp,
+    const char **argv,
+    const char **envp,
     uintptr_t stack_top,
     uintptr_t *out_stack_top
 ) {
