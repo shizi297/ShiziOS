@@ -67,7 +67,7 @@ static void concurrent_create_thread_func(void *arg) {
     char path[64];
     snprintk(path, sizeof(path), "/concurrent_%d", t->id);
     kptr res = vfs_open(path, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR, t->pwd);
-    if (!res.err) {
+    if (!TEST_K_IS_ERR(res)) {
         struct file *file = res.ptr;
         char data[4];
         snprintk(data, sizeof(data), "t%d", t->id);
@@ -75,7 +75,7 @@ static void concurrent_create_thread_func(void *arg) {
         vfs_close(file);
         t->error = 0;
     } else {
-        t->error = res.err;
+        t->error = TEST_K_ERR(res);
     }
     t->done = true;
     atomic_fetch_sub(t->remaining, 1);
@@ -96,13 +96,13 @@ static void concurrent_create_same_func(void *arg) {
         S_IRUSR | S_IWUSR,
         t->pwd
     );
-    if (!res.err) {
+    if (!TEST_K_IS_ERR(res)) {
         struct file *file = res.ptr;
         vfs_write(file, "data", 4, NULL);
         vfs_close(file);
         t->error = 0;
     } else {
-        t->error = res.err;
+        t->error = TEST_K_ERR(res);
     }
     t->done = true;
     atomic_fetch_sub(t->remaining, 1);
@@ -119,7 +119,7 @@ static void concurrent_rw_thread_func(void *arg) {
 
     if (t->is_reader) {
         kptr res = vfs_open("/concurrent_rw", O_RDONLY, 0, t->pwd);
-        if (!res.err) {
+        if (!TEST_K_IS_ERR(res)) {
             struct file *file = res.ptr;
             char buf[128];
             for (int i = 0; i < 5; i++) {
@@ -129,11 +129,11 @@ static void concurrent_rw_thread_func(void *arg) {
             vfs_close(file);
             t->error = 0;
         } else {
-            t->error = res.err;
+            t->error = TEST_K_ERR(res);
         }
     } else {
         kptr res = vfs_open("/concurrent_rw", O_RDWR | O_APPEND, 0, t->pwd);
-        if (!res.err) {
+        if (!TEST_K_IS_ERR(res)) {
             struct file *file = res.ptr;
             for (int i = 0; i < 2; i++) {
                 vfs_write(file, "wdat", 4, NULL);
@@ -141,7 +141,7 @@ static void concurrent_rw_thread_func(void *arg) {
             vfs_close(file);
             t->error = 0;
         } else {
-            t->error = res.err;
+            t->error = TEST_K_ERR(res);
         }
     }
     t->done = true;
@@ -165,7 +165,7 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create /test_basic failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create /test_basic failed");
         file = res.ptr;
 
         ret = vfs_write(file, "hello", 5, NULL);
@@ -176,7 +176,7 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "reopen O_RDONLY and verify read-only");
         res = vfs_open("/test_basic", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !res.err, "reopen /test_basic (O_RDONLY) failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "reopen /test_basic (O_RDONLY) failed");
         file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
@@ -194,7 +194,7 @@ TEST_ENTRY(test_file_basic, step, do_run, (struct path *pwd, int global_step), {
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "reopen O_RDWR, append and read full");
         res = vfs_open("/test_basic", O_RDWR, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !res.err, "reopen /test_basic (O_RDWR) failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "reopen /test_basic (O_RDWR) failed");
         file = res.ptr;
 
         off_t pos = vfs_lseek(file, 0, SEEK_END);
@@ -249,7 +249,7 @@ TEST_ENTRY(test_directory, step, do_run, (struct path *pwd, int global_step), {
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create file in dir failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create file in dir failed");
         file = res.ptr;
 
         vfs_write(file, "test", 4, NULL);
@@ -301,7 +301,7 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create link_src failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create link_src failed");
         file = res.ptr;
 
         vfs_write(file, "linkdata", 8, NULL);
@@ -315,7 +315,7 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
         TEST_ASSERT_STEP(global_step + step, ret == 0, "symlink failed: %d", ret);
 
         res = vfs_open("/symlink", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !res.err, "open symlink failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "open symlink failed");
         file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
@@ -336,7 +336,7 @@ TEST_ENTRY(test_links, step, do_run, (struct path *pwd, int global_step), {
         TEST_ASSERT_STEP(global_step + step, ret == 0, "unlink src failed: %d", ret);
 
         res = vfs_open("/hardlink", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !res.err, "open hardlink after src removal failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "open hardlink after src removal failed");
         file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
@@ -370,7 +370,7 @@ TEST_ENTRY(test_rename, step, do_run, (struct path *pwd, int global_step), {
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create rename_old failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create rename_old failed");
         file = res.ptr;
 
         vfs_write(file, "renamed", 7, NULL);
@@ -388,11 +388,11 @@ TEST_ENTRY(test_rename, step, do_run, (struct path *pwd, int global_step), {
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "verify old path gone, new path valid");
         res = vfs_open("/rename_old", O_RDONLY, 0, pwd);
-        ret = res.err;
+        ret = TEST_K_ERR(res);
         TEST_ASSERT_STEP(global_step + step, ret == -ENOENT, "old path should be gone");
 
         res = vfs_open("/rename_new", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !res.err, "open rename_new failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "open rename_new failed");
         file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
@@ -426,7 +426,7 @@ TEST_ENTRY(test_truncate, step, do_run, (struct path *pwd, int global_step), {
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create trunc_test failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create trunc_test failed");
         file = res.ptr;
 
         ret = vfs_write(file, "1234567890", 10, NULL);
@@ -494,7 +494,7 @@ TEST_ENTRY(test_symlink_trailing_path, step, do_run, (struct path *pwd, int glob
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create /real_dir/subfile failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create /real_dir/subfile failed");
         file = res.ptr;
 
         vfs_write(file, "trailing", 8, NULL);
@@ -514,9 +514,9 @@ TEST_ENTRY(test_symlink_trailing_path, step, do_run, (struct path *pwd, int glob
         res = vfs_open("/link_to_dir/subfile", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "open /link_to_dir/subfile failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -557,7 +557,7 @@ TEST_ENTRY(test_symlink_nested, step, do_run, (struct path *pwd, int global_step
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create /nested_src failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create /nested_src failed");
         file = res.ptr;
 
         vfs_write(file, "nestdata", 8, NULL);
@@ -578,7 +578,7 @@ TEST_ENTRY(test_symlink_nested, step, do_run, (struct path *pwd, int global_step
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "read through nested symlinks");
         res = vfs_open("/sym1", O_RDONLY, 0, pwd);
-        TEST_ASSERT_STEP(global_step + step, !res.err, "open /sym1 failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "open /sym1 failed");
         file = res.ptr;
 
         memset(buf, 0, sizeof(buf));
@@ -619,7 +619,7 @@ TEST_ENTRY(test_symlink_dangling, step, do_run, (struct path *pwd, int global_st
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "open dangling symlink");
         res = vfs_open("/dangling_link", O_RDONLY, 0, pwd);
-        ret = res.err;
+        ret = TEST_K_ERR(res);
         TEST_ASSERT_STEP(
             global_step + step,
             ret == -ENOENT,
@@ -645,7 +645,7 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
     TEST_IMPL(do_run, step, {
         TEST_DESC(global_step + step, "first open - expect ENOENT");
         res = vfs_open("/neg_test", O_RDONLY, 0, pwd);
-        ret = res.err;
+        ret = TEST_K_ERR(res);
         TEST_ASSERT_STEP(
             global_step + step,
             ret == -ENOENT,
@@ -663,7 +663,7 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create /neg_test failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create /neg_test failed");
         file = res.ptr;
 
         vfs_write(file, "negative", 8, NULL);
@@ -676,9 +676,9 @@ TEST_ENTRY(test_negative_cache, step, do_run, (struct path *pwd, int global_step
         res = vfs_open("/neg_test", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "reopen /neg_test after create failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -724,7 +724,7 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create /normdir/file failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create /normdir/file failed");
         file = res.ptr;
 
         vfs_write(file, "normdata", 8, NULL);
@@ -737,9 +737,9 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
         res = vfs_open("/normdir/../normdir/file", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "open /normdir/../normdir/file failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -756,9 +756,9 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
         res = vfs_open("/normdir/./file", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "open /normdir/./file failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -771,9 +771,9 @@ TEST_ENTRY(test_path_normalization, step, do_run, (struct path *pwd, int global_
         res = vfs_open("//normdir///file", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "open //normdir///file failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -806,7 +806,7 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
         TEST_ASSERT_STEP(global_step + step, ret == 0, "mkdir /mnt failed: %d", ret);
 
         mnt_res = vfs_mount(NULL, "/mnt", "tmpfs", MS_NONE, NULL, true);
-        TEST_ASSERT_STEP(global_step + step, mnt_res.err == 0, "mount tmpfs on /mnt failed: %d", mnt_res.err);
+        TEST_ASSERT_STEP(global_step + step, TEST_K_ERR(mnt_res) == 0, "mount tmpfs on /mnt failed: %d", TEST_K_ERR(mnt_res));
     });
 
     // 在挂载点下创建文件
@@ -818,7 +818,7 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
             S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH,
             pwd
         );
-        TEST_ASSERT_STEP(global_step + step, !res.err, "create /mnt/mountfile failed");
+        TEST_ASSERT_STEP(global_step + step, !TEST_K_IS_ERR(res), "create /mnt/mountfile failed");
         file = res.ptr;
 
         vfs_write(file, "mounted", 7, NULL);
@@ -831,9 +831,9 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
         res = vfs_open("/mnt/mountfile", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "open /mnt/mountfile failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -858,9 +858,9 @@ TEST_ENTRY(test_mount_and_symlink, step, do_run, (struct path *pwd, int global_s
         res = vfs_open("/link_to_mount", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !res.err,
+            !TEST_K_IS_ERR(res),
             "open /link_to_mount failed: %d",
-            res.err
+            TEST_K_ERR(res)
         );
         file = res.ptr;
 
@@ -917,11 +917,11 @@ TEST_ENTRY(test_concurrent_create_different, step, do_run, (struct path *pwd, in
             kptr vres = vfs_open(path, O_RDONLY, 0, pwd);
             TEST_ASSERT_STEP(
                 global_step + step,
-                !vres.err,
+                !TEST_K_IS_ERR(vres),
                 "concurrent file %d not found",
                 i
             );
-            if (!vres.err) {
+            if (!TEST_K_IS_ERR(vres)) {
                 struct file *vfile = vres.ptr;
                 char buf[4] = {0};
                 ssize_t r = vfs_read(vfile, buf, 2, NULL);
@@ -1018,10 +1018,10 @@ TEST_ENTRY(test_concurrent_read_write, step, do_run, (struct path *pwd, int glob
             S_IRUSR | S_IWUSR, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !init_res.err,
+            !TEST_K_IS_ERR(init_res),
             "create /concurrent_rw failed"
         );
-        if (!init_res.err) {
+        if (!TEST_K_IS_ERR(init_res)) {
             struct file *init_file = init_res.ptr;
             const char *init_str = "initial";
             size_t init_len = strlen(init_str);
@@ -1055,10 +1055,10 @@ TEST_ENTRY(test_concurrent_read_write, step, do_run, (struct path *pwd, int glob
         kptr verify_res = vfs_open("/concurrent_rw", O_RDONLY, 0, pwd);
         TEST_ASSERT_STEP(
             global_step + step,
-            !verify_res.err,
+            !TEST_K_IS_ERR(verify_res),
             "open /concurrent_rw after test failed"
         );
-        if (!verify_res.err) {
+        if (!TEST_K_IS_ERR(verify_res)) {
             struct file *verify_file = verify_res.ptr;
             struct kstat stat;
             int err = vfs_getattr("/concurrent_rw", &stat, pwd);

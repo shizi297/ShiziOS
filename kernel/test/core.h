@@ -8,6 +8,9 @@
 #include <kio.h>
 #include <klibc.h>
 
+#define TEST_K_ERR(res)      ((res).err)
+#define TEST_K_IS_ERR(res)   (TEST_K_ERR(res) != 0)
+
 struct test_result {
     int pass;   // 通过的断言数
     int fail;   // 失败的断言数

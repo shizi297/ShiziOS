@@ -21,62 +21,146 @@
 #define K_ERR(e)    { .err = (e) }
 
 // 如果出错，直接返回 err
-#define K_ERR_RETURN(res) \
+#define K_ERR_RETURN(res) K_ERR_RETURN_IF_NOT(res, 0)
+
+// 如果出错，且错误码不等于 err_code，返回错误码
+#define K_ERR_RETURN_IF_NOT(res, err_code) \
     do { \
-        if ((res).err) \
+        if ((res).err && (res).err != (err_code)) \
+            return (res).err; \
+    } while(0)
+
+// 如果出错，且错误码等于 err_code，返回错误码
+#define K_ERR_RETURN_IF_OK(res, err_code) \
+    do { \
+        if ((res).err && (res).err == (err_code)) \
             return (res).err; \
     } while(0)
 
 // 如果出错，返回原类型
-#define K_ERR_RETURN_SELF(res) \
+#define K_ERR_RETURN_SELF(res) K_ERR_RETURN_SELF_IF_NOT(res, 0)
+
+// 如果出错，且错误码不等于 err_code，返回原类型
+#define K_ERR_RETURN_SELF_IF_NOT(res, err_code) \
     do { \
-        if ((res).err) \
+        if ((res).err && (res).err != (err_code)) \
             return res; \
     } while(0)
-    
-// 如果出错，用指定的类型重新构造错误值并返回
-#define K_ERR_RETURN_SELF_TYPE(res, type) \
+
+// 如果出错，且错误码等于 err_code，返回原类型
+#define K_ERR_RETURN_SELF_IF_OK(res, err_code) \
     do { \
-        if ((res).err) \
+        if ((res).err && (res).err == (err_code)) \
+            return res; \
+    } while(0)
+
+// 如果出错，用指定的类型重新构造错误值并返回
+#define K_ERR_RETURN_SELF_TYPE(res, type) K_ERR_RETURN_SELF_TYPE_IF_NOT(res, type, 0)
+
+// 如果出错，且错误码不等于 err_code，用指定类型重新构造错误值并返回
+#define K_ERR_RETURN_SELF_TYPE_IF_NOT(res, type, err_code) \
+    do { \
+        if ((res).err && (res).err != (err_code)) \
+            return (type){ .err = (res).err }; \
+    } while(0)
+
+// 如果出错，且错误码等于 err_code，用指定类型重新构造错误值并返回
+#define K_ERR_RETURN_SELF_TYPE_IF_OK(res, type, err_code) \
+    do { \
+        if ((res).err && (res).err == (err_code)) \
             return (type){ .err = (res).err }; \
     } while(0)
 
 // 如果错误，跳转到标签
-#define K_ERR_LABEL(res, label) \
+#define K_ERR_LABEL(res, label) K_ERR_LABEL_IF_NOT(res, 0, label)
+
+// 如果错误，且错误码不等于 err_code，跳转到标签
+#define K_ERR_LABEL_IF_NOT(res, err_code, label) \
     do { \
-        if ((res).err) \
+        if ((res).err && (res).err != (err_code)) \
+            goto label; \
+    } while(0)
+
+// 如果错误，且错误码等于 err_code，跳转到标签
+#define K_ERR_LABEL_IF_OK(res, err_code, label) \
+    do { \
+        if ((res).err && (res).err == (err_code)) \
             goto label; \
     } while(0)
 
 // 如果错误，设置 err 变量，并跳转到标签
-#define K_ERR_LABEL_AND_SAVE(res, label, err_name) \
+#define K_ERR_LABEL_AND_SAVE(res, label, err_name) K_ERR_LABEL_AND_SAVE_IF_NOT(res, 0, label, err_name)
+
+// 如果错误，且错误码不等于 err_code，设置 err 变量并跳转到标签
+#define K_ERR_LABEL_AND_SAVE_IF_NOT(res, err_code, label, err_name) \
     do { \
-        if ((res).err) { \
+        if ((res).err && (res).err != (err_code)) { \
             err_name = (res).err; \
             goto label; \
         } \
     } while(0)
-    
+
+// 如果错误，且错误码等于 err_code，设置 err 变量并跳转到标签
+#define K_ERR_LABEL_AND_SAVE_IF_OK(res, err_code, label, err_name) \
+    do { \
+        if ((res).err && (res).err == (err_code)) { \
+            err_name = (res).err; \
+            goto label; \
+        } \
+    } while(0)
+
 // 如果出错，直接 break
-#define K_ERR_BREAK(res) \
+#define K_ERR_BREAK(res) K_ERR_BREAK_IF_NOT(res, 0)
+
+// 如果出错，且错误码不等于 err_code，跳出循环
+#define K_ERR_BREAK_IF_NOT(res, err_code) \
     { \
-        if ((res).err) \
+        if ((res).err && (res).err != (err_code)) \
             break; \
     }
-    
-// 如果出错，保存错误码并 break
-#define K_ERR_BREAK_AND_SAVE(res, err_name) \
+
+// 如果出错，且错误码等于 err_code，跳出循环
+#define K_ERR_BREAK_IF_OK(res, err_code) \
     { \
-        if ((res).err) { \
+        if ((res).err && (res).err == (err_code)) \
+            break; \
+    }
+
+// 如果出错，保存错误码并 break
+#define K_ERR_BREAK_AND_SAVE(res, err_name) K_ERR_BREAK_AND_SAVE_IF_NOT(res, 0, err_name)
+
+// 如果出错，且错误码不等于 err_code，保存错误码并跳出循环
+#define K_ERR_BREAK_AND_SAVE_IF_NOT(res, err_code, err_name) \
+    { \
+        if ((res).err && (res).err != (err_code)) { \
             err_name = (res).err; \
             break; \
         } \
     }
-  
+
+// 如果出错，且错误码等于 err_code，保存错误码并跳出循环
+#define K_ERR_BREAK_AND_SAVE_IF_OK(res, err_code, err_name) \
+    { \
+        if ((res).err && (res).err == (err_code)) { \
+            err_name = (res).err; \
+            break; \
+        } \
+    }
+
 // 如果出错，返回指定的值
-#define K_ERR_RESULT(res, result) \
+#define K_ERR_RESULT(res, result) K_ERR_RESULT_IF_NOT(res, 0, result)
+
+// 如果出错，且错误码不等于 err_code，返回指定的值
+#define K_ERR_RESULT_IF_NOT(res, err_code, result) \
     do { \
-        if ((res).err) \
+        if ((res).err && (res).err != (err_code)) \
+            return (result); \
+    } while(0)
+
+// 如果出错，且错误码等于 err_code，返回指定的值
+#define K_ERR_RESULT_IF_OK(res, err_code, result) \
+    do { \
+        if ((res).err && (res).err == (err_code)) \
             return (result); \
     } while(0)
 

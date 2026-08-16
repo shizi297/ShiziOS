@@ -1799,10 +1799,7 @@ static int ext2_create(struct inode *dir, struct dentry *dentry, mode_t mode) {
     memset(&raw, 0, sizeof(raw));
 
     ku16 imode_res = ext2_make_i_mode(mode | S_IFREG);
-    if (imode_res.err) {
-        err = imode_res.err;
-        goto err_bitmap;
-    }
+    K_ERR_LABEL_AND_SAVE(imode_res, err_bitmap, err);
     raw.i_mode = (ext2_inode_mode_t)imode_res.val;
     raw.i_uid = uid;
     raw.i_gid = gid;
@@ -1919,10 +1916,8 @@ static int ext2_symlink(struct inode *dir, struct dentry *dentry, const char *ta
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
     ku16 imode_res = ext2_make_i_mode(S_IFLNK | 0777);
-    if (imode_res.err) {
-        err = imode_res.err;
-        goto err_bitmap;
-    }
+    K_ERR_LABEL_AND_SAVE(imode_res, err_bitmap, err);   
+    
     raw.i_mode = (ext2_inode_mode_t)imode_res.val;
     raw.i_uid = uid;
     raw.i_gid = gid;
@@ -2049,8 +2044,7 @@ static int ext2_link(
 
     // 根据源 inode 的文件类型确定目录项类型
     ku8 type_res = ext2_mode_to_file_type(inode->mode);
-    if (type_res.err)
-        return type_res.err;
+    K_ERR_RETURN(type_res);
 
     type = (ext2_file_type_t)type_res.val;
 
@@ -2243,10 +2237,8 @@ static int ext2_mkdir(struct inode *dir, struct dentry *dentry, mode_t mode) {
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
     ku16 imode_res = ext2_make_i_mode(mode | S_IFDIR);
-    if (imode_res.err) {
-        err = imode_res.err;
-        goto err_bitmap;
-    }
+    K_ERR_LABEL_AND_SAVE(imode_res, err_bitmap, err);
+
     raw.i_mode = (ext2_inode_mode_t)imode_res.val;
     raw.i_uid = uid;
     raw.i_gid = gid;
@@ -2522,6 +2514,7 @@ static int ext2_rename(
     uint8_t *buf;
     struct timespec now;
     ext2_file_type_t new_type;
+    dynarr_t *entries = NULL;
     int err;
 
     if (!old_inode)
@@ -2626,11 +2619,7 @@ static int ext2_rename(
 
     // 确定新条目的文件类型
     ku8 type_res = ext2_mode_to_file_type(old_inode->mode);
-    if (type_res.err) {
-        kheap_free(buf);
-        err = type_res.err;
-        goto out_unlock;
-    }
+    K_ERR_LABEL_AND_SAVE(type_res, out_free_buf, err);
     new_type = (ext2_file_type_t)type_res.val;
 
     // 如果目标已存在，先删除目标条目
@@ -2642,29 +2631,23 @@ static int ext2_rename(
             new_dentry->name.len,
             (uint32_t *)buf
         );
-        if (err) {
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_buf;
 
         // 更新目标磁盘 inode 的链接计数和时间戳
         struct ext2_inode_info *ei_new = new_inode->private;
         struct ext2_inode new_raw;
 
         err = ext2_inode_read(sb, ei_new, &new_raw, buf);
-        if (err) {
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_buf;
 
         new_raw.i_links_count--;
         new_raw.i_ctime = now.tv_sec;
 
         err = ext2_inode_write(sb, sbi, new_inode->ino, &new_raw, ei_new, buf);
-        if (err) {
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_buf;
 
         // 更新内存中的链接计数和时间戳
         new_inode->nlink--;
@@ -2678,22 +2661,18 @@ static int ext2_rename(
 
     if (old_dir == new_dir) {
         // 同一目录内重命名：收集条目、修改名字、重建
-        dynarr_t *entries = dynarr_create(
+        entries = dynarr_create(
             sizeof(struct ext2_dir_entry) + EXT2_NAME_LEN,
             0
         );
         if (!entries) {
-            kheap_free(buf);
             err = -ENOMEM;
-            goto out_unlock;
+            goto out_free_buf;
         }
 
         err = ext2_dir_collect(old_dir, entries, (uint32_t *)buf);
-        if (err) {
-            dynarr_destroy(entries);
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_entries;
 
         // 查找旧名字条目并修改
         bool found = false;
@@ -2713,14 +2692,13 @@ static int ext2_rename(
         }
 
         if (!found) {
-            dynarr_destroy(entries);
-            kheap_free(buf);
             err = -ENOENT;
-            goto out_unlock;
+            goto out_free_entries;
         }
 
         err = ext2_rebuild_directory(old_dir, entries, (uint32_t *)buf);
         dynarr_destroy(entries);
+        entries = NULL;   // 防止后续重复释放
     } else {
         // 跨目录移动：先在目标目录添加新条目
         err = ext2_dir_collect_and_add(
@@ -2731,10 +2709,8 @@ static int ext2_rename(
             new_type,
             (uint32_t *)buf
         );
-        if (err) {
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_buf;
 
         // 再从源目录删除旧条目
         err = ext2_dir_collect_and_remove(
@@ -2751,8 +2727,7 @@ static int ext2_rename(
                 new_dentry->name.len,
                 (uint32_t *)buf
             );
-            kheap_free(buf);
-            goto out_unlock;
+            goto out_free_buf;
         }
 
         // 如果移动的是目录，更新 ".." 条目和父目录链接计数
@@ -2790,18 +2765,14 @@ static int ext2_rename(
     struct ext2_inode old_raw;
 
     err = ext2_inode_read(sb, ei_old, &old_raw, buf);
-    if (err) {
-        kheap_free(buf);
-        goto out_unlock;
-    }
+    if (err)
+        goto out_free_buf;
 
     old_raw.i_ctime = now.tv_sec;
 
     err = ext2_inode_write(sb, sbi, old_inode->ino, &old_raw, ei_old, buf);
-    if (err) {
-        kheap_free(buf);
-        goto out_unlock;
-    }
+    if (err)
+        goto out_free_buf;
 
     old_inode->ctime = now;
 
@@ -2809,19 +2780,15 @@ static int ext2_rename(
     struct ext2_inode old_dir_raw;
 
     err = ext2_inode_read(sb, ei_old_dir, &old_dir_raw, buf);
-    if (err) {
-        kheap_free(buf);
-        goto out_unlock;
-    }
+    if (err)
+        goto out_free_buf;
 
     old_dir_raw.i_mtime = now.tv_sec;
     old_dir_raw.i_ctime = now.tv_sec;
 
     err = ext2_inode_write(sb, sbi, old_dir->ino, &old_dir_raw, ei_old_dir, buf);
-    if (err) {
-        kheap_free(buf);
-        goto out_unlock;
-    }
+    if (err)
+        goto out_free_buf;
 
     old_dir->mtime = now;
     old_dir->ctime = now;
@@ -2831,19 +2798,15 @@ static int ext2_rename(
         struct ext2_inode new_dir_raw;
 
         err = ext2_inode_read(sb, ei_new_dir, &new_dir_raw, buf);
-        if (err) {
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_buf;
 
         new_dir_raw.i_mtime = now.tv_sec;
         new_dir_raw.i_ctime = now.tv_sec;
 
         err = ext2_inode_write(sb, sbi, new_dir->ino, &new_dir_raw, ei_new_dir, buf);
-        if (err) {
-            kheap_free(buf);
-            goto out_unlock;
-        }
+        if (err)
+            goto out_free_buf;
 
         new_dir->mtime = now;
         new_dir->ctime = now;
@@ -2869,6 +2832,10 @@ static int ext2_rename(
     kheap_free(buf);
     err = 0;
 
+out_free_entries:
+    dynarr_destroy(entries);
+out_free_buf:
+    kheap_free(buf);
 out_unlock:
     if (old_dir == new_dir) {
         mutex_unlock(&ei_old_dir->lock);
@@ -3030,8 +2997,7 @@ static int ext2_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev
 
     // 根据文件类型确定目录项类型
     ku8 type_res = ext2_mode_to_file_type(mode);
-    if (type_res.err)
-        return type_res.err;
+    K_ERR_RETURN(type_res);
     type = (ext2_file_type_t)type_res.val;
 
     task_get_current_ugid(&uid, &gid);
@@ -3061,10 +3027,7 @@ static int ext2_mknod(struct inode *dir, struct dentry *dentry, mode_t mode, dev
     // 初始化磁盘 inode 结构
     memset(&raw, 0, sizeof(raw));
     ku16 imode_res = ext2_make_i_mode(mode);
-    if (imode_res.err) {
-        err = imode_res.err;
-        goto err_bitmap;
-    }
+    K_ERR_LABEL_AND_SAVE(imode_res, err_bitmap, err);
     raw.i_mode = (ext2_inode_mode_t)imode_res.val;
     raw.i_uid = uid;
     raw.i_gid = gid;
