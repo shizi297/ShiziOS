@@ -5,6 +5,7 @@
 
 #include <processor.h>
 #include <fault.h>
+#include <klibc.h>
 
 extern uint64_t irq_entry_table[256];
 
@@ -256,6 +257,55 @@ void thread_struct_to_kernel_init(
     thread->rsp = (uint64_t)stack_top;
     thread->rbp = (uint64_t)arg;
     thread->rbx = (uint64_t)func;
+}
+
+/*
+ * 设置用户态任务的初始寄存器上下文
+ *
+ * @param thread 目标任务的 thread_struct
+ * @param entry 用户态入口地址
+ * @param user_stack_top 用户态栈顶地址
+ *
+ * @return 用户态寄存器上下文的地址
+ */
+struct pt_regs *processor_set_user_stack(
+    struct thread_struct *thread,
+    uintptr_t entry,
+    uintptr_t user_stack_top
+) {
+    // 获取内核栈顶地址
+    uintptr_t kernel_stack_top = thread->rsp;
+
+    // pt_regs 位于内核栈顶部
+    struct pt_regs *regs = (struct pt_regs *)(kernel_stack_top - sizeof(struct pt_regs));
+
+    // 清零所有寄存器，防止内核栈残留数据泄露到用户态
+    memset(regs, 0, sizeof(*regs));
+
+    // 填充用户态入口信息
+    regs->rip = entry;
+    regs->rsp = user_stack_top;
+    regs->cs = GDT_USER_CODE_SELECTOR;
+    regs->ss = GDT_USER_DATA_SELECTOR;
+    regs->rflags = USER_RFLAGS;
+
+    return regs;
+}
+
+/*
+ * 初始化用户态任务的 thread_struct
+ *
+ * @param thread 目标 thread_struct 指针
+ * @param pgd 用户页表物理地址
+ * @param stack_top 内核栈顶地址
+ */
+void thread_struct_to_user_init(
+    struct thread_struct *thread, 
+    void *pgd, 
+    void *stack_top
+) {
+    thread->cr3 = (uint64_t)pgd;
+    thread->rsp = (uint64_t)stack_top;
 }
 
 // 初始化所有模版

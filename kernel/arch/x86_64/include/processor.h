@@ -46,6 +46,8 @@ extern uint32_t xsaves_size;
 #define CR4_CONFIG (CR4_MCE | CR4_PAE | CR4_PSE | CR4_PGE | CR4_OSFXSR | \
                    CR4_OSXMMEXCPT | CR4_OSXSAVE | CR4_FSGSBASE | \
                    CR4_SMEP | CR4_SMAP)
+                   
+#define USER_RFLAGS 0x202
 
 // 存储中断/异常/系统调用/信号处理时的信息
 struct pt_regs {

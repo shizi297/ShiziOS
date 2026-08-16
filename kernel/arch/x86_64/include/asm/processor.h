@@ -146,6 +146,34 @@ void thread_struct_to_kernel_init(
     void *arg
 );
 
+/*
+ * 初始化用户态任务的 thread_struct
+ *
+ * @param thread 目标 thread_struct 指针
+ * @param pgd 用户页表物理地址
+ * @param stack_top 内核栈顶地址
+ */
+void thread_struct_to_user_init(
+    struct thread_struct *thread, 
+    void *pgd, 
+    void *stack_top
+);
+
+/*
+ * 设置用户态任务的初始寄存器上下文
+ *
+ * @param thread 目标任务的 thread_struct
+ * @param entry 用户态入口地址
+ * @param user_stack_top 用户态栈顶地址
+ *
+ * @return 用户态寄存器上下文的地址
+ */
+struct pt_regs *processor_set_user_stack(
+    struct thread_struct *thread,
+    uintptr_t entry,
+    uintptr_t user_stack_top
+);
+
 // 为任务分配thread_struct结构体
 struct thread_struct *thread_struct_create(void);
 
