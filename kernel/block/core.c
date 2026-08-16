@@ -231,8 +231,11 @@ int block_add_device(
     // 挂入链表
     list_add_tail(&info->node, &block_devt_to_info);
 
+    // 保存当前磁盘编号，用于整盘和分区节点命名
+    unsigned int disk_index = type->counter;
+
     // 创建设备节点，路径格式为 /dev/nameX
-    snprintk(info->path, sizeof(info->path), "/dev/%s%u", type->name, type->counter);
+    snprintk(info->path, sizeof(info->path), "/dev/%s%u", type->name, disk_index);
     root = vfs_get_root_path();
     ret = vfs_mknod(info->path, S_IFBLK | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP, devt, root);
     vfs_path_put(root);
@@ -240,6 +243,7 @@ int block_add_device(
     if (ret < 0)
         goto err_list;
 
+    // 自增计数器，供下一个磁盘使用
     type->counter++;
 
     // GPT 解析与分区节点创建
@@ -279,7 +283,7 @@ int block_add_device(
                 // 生成分区设备节点路径：/dev/nameXpN
                 snprintk(
                     part_info->path, sizeof(part_info->path),
-                    "/dev/%s%up%u", type->name, type->counter, (unsigned int)(i + 1)
+                    "/dev/%s%up%u", type->name, disk_index, (unsigned int)(i + 1)
                 );
 
                 struct path *root = vfs_get_root_path();

@@ -621,14 +621,18 @@ uint64_t pmm_alloc_pages(uint8_t order, uint8_t zone) {
         }
     }
 
+    spin_unlock(&zones[zone].lock);
+    spin_unlock_irqrestore(&mem_block->lock, flags);
+
+    if (pfn == 0) {
+        return 0;
+    }
+
     // 清零内存块
     uint64_t *alloc_mem_block_ptr = (uint64_t *)PHYS_TO_LINEAR(pfn << PAGE_SHIFT);
     for (uint64_t i = 0;i < (PAGE_SIZE * (1 << order));i += sizeof(uint64_t)) {
         alloc_mem_block_ptr[i >> 3] = 0;
     }
-
-    spin_unlock(&zones[zone].lock);
-    spin_unlock_irqrestore(&mem_block->lock, flags);
 
     return pfn;
 }
@@ -655,8 +659,8 @@ void pmm_free_pages(uint64_t pfn) {
     mem_block_t* block = &mem_block->blocks[pfn];
     
     if (block->is_head == 0 || block->is_free == 1) {
-        spin_unlock(&mem_block->lock);
-        spin_unlock_irqrestore(&zones[zone].lock, flags);
+        spin_unlock(&zones[zone].lock);
+        spin_unlock_irqrestore(&mem_block->lock, flags);
         return;
     }
     
@@ -675,12 +679,18 @@ void pmm_free_pages(uint64_t pfn) {
      * 不应该释放
      */
     if (block->ref_count > 0) {
-        spin_unlock(&mem_block->lock);
-        spin_unlock_irqrestore(&zones[zone].lock, flags);
+        spin_unlock(&zones[zone].lock);
+        spin_unlock_irqrestore(&mem_block->lock, flags);
         return;
     }
     
     free_list_t *addr = (free_list_t *)PHYS_TO_LINEAR(pfn * PAGE_SIZE);
+    
+    uint64_t block_pages = 1ULL << order;
+    for (uint64_t i = 0; i < block_pages; i++) {
+        mem_block->blocks[pfn + i].is_free = 1;
+    }
+    
     add_free_lists(addr, zone, order);
     
     /*
