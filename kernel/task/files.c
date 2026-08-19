@@ -6,7 +6,6 @@
 #include "files.h"
 #include <heap.h>
 #include <klibc.h>
-#include <errno.h>
 #include <vfs.h>
 
 #define MAX_FD 1024
@@ -20,7 +19,7 @@
 struct files_descriptor {
     __ktype(struct file *) dynarr_t *fd_table;
     spinlock_t lock;
-    atomic_t refcount;
+    atomic_int refcount;
 };
 
 /*
@@ -142,7 +141,7 @@ int task_files_install(struct files_descriptor *fdt, int fd, struct file *file) 
 
     // 安装文件指针
     if (!dynarr_set(fdt->fd_table, (uint64_t)fd, file)) {
-        vfs_file_put(file);
+        vfs_close(file);
         spin_unlock(&fdt->lock);
         return -ENOMEM;
     }
@@ -267,7 +266,7 @@ int task_files_copy_list(
 
         // 安装文件指针
         if (!dynarr_set(dst->fd_table, (uint64_t)fd, file)) {
-            vfs_file_put(file);
+            vfs_close(file);
             err = -ENOMEM;
             break;
         }

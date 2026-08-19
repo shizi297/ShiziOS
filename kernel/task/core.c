@@ -37,6 +37,34 @@
 // worker 线程数量
 #define WORKER_THREAD_COUNT 2
 
+// 打包状态
+#define MIG_STATE_PACK(sender, active) ((uint64_t)(sender) << 1) | ((active) ? 1 : 0)
+
+// 获取发送者cpuid
+#define MIG_STATE_SENDER(state) ((uint32_t)((state)) >> 1)
+
+// 获取目标cpu的活跃状态
+#define MIG_STATE_ACTIVE(state) ((state) & 1)
+
+// 退出状态打包（正常退出）
+#define EXIT_STATUS_PACK(code)          (((code) & 0xFF) << 8)
+
+// 退出状态打包（被信号杀死）
+#define EXIT_STATUS_TERM(sig, core)     (((sig) & 0x7F) | ((core) ? (1 << 7) : 0))
+
+// 获取退出值
+#define EXIT_STATUS_CODE(status)        (((status) >> 8) & 0xFF)
+
+// 获取终止信号
+#define EXIT_STATUS_SIG(status)         ((status) & 0x7F)
+
+// 是否产生 core dump
+#define EXIT_STATUS_COREDUMP(status)    ((status) & (1 << 7))
+
+// 预留 PID
+#define TASK_KERNEL_ID  0   // 内核本身
+#define TASK_INIT_ID    1   // init 进程
+
 extern void ret_from_kernel_thread(void);
 
 // 通用锁队列结构
@@ -81,15 +109,6 @@ typedef struct {
     atomic_uint_least64_t state;    
 } migration_info;
 
-// 打包状态
-#define MIG_STATE_PACK(sender, active) ((uint64_t)(sender) << 1) | ((active) ? 1 : 0)
-
-// 获取发送者cpuid
-#define MIG_STATE_SENDER(state) ((uint32_t)((state)) >> 1)
-
-// 获取目标cpu的活跃状态
-#define MIG_STATE_ACTIVE(state) ((state) & 1)
-
 typedef struct {
     uint32_t cpu_count;
     migration_info infos[];
@@ -109,6 +128,47 @@ struct sched_class *sched_class_ptr = &sched_class;
 
 // 任务系统初始化完成标志
 static bool task_init_flag = false;
+
+/**
+ * id分配，可以用于任务管理的任何id
+ * 
+ * @return 成功：id
+ * @return 失败：-1
+ */
+__attribute__((optnone))
+static pid_t id_alloc(void) {
+    pid_t id;
+
+    spin_lock(&id_lock);
+    id = (pid_t)bitmap_find(id_bitmap, TASK_ID_MAX, 0, 0);
+    if (id != TASK_ID_MAX) bitmap_set(id_bitmap, id);
+    spin_unlock(&id_lock);
+
+    return (id == TASK_ID_MAX) ? -1 : id;
+}
+
+/**
+ * id释放
+ * 
+ * @param id 要释放的id
+ */
+static void id_free(pid_t id) {
+    if (id < 0 || id >= TASK_ID_MAX) return;
+
+    spin_lock(&id_lock);
+    bitmap_clear(id_bitmap, id);
+    dynarr_set(id_map, id, NULL);
+    spin_unlock(&id_lock);
+}
+
+/*
+ * 获取 init 任务
+ *
+ * @return init 任务指针
+ */
+static struct task_struct *id_get_init(void) {
+    return (struct task_struct *)dynarr_get(id_map, TASK_INIT_ID);
+}
 
 // 初始化锁队列
 static void lock_queue_init(struct lock_queue *lq) {
@@ -158,6 +218,8 @@ static void task_release(struct task_struct *task) {
     if (task->thread) thread_struct_destroy(task->thread);
     if (task->as) vheap_destroy_as(task->as);
     if (task->signal) signal_destroy(task->signal);
+    if (task->fs.root) vfs_path_put(task->fs.root);
+    if (task->fs.pwd) vfs_path_put(task->fs.pwd);
 }
 
 // 用于 woeker 线程自适应唤醒的函数，计算 pending 工作项数量对应的期望活跃 worker 数量
@@ -199,6 +261,8 @@ static void zombie_reclaim(void *unused) {
         spin_unlock(&zombie_queue.lock);
 
         task_release(task);
+        id_free(task->pid);
+        kheap_free(task);
 
         spin_lock(&zombie_queue.lock);
     }
@@ -272,38 +336,6 @@ static inline void task_worker_init(void) {
         task_struct *worker = task_create_kernel_thread(task_worker, NULL);
         // 不把worker加入worker线程池，调度到他时会自动加入
     }
-}
-
-/**
- * id分配，可以用于任务管理的任何id
- * 
- * @return 成功：id
- * @return 失败：-1
- */
-__attribute__((optnone))
-static id_t id_alloc(void) {
-    id_t id;
-
-    spin_lock(&id_lock);
-    id = (id_t)bitmap_find(id_bitmap, TASK_ID_MAX, 0, 0);
-    if (id != TASK_ID_MAX) bitmap_set(id_bitmap, id);
-    spin_unlock(&id_lock);
-
-    return (id == TASK_ID_MAX) ? -1 : id;
-}
-
-/**
- * id释放
- * 
- * @param id 要释放的id
- */
-static void id_free(id_t id) {
-    if (id < 0 || id >= TASK_ID_MAX) return;
-
-    spin_lock(&id_lock);
-    bitmap_clear(id_bitmap, id);
-    dynarr_set(id_map, id, NULL);
-    spin_unlock(&id_lock);
 }
 
 /**
@@ -560,7 +592,7 @@ kptr task_create_new(struct task_attrs *attrs, size_t size) {
     as_t *as = NULL;
     struct files_descriptor *files = NULL;
     struct signal_struct *sig = NULL;
-    id_t pid = -1, tgid = -1;
+    pid_t pid = -1, tgid = -1;
     uintptr_t entry = 0, stack_top = 0, pgd_phys = 0;
     int err = 0;
     uint32_t flags = 0;
@@ -572,7 +604,7 @@ kptr task_create_new(struct task_attrs *attrs, size_t size) {
     }
 
     flags = attrs->flags;
-    if (flags & ~(TASK_IS_THREAD)) {
+    if (flags & ~(TASK_IS_THREAD | TASK_WAIT_PARENT | TASK_WAKE_ON_EXIT)) {
         err = -EINVAL;
         goto err_return;
     }
@@ -751,7 +783,9 @@ kptr task_create_new(struct task_attrs *attrs, size_t size) {
 
     // 设置任务状态为可运行
     task->state = TASK_RUNNING;
-    task->sigchld = parent->sigchld;
+
+    // 根据 TASK_WAKE_ON_EXIT 设置 sigchld，决定退出时是否发送 SIGCHLD
+    task->sigchld = (flags & TASK_WAKE_ON_EXIT) ? true : false;
 
     // 初始化链表头
     INIT_LIST_HEAD(&task->zombie);
@@ -778,6 +812,11 @@ kptr task_create_new(struct task_attrs *attrs, size_t size) {
 
     // 将任务指针存入 ID 映射表，方便通过 PID 查找
     dynarr_set(id_map, pid, &task);
+
+    // 如果父进程要求等待子进程初始化完成，则父进程挂起
+    if (flags & TASK_WAIT_PARENT) {
+        task_sleep(true);   // 父进程睡眠
+    }
 
     return (kptr)K_PTR(task);
 
@@ -813,7 +852,7 @@ task_struct *task_create_kernel_thread(void (*func)(void *), void *arg) {
     task_struct *task = NULL;
     void *stack = NULL;
     struct thread_struct *thread = NULL;
-    id_t pid = -1;
+    pid_t pid = -1;
 
     // 分配任务结构体
     task = (task_struct *)kheap_alloc(sizeof(task_struct));
@@ -906,26 +945,92 @@ fail:
     return NULL;
 }
 
-// 等待子任务结束并回收资源
-void task_wait(void) {
-    task_struct *current = smp_get_task_current();
-    if (!current) return;
+/*
+ * 等待子进程状态变化
+ *
+ * @param pid 要等待的进程 ID
+ * @param status  输出退出状态码
+ * @param options 等待选项
+ *
+ * @return 子进程 PID
+ */
+__ktype(pid_t)
+ku64 task_wait(pid_t pid, exit_status_t *status, wait_options_t options) {
+    struct task_struct *current = smp_get_task_current();
+    struct task_struct *child = NULL;
+    struct list_head *pos, *n;
+    int found = 0;
+    int ret_pid = 0;
+
+    if (!current || !status) {
+        return (ku64)K_ERR(-EINVAL);
+    }
+
+    // 检查选项
+    if (options & WCONTINUED) {
+        return (ku64)K_ERR(-ENOSYS);
+    }
+
+    // 过滤 PID
+    if (pid == 0) {
+        // 等待同进程组的子进程（暂不支持进程组）
+        return (ku64)K_ERR(-ENOSYS);
+    } else if (pid < -1) {
+        // 等待指定进程组的子进程（暂不支持进程组）
+        return (ku64)K_ERR(-ENOSYS);
+    }
 
     while (1) {
+        // 遍历当前进程的僵尸子进程链表
         spin_lock(&current->list_lock);
-        if (!list_empty(&current->zombie)) {
-            struct list_head *node = current->zombie.next;
-            struct task_struct *child = list_entry(node, struct task_struct, zombie);
-            list_del(node);
+        list_for_each_safe(pos, n, &current->zombie) {
+            child = list_entry(pos, struct task_struct, zombie);
+            // 过滤 PID
+            if (pid != -1 && child->pid != pid) {
+                continue;
+            }
+            // 找到匹配的僵尸子进程
+            list_del_init(pos);
             spin_unlock(&current->list_lock);
 
+            *status = child->exit_status;
+            ret_pid = child->pid;
+
+            // 回收资源
             task_release(child);
             id_free(child->pid);
             kheap_free(child);
-        } else {
-            spin_unlock(&current->list_lock);
-            break;
+
+            return (ku64)K_OK(ret_pid);
         }
+        spin_unlock(&current->list_lock);
+
+        // 如果设置了 WUNTRACED，查找停止的子进程
+        if (options & WUNTRACED) {
+            spin_lock(&current->list_lock);
+            list_for_each_safe(pos, n, &current->children) {
+                child = list_entry(pos, struct task_struct, sibling);
+                // 过滤 PID
+                if (pid != -1 && child->pid != pid) {
+                    continue;
+                }
+                if (child->state == TASK_STOPPED) {
+                    spin_unlock(&current->list_lock);
+                    *status = child->exit_status;
+                    return (ku64)K_OK(child->pid);
+                }
+            }
+            spin_unlock(&current->list_lock);
+        }
+
+        // 如果设置了 WNOHANG，没有符合条件的子进程则返回 0
+        if (options & WNOHANG) {
+            return (ku64)K_OK(0);
+        }
+
+        // 没有找到符合条件的子进程，挂起父进程等待
+        task_sleep(true);
+        task_sched();
     }
 }
 
@@ -1015,40 +1120,95 @@ out:
 void task_send_signal(struct task_struct *task, int sig) {
     if (!task || !task->signal) return;
     signal_send(task, task->signal, sig, true, false);
+    if (task->state == TASK_INTERRUPTIBLE) {
+        task_wakeup(task);
+    }
 }
 
 // 任务退出
 __attribute__((noreturn))
-void task_exit(void) {
+void task_exit(int code, bool signaled) {
     task_struct *task_current = smp_get_task_current();
     if (!task_current) TASK_PANIC("no current task\n");
+
+    // 将当前任务从就绪队列中移除
+    sched_class_ptr->dequeue(task_current);
+
+    // 立即释放文件描述符表
+    if (task_current->files) {
+        task_files_put(task_current->files);
+        task_current->files = NULL;
+    }
 
     // 将当前任务标记为僵尸，防止被重新调度
     task_current->state = TASK_ZOMBIE;
 
-    // TODO : 关闭文件描述符
+    // 存储退出状态
+    if (signaled) {
+        task_current->exit_status = EXIT_STATUS_TERM(code, false);
+    } else {
+        task_current->exit_status = EXIT_STATUS_PACK(code);
+    }
 
+    // 内核线程：直接进入全局 zombie 队列，由 zombie_reclaim 异步回收
     if (task_current->father == NULL) {
-        // 内核线程
         zombie_enqueue(task_current);
-    } else if (task_current->pid == task_current->tgid) {
-        // 主线程（进程退出），杀死线程组内其他线程
-        struct list_head *head = &task_current->thread_group;
-        while (!list_empty(head)) {
-            struct task_struct *thread = list_first_entry(head, struct task_struct, thread_group);
-            list_del_init(&thread->thread_group);
-            thread->state = TASK_ZOMBIE;
-            zombie_enqueue(thread);
+        task_sched();
+        TASK_PANIC("task exit failed\n");
+    }
+
+    if (task_current->pid != task_current->tgid) {
+        // 普通用户线程：直接进入全局 zombie 队列，由 zombie_reclaim 异步回收
+        zombie_enqueue(task_current);
+    } else {
+        // 主线程退出，处理子进程和子线程
+
+        struct task_struct *init = id_get_init();
+        if (!init) {
+            TASK_PANIC("init task not found\n");
+        }
+        struct list_head *pos, *n;
+
+        // 处理已僵尸的子进程：移到 init->zombie
+        list_for_each_safe(pos, n, &task_current->zombie) {
+            struct task_struct *child = list_entry(pos, struct task_struct, zombie);
+            list_del_init(&child->zombie);
+            child->father = init;
+            spin_lock(&init->list_lock);
+            list_add_tail(&child->zombie, &init->zombie);
+            spin_unlock(&init->list_lock);
         }
 
-        // 主线程自身加入父进程的僵尸链表
+        // 处理正在运行的子进程：挂到 init->children
+        list_for_each_safe(pos, n, &task_current->children) {
+            struct task_struct *child = list_entry(pos, struct task_struct, sibling);
+            list_del_init(&child->sibling);
+            child->father = init;
+            task_add_child(init, child);
+            if (child->state == TASK_ZOMBIE) {
+                spin_lock(&init->list_lock);
+                list_add_tail(&child->zombie, &init->zombie);
+                spin_unlock(&init->list_lock);
+            }
+        }
+
+        // 处理线程组中的其他线程：设置退出标志并唤醒
+        list_for_each_safe(pos, n, &task_current->thread_group) {
+            struct task_struct *thread = list_entry(pos, struct task_struct, thread_group);
+            if (thread == task_current) continue;
+            list_del_init(&thread->thread_group);
+            if (thread->state == TASK_INTERRUPTIBLE) {
+                task_wakeup(thread);
+            }
+        }
+
+        // 自身挂到父进程的 zombie 链表
         spin_lock(&task_current->father->list_lock);
         list_add_tail(&task_current->zombie, &task_current->father->zombie);
         spin_unlock(&task_current->father->list_lock);
-        if (task_current->father->sigchld) signal_send(task_current->father, task_current->father->signal, SIGCHLD, true, false);
-    } else {
-        // 普通用户线程
-        zombie_enqueue(task_current);
+        if (task_current->father->sigchld) {
+            task_send_signal(task_current->father, SIGCHLD);
+        }
     }
 
     task_sched();
@@ -1125,9 +1285,18 @@ void task_get_current_ugid(uid_t *uid, gid_t *gid) {
 }
 
 // 获取当前任务的线程id
-id_t task_get_current_thread_id(void) {
+pid_t task_get_current_thread_id(void) {
     task_struct *curr = smp_get_task_current();
     return curr->pid;
+}
+
+// 获取任务的线程ID
+pid_t task_get_pid(struct task_struct *task) {
+    return task ? task->pid : -1;
+}
+// 获取任务的进程ID
+pid_t task_get_tgid(struct task_struct *task) {
+    return task ? task->tgid : -1;
 }
 
 // 任务管理数据初始化
@@ -1139,6 +1308,12 @@ bool task_data_init(void) {
     // 创建id映射，用于找到对应id的task，最大容量为TASK_ID_MAX
     id_map = dynarr_create(sizeof(struct task_struct *), TASK_ID_MAX);
     if (!id_map) return false;
+
+    // 预留 PID 用于特殊任务
+    dynarr_set(id_map, TASK_KERNEL_ID, NULL);
+    dynarr_set(id_map, TASK_INIT_ID, NULL);
+    bitmap_set(id_bitmap, TASK_KERNEL_ID);
+    bitmap_set(id_bitmap, TASK_INIT_ID);
 
     if (!task_migration_init()) return false;
 

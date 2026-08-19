@@ -17,23 +17,23 @@ typedef struct per_cpu_sched per_cpu_sched;
 typedef struct task_struct task_struct;
 
 // 用于线程id与线程组id
-typedef int task_id; 
-typedef task_id id_t;
+typedef id_t pid_t;
 
-// 任务标志，用于任务创建时指定行为
-typedef enum {
-    TASK_NONE       = 0,            // 无特殊标志
-    TASK_SIGCHLD    = 1 << 0,       // 子进程终止时向父进程发送 SIGCHLD
-    TASK_VM         = 1 << 1,       // 内存地址空间共享
-    TASK_FS         = 1 << 2,       // 文件系统上下文共享
-    TASK_FILES      = 1 << 3,       // 文件描述符表共享
-    TASK_SIGHAND    = 1 << 4,       // 信号处理表共享
-    TASK_THREAD     = 1 << 5,       // 将新任务加入同一线程组（tgid 相同）
-} task_flags;
+// 退出状态码类型（必须通过 EXIT_STATUS_* 宏打包/解包）
+typedef int exit_status_t;
 
 typedef enum {
     TASK_IS_THREAD         = 1 << 0,   // 创建线程
+    TASK_WAIT_PARENT       = 1 << 1,   // 父进程等待子进程初始化完成
+    TASK_WAKE_ON_EXIT      = 1 << 2,   // 子进程退出时唤醒父进程（通过 SIGCHLD）
 } task_create_flags_t;
+
+typedef enum : int {
+    WNONE          = 0,
+    WNOHANG        = 1U << 0,   // 非阻塞等待
+    WUNTRACED      = 1U << 1,   // 也返回被停止的子进程
+    WCONTINUED     = 1U << 2,   // 子进程从停止到继续执行时返回
+} wait_options_t;
 
 struct task_attrs {
     task_create_flags_t flags;   // 创建行为标志
@@ -80,8 +80,17 @@ kptr task_create_new(struct task_attrs *attrs, size_t size);
  */
 task_struct *task_create_kernel_thread(void (*func)(void *), void *arg);
 
-// 等待子任务结束并回收资源
-void task_wait(void);
+/*
+ * 等待子进程状态变化
+ *
+ * @param pid 要等待的进程 ID
+ * @param status  输出退出状态码
+ * @param options 等待选项
+ *
+ * @return 子进程 PID
+ */
+__ktype(pid_t)
+ku64 task_wait(pid_t pid, exit_status_t *status, wait_options_t options);
 
 // 设置下一次中断
 void task_set_next_timer(void);
@@ -104,7 +113,7 @@ void task_sched(void);
 void task_send_signal(struct task_struct *task, int sig);
 
 // 任务退出
-void task_exit(void);
+void task_exit(int code, bool signaled);
 
 // 提交一个工作任务
 void task_submit_work(void (*func)(void *), void *data);
@@ -116,7 +125,13 @@ void task_get_current_fs(struct path **root, struct path **pwd);
 void task_get_current_ugid(uid_t *uid, gid_t *gid);
 
 // 获取当前任务的线程id
-id_t task_get_current_thread_id(void);
+pid_t task_get_current_thread_id(void);
+
+// 获取任务的线程ID
+pid_t task_get_pid(struct task_struct *task);
+
+// 获取任务的进程ID
+pid_t task_get_tgid(struct task_struct *task);
 
 // 任务管理数据初始化
 bool task_data_init(void);

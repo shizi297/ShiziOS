@@ -45,8 +45,8 @@ typedef struct task_struct {
     // 调度器数据
     sched_data sched;
 
-    id_t pid;  // 线程id，每个线程有一个
-    id_t tgid; // 线程组id，每个进程有一个，同一进程的线程共享
+    pid_t pid;  // 线程id，每个线程有一个
+    pid_t tgid; // 线程组id，每个进程有一个，同一进程的线程共享
 
     task_state state;  // 任务当前的状态
     
@@ -88,6 +88,8 @@ typedef struct task_struct {
 
     // 进程终止时是否向父进程发送SIGCHLD信号
     bool sigchld;
+    
+    exit_status_t exit_status;
 } task_struct;
 
 // 调度器接口，调度器通过注册让内核调度框架统一调用
