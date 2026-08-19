@@ -144,7 +144,7 @@ common_interrupt:
     addq $16, %rsp
     iretq
 
-/* 内核统一入口，rbx为内核线程入口，rbp为参数 */
+/* 内核线程统一入口，rbx为内核线程入口，rbp为参数 */
 .section .text
 .globl ret_from_kernel_thread
 .type ret_from_kernel_thread, @function
@@ -153,4 +153,6 @@ ret_from_kernel_thread:
     movq  %rbp, %rdi
     sti
     call *%rbx
+    movq  $0, %rdi         /* code = 0（正常退出） */
+    movq  $0, %rsi         /* signaled = false */
     jmp task_exit
