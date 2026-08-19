@@ -10,9 +10,12 @@
 // 用于标记在公开头文件中只能被架构内部使用的东西
 #define _arch 
 
+// 通用ID类型
+typedef int64_t id_t;
+
 // 属主用户ID和组ID类型
-typedef unsigned int uid_t;
-typedef unsigned int gid_t;
+typedef id_t uid_t;
+typedef id_t gid_t;
 
 typedef struct {
     int err;
