@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <bootboot.h>
 #include <asm/smp.h>
+#include <asm/extable.h>
 
 enum pf_flags {
     PF_PROT  = 1 << 0,
@@ -156,8 +157,16 @@ void exc_pf(struct pt_regs *regs) {
     uintptr_t fault_addr = processor_read_cr2();
     uint64_t error_code = regs->error_code;
 
-    // 内核态缺页：无法恢复，打印信息后挂起
+    // 内核态缺页
     if (!(error_code & PF_USER)) {
+        const struct extable_entry *entry = extable_search(regs->rip);
+        if (entry) {
+            // 预期的错误，设置返回地址为到修复表
+            regs->rip = entry->fixup;
+            return;
+        }
+        
+        // 无法恢复
         printk("Page Fault\n");
         print_regs(regs);
         printp("Page Fault\n");

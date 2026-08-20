@@ -19,7 +19,21 @@ SECTIONS
         *(.text .text.*)
     } :all
 
+    . = ALIGN(8);
+    __fixup_start = .;
+    .fixup : {
+        KEEP(*(.fixup))
+    } :all
+    . = ALIGN(8);
+    __fixup_end = .;
+
     .rodata : {
+        . = ALIGN(8);
+        __ex_table_start = .;
+        KEEP(*(__ex_table))
+        . = ALIGN(8);
+        __ex_table_end = .;
+
         *(.rodata .rodata.*)
     } :all
 
@@ -39,7 +53,7 @@ SECTIONS
         __start_initcall_exec_0 = .;
         KEEP(*(.initcall_exec_0))
         __stop_initcall_exec_0 = .;
-    }
+    } :all
 
     .data : {
         *(.data .data.*)
